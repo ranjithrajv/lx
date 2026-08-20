@@ -3,7 +3,7 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
-use lpt_lib::github::GitHubClient;
+use lpt_lib::github::{Asset, GitHubClient};
 
 #[derive(Debug, Clone, Args)]
 pub struct ScanDepsArgs {
@@ -80,6 +80,10 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
         bail!("no release assets matched any architecture");
     }
 
+    if args.all_architectures && args.architectures.is_some() {
+        bail!("--all-architectures conflicts with --architectures; pass one or the other");
+    }
+
     let mut target_archs: Vec<String> = if args.all_architectures {
         arch_assets.keys().cloned().collect()
     } else if let Some(a) = &args.architectures {
@@ -101,82 +105,32 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
 
     let tmp = tempfile::tempdir().context("failed to create temp dir")?;
     let mut any_scanned = false;
+    let mut any_failed = false;
     let mut all_sonames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
+    // Each architecture is isolated: a download/extract/parse failure on
+    // one (e.g. an unsupported `zip` artifact_format) reports and moves on
+    // to the rest, mirroring `build_jobs`'s per-architecture error handling
+    // rather than aborting the whole multi-architecture scan on the first
+    // failure.
     for arch in &target_archs {
         let Some(asset) = arch_assets.get(arch) else {
             println!("⚠️  no release asset for architecture '{arch}'; skipped");
             continue;
         };
-
-        let mut cfg = cfg.clone();
-        if cfg.artifact_format.is_empty() {
-            cfg.artifact_format = crate::discovery::guess_format(&asset.name).to_string();
-        }
-
-        println!("\n{arch}: {}", asset.name);
-        // Own subdirectory per architecture (not a filename prefix) so
-        // `raw`-format assets (e.g. AppImages) -- whose extracted name
-        // comes from the downloaded file's own on-disk name, see
-        // `build::extract`'s "raw" branch -- keep their real asset name
-        // instead of leaking an internal disambiguation prefix into it.
-        let asset_dir = tmp.path().join(format!("{arch}-download"));
-        std::fs::create_dir_all(&asset_dir)?;
-        let asset_path = asset_dir.join(&asset.name);
-        println!("  ↓ downloading (unverified -- inspected locally only, never installed)");
-        crate::build::download(&client, asset, &asset_path)?;
-
-        let extract_dir = tmp.path().join(format!("{arch}-scan-extract"));
-        crate::build::extract(&asset_path, &extract_dir, &cfg.artifact_format)?;
-
-        let binary_dir = if cfg.binary_path.is_empty() {
-            extract_dir.clone()
-        } else {
-            extract_dir.join(&cfg.binary_path)
-        };
-        if !binary_dir.is_dir() {
-            println!(
-                "  ⚠️  binary_path '{}' not found in archive; skipped",
-                cfg.binary_path
-            );
-            continue;
-        }
-
-        let elf_files = find_elf_files(&binary_dir)?;
-        if elf_files.is_empty() {
-            println!("  (no ELF binaries found)");
-            continue;
-        }
-
-        for elf_path in elf_files {
-            any_scanned = true;
-            let rel = elf_path.strip_prefix(&extract_dir).unwrap_or(&elf_path);
-            let bytes = std::fs::read(&elf_path)
-                .with_context(|| format!("failed to read '{}'", elf_path.display()))?;
-            let libs = lpt_lib::elfdeps::needed_libraries(&bytes)
-                .with_context(|| format!("failed to scan '{}'", rel.display()))?;
-            if libs.is_empty() {
-                println!(
-                    "  {}: statically linked (no shared-library dependencies)",
-                    rel.display()
-                );
-                continue;
-            }
-            println!("  {}:", rel.display());
-            for lib in &libs {
-                all_sonames.insert(lib.clone());
-                if lpt_lib::elfdeps::is_essential_libc_soname(lib) {
-                    println!("    {lib}  (glibc/essential, usually omit from depends:)");
-                } else if let Some(pkg) = dpkg_owner(lib) {
-                    println!("    {lib}  -> {pkg} (via local dpkg -S)");
-                } else {
-                    println!("    {lib}");
-                }
+        match scan_one_arch(&client, &cfg, arch, asset, tmp.path(), &mut all_sonames) {
+            Ok(scanned) => any_scanned = any_scanned || scanned,
+            Err(e) => {
+                eprintln!("  ✗ {arch}: {e:#}");
+                any_failed = true;
             }
         }
     }
 
     if !any_scanned {
+        if any_failed {
+            bail!("every requested architecture failed to scan (see errors above)");
+        }
         bail!("no ELF binaries found to scan across the requested architecture(s)");
     }
 
@@ -205,6 +159,90 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Download, extract, and scan one architecture's asset. Returns `Ok(true)`
+/// if at least one ELF binary was found and reported, `Ok(false)` if the
+/// architecture resolved cleanly but had nothing to scan (e.g. a
+/// `binary_path` that doesn't exist in this asset), and `Err` on a real
+/// failure (download, unsupported/corrupt archive format, unreadable ELF)
+/// -- left to the caller to report and move on to the next architecture
+/// rather than aborting the whole scan.
+fn scan_one_arch(
+    client: &GitHubClient,
+    cfg: &PackageConfig,
+    arch: &str,
+    asset: &Asset,
+    tmp_dir: &Path,
+    all_sonames: &mut std::collections::BTreeSet<String>,
+) -> Result<bool> {
+    let mut cfg = cfg.clone();
+    if cfg.artifact_format.is_empty() {
+        cfg.artifact_format = crate::discovery::guess_format(&asset.name).to_string();
+    }
+
+    println!("\n{arch}: {}", asset.name);
+    // Own subdirectory per architecture (not a filename prefix) so
+    // `raw`-format assets (e.g. AppImages) -- whose extracted name comes
+    // from the downloaded file's own on-disk name, see `build::extract`'s
+    // "raw" branch -- keep their real asset name instead of leaking an
+    // internal disambiguation prefix into it.
+    let asset_dir = tmp_dir.join(format!("{arch}-download"));
+    std::fs::create_dir_all(&asset_dir)?;
+    let asset_path = asset_dir.join(&asset.name);
+    println!("  ↓ downloading (unverified -- inspected locally only, never installed)");
+    crate::build::download(client, asset, &asset_path)?;
+
+    let extract_dir = tmp_dir.join(format!("{arch}-scan-extract"));
+    crate::build::extract(&asset_path, &extract_dir, &cfg.artifact_format)?;
+
+    let binary_dir = if cfg.binary_path.is_empty() {
+        extract_dir.clone()
+    } else {
+        extract_dir.join(&cfg.binary_path)
+    };
+    if !binary_dir.is_dir() {
+        println!(
+            "  ⚠️  binary_path '{}' not found in archive; skipped",
+            cfg.binary_path
+        );
+        return Ok(false);
+    }
+
+    let elf_files = find_elf_files(&binary_dir)?;
+    if elf_files.is_empty() {
+        println!("  (no ELF binaries found)");
+        return Ok(false);
+    }
+
+    let mut scanned_any = false;
+    for elf_path in elf_files {
+        scanned_any = true;
+        let rel = elf_path.strip_prefix(&extract_dir).unwrap_or(&elf_path);
+        let bytes = std::fs::read(&elf_path)
+            .with_context(|| format!("failed to read '{}'", elf_path.display()))?;
+        let libs = lpt_lib::elfdeps::needed_libraries(&bytes)
+            .with_context(|| format!("failed to scan '{}'", rel.display()))?;
+        if libs.is_empty() {
+            println!(
+                "  {}: statically linked (no shared-library dependencies)",
+                rel.display()
+            );
+            continue;
+        }
+        println!("  {}:", rel.display());
+        for lib in &libs {
+            all_sonames.insert(lib.clone());
+            if lpt_lib::elfdeps::is_essential_libc_soname(lib) {
+                println!("    {lib}  (glibc/essential, usually omit from depends:)");
+            } else if let Some(pkg) = dpkg_owner(lib) {
+                println!("    {lib}  -> {pkg} (via local dpkg -S)");
+            } else {
+                println!("    {lib}");
+            }
+        }
+    }
+    Ok(scanned_any)
 }
 
 /// Recursively collect every ELF file under `dir` (handles both flat
@@ -293,5 +331,33 @@ mod tests {
         // This dev environment may or may not have `dpkg`; either way, a
         // nonsense soname must never resolve to a package.
         assert!(dpkg_owner("libtotally-made-up-soname.so.999").is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_elf_files_follows_a_symlink_to_an_elf_file_without_crashing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("real-binary"), b"\x7fELFrest").unwrap();
+        std::os::unix::fs::symlink(
+            dir.path().join("real-binary"),
+            dir.path().join("linked-binary"),
+        )
+        .unwrap();
+        // A symlink to a directory must not be treated as a directory to
+        // recurse into (DirEntry::file_type doesn't follow symlinks) nor
+        // crash `is_elf`'s File::open (which does follow symlinks and
+        // would try to read a directory as a file).
+        std::fs::create_dir(dir.path().join("real-dir")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real-dir"), dir.path().join("linked-dir"))
+            .unwrap();
+
+        let found = find_elf_files(dir.path()).unwrap();
+        let names: Vec<String> = found
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"real-binary".to_string()));
+        assert!(names.contains(&"linked-binary".to_string()));
+        assert_eq!(found.len(), 2, "{names:?}");
     }
 }
