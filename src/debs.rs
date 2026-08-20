@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
-use crate::github::{Asset, GitHubClient, Release};
+use lpt_lib::github::{Asset, GitHubClient, Release};
 
 /// GitHub org hosting pre-built `.deb`s, named
 /// `{package}_{version}+{dist}_{arch}.deb` per `build.rs`'s naming.

@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 
 use crate::config::{upstream_arch_names, PackageConfig};
-use crate::github::{Asset, GitHubClient, Release};
+use lpt_lib::github::{Asset, GitHubClient, Release};
 
 #[derive(Debug, Clone, Args)]
 pub struct DiscoverArgs {
@@ -211,7 +211,7 @@ pub fn config_from_release(repo: &str, release: &Release) -> Result<PackageConfi
         ..PackageConfig::default()
     };
     for m in matched {
-        cfg.architectures.insert(
+        cfg.architectures.set_pattern(
             m.arch.clone(),
             crate::config::ArchConfig {
                 release_pattern: m.asset,
@@ -224,7 +224,7 @@ pub fn config_from_release(repo: &str, release: &Release) -> Result<PackageConfi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::github::Asset;
+    use lpt_lib::github::Asset;
 
     fn asset(name: &str) -> Asset {
         Asset {

@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 
 use crate::config::PackageConfig;
-use crate::github::GitHubClient;
+use lpt_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct InitArgs {
@@ -65,7 +65,7 @@ pub fn run(args: InitArgs) -> Result<()> {
                     let use_auto = prompt_yes("\nUse these auto-discovered patterns?", true);
                     if use_auto {
                         for m in matched {
-                            cfg.architectures.insert(
+                            cfg.architectures.set_pattern(
                                 m.arch.clone(),
                                 crate::config::ArchConfig {
                                     release_pattern: m.asset,

@@ -6,7 +6,7 @@ use std::process::{Command, Stdio};
 
 use crate::config::PackageConfig;
 use crate::discovery::{config_from_release, match_assets};
-use crate::github::{Asset, GitHubClient};
+use lpt_lib::github::{Asset, GitHubClient};
 
 #[derive(Debug, Clone, Args)]
 pub struct BuildArgs {
@@ -338,7 +338,7 @@ fn suggest_versions(client: &GitHubClient, owner: &str, repo: &str, wanted: &str
 fn fetch_upstream_license(
     client: &GitHubClient,
     cfg: &PackageConfig,
-) -> Result<Option<crate::github::RepoLicense>> {
+) -> Result<Option<lpt_lib::github::RepoLicense>> {
     let (owner, repo) = crate::discovery::split_repo(&cfg.github_repo)?;
     let mut license = client.repo_license(owner, repo)?;
 
@@ -355,7 +355,7 @@ fn fetch_upstream_license(
                 .repo_file_text(owner, repo, "LICENSE-MIT")?
                 .unwrap_or_default();
             if !apache.is_empty() && !mit.is_empty() {
-                license = Some(crate::github::RepoLicense {
+                license = Some(lpt_lib::github::RepoLicense {
                     spdx: "Apache-2.0 or MIT".to_string(),
                     text: Some(format!(
                         "Dual-licensed under either of:\n\n=== Apache License 2.0 ===\n\n{apache}\n\n=== MIT License ===\n\n{mit}"
@@ -368,7 +368,7 @@ fn fetch_upstream_license(
     if license.is_none() {
         // Fall back to the config's explicitly-declared SPDX id (if any).
         if !cfg.license_spdx.is_empty() {
-            license = Some(crate::github::RepoLicense {
+            license = Some(lpt_lib::github::RepoLicense {
                 spdx: cfg.license_spdx.clone(),
                 text: None,
             });
@@ -395,10 +395,10 @@ fn fetch_upstream_license(
 /// the config's pinned release_pattern.
 fn resolve_manual(
     cfg: &PackageConfig,
-    release: &crate::github::Release,
+    release: &lpt_lib::github::Release,
 ) -> Result<std::collections::HashMap<String, Asset>> {
     let mut out = std::collections::HashMap::new();
-    for (arch, acfg) in &cfg.architectures {
+    for (arch, acfg) in cfg.architectures.patterns() {
         let pattern = &acfg.release_pattern;
         if pattern.is_empty() {
             continue;
@@ -427,7 +427,7 @@ fn resolve_manual(
     Ok(out)
 }
 
-fn asset_from_name(release: &crate::github::Release, name: &str) -> Asset {
+fn asset_from_name(release: &lpt_lib::github::Release, name: &str) -> Asset {
     release
         .assets
         .iter()
@@ -444,7 +444,7 @@ fn build_jobs(
     args: &BuildArgs,
     cfg: &PackageConfig,
     jobs: &[ResolvedJob],
-    license: Option<&crate::github::RepoLicense>,
+    license: Option<&lpt_lib::github::RepoLicense>,
     token: Option<String>,
     progress: Option<&lpt_lib::progress::Progress>,
     telemetry: &lpt_lib::telemetry::Telemetry,
@@ -573,7 +573,7 @@ fn build_one(
     job: &ResolvedJob,
     tmp: &Path,
     downloaded: &mut std::collections::HashMap<String, PathBuf>,
-    license: Option<&crate::github::RepoLicense>,
+    license: Option<&lpt_lib::github::RepoLicense>,
     pin: Option<&lpt_lib::checksum::PinnedMetadata>,
 ) -> Result<PathBuf> {
     // 1. Download the asset (once per asset name).
@@ -667,9 +667,9 @@ fn build_one(
                     .collect()
             })
             .unwrap_or_default();
-        let report = crate::lintian::run(&final_path, args.lintian_pedantic, &suppress)?;
+        let report = lpt_lib::lintian::run(&final_path, args.lintian_pedantic, &suppress)?;
         print_lintian_report(&final_path, &report);
-        if crate::lintian::should_fail(&report, args.lintian_fail_on_warnings) {
+        if lpt_lib::lintian::should_fail(&report, args.lintian_fail_on_warnings) {
             bail!("lintian failed for {}", final_path.display());
         }
     }
@@ -677,7 +677,7 @@ fn build_one(
     Ok(final_path)
 }
 
-fn print_lintian_report(deb: &Path, report: &crate::lintian::LintianReport) {
+fn print_lintian_report(deb: &Path, report: &lpt_lib::lintian::LintianReport) {
     let name = deb
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -776,12 +776,31 @@ fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
     Ok(())
 }
 
+/// Recursively copy `src`'s contents into `dst` (`dst` is created if
+/// missing). Used by `bundle: true` packaging, which needs the whole
+/// extracted tree preserved (e.g. a `bin/`+`lib/` layout), not just its
+/// top-level files.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        let dest_path = dst.join(entry.file_name());
+        if ty.is_dir() {
+            copy_dir_recursive(&entry.path(), &dest_path)?;
+        } else if ty.is_file() {
+            std::fs::copy(entry.path(), &dest_path)?;
+        }
+    }
+    Ok(())
+}
+
 fn build_deb_via_docker(
     args: &BuildArgs,
     cfg: &PackageConfig,
     job: &ResolvedJob,
     binary_dir: &Path,
-    license: Option<&crate::github::RepoLicense>,
+    license: Option<&lpt_lib::github::RepoLicense>,
 ) -> Result<(PathBuf, tempfile::TempDir)> {
     check_docker()?;
 
@@ -822,13 +841,19 @@ fn build_deb_via_docker(
     write_copyright(&output_dir, cfg, license)?;
 
     // Copy the extracted binaries into the build context so the Dockerfile's
-    // COPY (which must stay inside the context) can reach them.
+    // COPY (which must stay inside the context) can reach them. `bundle`
+    // needs the whole tree (subdirectories included, e.g. a `bin/` and
+    // `lib/` layout); the default flat mode only needs top-level files.
     let bin_in_ctx = ctx.path().join("binary-source");
-    std::fs::create_dir_all(&bin_in_ctx)?;
-    for entry in std::fs::read_dir(binary_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            std::fs::copy(entry.path(), bin_in_ctx.join(entry.file_name()))?;
+    if cfg.bundle {
+        copy_dir_recursive(binary_dir, &bin_in_ctx)?;
+    } else {
+        std::fs::create_dir_all(&bin_in_ctx)?;
+        for entry in std::fs::read_dir(binary_dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                std::fs::copy(entry.path(), bin_in_ctx.join(entry.file_name()))?;
+            }
         }
     }
 
@@ -974,15 +999,32 @@ fn render_dockerfile(
     } else {
         format!("ARG BINARY_RENAME={}\nRUN if [ -n \"$BINARY_RENAME\" ]; then count=$(find /output/usr/bin -maxdepth 1 -type f | wc -l); if [ \"$count\" = \"1\" ]; then f=$(find /output/usr/bin -maxdepth 1 -type f); mv \"$f\" \"/output/usr/bin/$BINARY_RENAME\"; fi; fi", cfg.binary_rename)
     };
+    let install = if cfg.bundle {
+        // Install the whole extracted tree under /usr/lib/<pkg>/ and
+        // symlink its bin/ executables into /usr/bin, preserving relative
+        // layout for $ORIGIN-relative RPATH binaries (e.g. zed).
+        format!(
+            r#"RUN mkdir -p "/output/usr/lib/{pkg}" "/output/usr/share/doc/{pkg}" /output/DEBIAN /output/usr/bin
+COPY ${{BINARY_SOURCE}}/ "/output/usr/lib/{pkg}/"
+RUN find "/output/usr/lib/{pkg}" -type f -exec sh -c 'file -b "$1" | grep -q "^ELF " && chmod +x "$1"' _ {{}} \;
+RUN if [ -d "/output/usr/lib/{pkg}/bin" ]; then for f in "/output/usr/lib/{pkg}/bin"/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && ln -s "/usr/lib/{pkg}/bin/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; fi"#,
+            pkg = cfg.package_name,
+        )
+    } else {
+        format!(
+            r#"RUN mkdir -p /output/usr/bin "/output/usr/share/doc/{pkg}" /output/DEBIAN
+COPY ${{BINARY_SOURCE}}/ /tmp/binary-source/
+RUN for f in /tmp/binary-source/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && cp "$f" /output/usr/bin/ || true; done && chmod +x /output/usr/bin/* && rm -rf /tmp/binary-source"#,
+            pkg = cfg.package_name,
+        )
+    };
     format!(
         r#"ARG DEBIAN_DIST={dist}
 FROM debian:${{DEBIAN_DIST}}
 ARG BINARY_SOURCE
 ENV DIST={dist} SUPPORTED_ARCHITECTURES={arch}
 RUN apt-get update && apt-get install -y file gzip gettext-base && rm -rf /var/lib/apt/lists/*
-RUN mkdir -p /output/usr/bin "/output/usr/share/doc/{pkg}" /output/DEBIAN
-COPY ${{BINARY_SOURCE}}/ /tmp/binary-source/
-RUN for f in /tmp/binary-source/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && cp "$f" /output/usr/bin/ || true; done && chmod +x /output/usr/bin/* && rm -rf /tmp/binary-source
+{install}
 {binary_rename}
 COPY output/DEBIAN/control /tmp/control.template
 COPY output/copyright /tmp/copyright.template
@@ -998,6 +1040,7 @@ COPY --from=0 "/{deb_name}" /
         dist = job.dist,
         arch = job.arch,
         pkg = cfg.package_name,
+        install = install,
         binary_rename = binary_rename,
         deb_name = deb_name,
     )
@@ -1025,8 +1068,13 @@ fn write_control(
     // Homepage, and an extended description line (a single-line Description
     // synopsis without a continuation paragraph trips lintian's
     // extended-description-is-empty).
+    let depends = if cfg.depends.trim().is_empty() {
+        String::new()
+    } else {
+        format!("Depends: {}\n", cfg.depends.trim())
+    };
     let control = format!(
-        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n",
+        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\n{depends}Maintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n",
         pkg = cfg.package_name,
         repo = cfg.github_repo,
         arch = job.arch,
@@ -1072,7 +1120,7 @@ fn changelog_date() -> String {
 fn write_copyright(
     output_dir: &Path,
     cfg: &PackageConfig,
-    license: Option<&crate::github::RepoLicense>,
+    license: Option<&lpt_lib::github::RepoLicense>,
 ) -> Result<()> {
     let year = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1112,5 +1160,93 @@ fn human_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job() -> ResolvedJob {
+        ResolvedJob {
+            dist: "trixie".into(),
+            arch: "amd64".into(),
+            asset: Asset {
+                name: "pkg.tar.gz".into(),
+                size: None,
+                browser_download_url: String::new(),
+            },
+            tag: "v1.0.0".into(),
+        }
+    }
+
+    #[test]
+    fn render_dockerfile_flat_mode_copies_loose_files() {
+        let cfg = PackageConfig {
+            package_name: "eza".into(),
+            ..PackageConfig::default()
+        };
+        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "eza.deb");
+        assert!(out.contains("/tmp/binary-source"));
+        assert!(!out.contains("/usr/lib/eza"));
+    }
+
+    #[test]
+    fn render_dockerfile_bundle_mode_symlinks_bin_into_usr_bin() {
+        let cfg = PackageConfig {
+            package_name: "zed".into(),
+            bundle: true,
+            ..PackageConfig::default()
+        };
+        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "zed.deb");
+        assert!(out.contains("/usr/lib/zed"));
+        assert!(out.contains("ln -s"));
+        assert!(!out.contains("/tmp/binary-source"));
+    }
+
+    #[test]
+    fn write_control_includes_depends_when_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = PackageConfig {
+            package_name: "pnpm".into(),
+            github_repo: "pnpm/pnpm".into(),
+            depends: "libatomic1, libgtk-3-0".into(),
+            ..PackageConfig::default()
+        };
+        write_control(dir.path(), &cfg, &job(), "1.0.0", "1").unwrap();
+        let text = std::fs::read_to_string(dir.path().join("control")).unwrap();
+        assert!(text.contains("Depends: libatomic1, libgtk-3-0\n"));
+    }
+
+    #[test]
+    fn write_control_omits_depends_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = PackageConfig {
+            package_name: "eza".into(),
+            github_repo: "eza-community/eza".into(),
+            ..PackageConfig::default()
+        };
+        write_control(dir.path(), &cfg, &job(), "1.0.0", "1").unwrap();
+        let text = std::fs::read_to_string(dir.path().join("control")).unwrap();
+        assert!(!text.contains("Depends:"));
+    }
+
+    #[test]
+    fn copy_dir_recursive_preserves_tree() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("bin")).unwrap();
+        std::fs::create_dir_all(src.path().join("lib")).unwrap();
+        std::fs::write(src.path().join("bin/zed"), b"elf-ish").unwrap();
+        std::fs::write(src.path().join("lib/libfoo.so"), b"lib").unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let dst_path = dst.path().join("out");
+        copy_dir_recursive(src.path(), &dst_path).unwrap();
+
+        assert_eq!(std::fs::read(dst_path.join("bin/zed")).unwrap(), b"elf-ish");
+        assert_eq!(
+            std::fs::read(dst_path.join("lib/libfoo.so")).unwrap(),
+            b"lib"
+        );
     }
 }

@@ -3,8 +3,8 @@ use clap::Args;
 use std::path::PathBuf;
 
 use crate::debs;
-use crate::github::GitHubClient;
 use crate::manifest::{Manifest, PackageEntry};
+use lpt_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct InstallArgs {

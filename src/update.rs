@@ -2,8 +2,8 @@ use anyhow::{bail, Result};
 use clap::Args;
 
 use crate::debs;
-use crate::github::GitHubClient;
 use crate::manifest::Manifest;
+use lpt_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct UpdateArgs {

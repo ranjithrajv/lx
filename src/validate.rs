@@ -2,8 +2,8 @@ use anyhow::{bail, Result};
 use clap::Args;
 use std::path::PathBuf;
 
-use crate::config::PackageConfig;
-use crate::github::GitHubClient;
+use crate::config::{ArchSpec, PackageConfig};
+use lpt_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct ValidateArgs {
@@ -27,7 +27,13 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
     if cfg.has_manual_patterns() {
         println!(
             "patterns: OK ({} architectures pinned)",
-            cfg.architectures.len()
+            cfg.architectures.patterns().len()
+        );
+    } else if let ArchSpec::List(names) = &cfg.architectures {
+        println!(
+            "patterns: auto-discovery restricted to {} architecture(s): {}",
+            names.len(),
+            names.join(", ")
         );
     } else {
         println!("patterns: auto-discovery (architectures key omitted)");
@@ -50,7 +56,7 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
     // Verify every pinned pattern resolves to an actual asset.
     if cfg.has_manual_patterns() {
         let mut missing = Vec::new();
-        for (arch, acfg) in &cfg.architectures {
+        for (arch, acfg) in cfg.architectures.patterns() {
             let expanded = acfg.release_pattern.replace("{version}", &release.tag_name);
             if !release.assets.iter().any(|a| a.name == expanded) {
                 missing.push(format!("{arch}: '{expanded}'"));
@@ -65,7 +71,7 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
         }
         println!(
             "assets: OK (all {} pinned patterns resolve)",
-            cfg.architectures.len()
+            cfg.architectures.patterns().len()
         );
     }
 

@@ -20,15 +20,28 @@ pub struct PackageConfig {
     /// Debian distributions to target. Defaults to all supported.
     #[serde(default)]
     pub debian_distributions: Vec<String>,
-    /// Per-architecture release asset patterns. Omit for auto-discovery.
+    /// Per-architecture release asset patterns, or a plain list restricting
+    /// auto-discovery to a named subset. Omit entirely for full
+    /// auto-discovery.
     #[serde(default)]
-    pub architectures: HashMap<String, ArchConfig>,
+    pub architectures: ArchSpec,
     /// Path to the binary within the extracted archive.
     #[serde(default)]
     pub binary_path: String,
     /// Rename the installed binary to this command name.
     #[serde(default)]
     pub binary_rename: String,
+    /// Install the whole `binary_path` tree under `/usr/lib/<package_name>/`
+    /// and symlink its `bin/` executables into `/usr/bin`, instead of
+    /// flattening loose ELF files into `/usr/bin`. Needed for apps with
+    /// `$ORIGIN`-relative RPATH that must keep their directory layout intact
+    /// (e.g. zed-industries/zed).
+    #[serde(default)]
+    pub bundle: bool,
+    /// Comma-separated `Depends:` line for binaries needing a runtime
+    /// library not present on a bare Debian install (e.g. "libatomic1").
+    #[serde(default)]
+    pub depends: String,
     /// SPDX license identifier.
     #[serde(default)]
     pub license_spdx: String,
@@ -49,6 +62,61 @@ pub struct ArchConfig {
     /// Exact asset filename, with optional `{version}` placeholder.
     #[serde(default)]
     pub release_pattern: String,
+}
+
+/// `architectures:` accepts two shapes:
+/// - a plain list (`[amd64, arm64, armhf]`) restricting auto-discovery to a
+///   named subset, with no pinned patterns;
+/// - a map (`{ amd64: { release_pattern: "..." } }`) pinning exact assets.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ArchSpec {
+    List(Vec<String>),
+    Map(HashMap<String, ArchConfig>),
+}
+
+impl Default for ArchSpec {
+    fn default() -> Self {
+        ArchSpec::Map(HashMap::new())
+    }
+}
+
+impl ArchSpec {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            ArchSpec::List(v) => v.is_empty(),
+            ArchSpec::Map(m) => m.is_empty(),
+        }
+    }
+
+    /// Architecture names in this spec, in either form.
+    pub fn names(&self) -> Vec<String> {
+        match self {
+            ArchSpec::List(v) => v.clone(),
+            ArchSpec::Map(m) => m.keys().cloned().collect(),
+        }
+    }
+
+    /// Pinned patterns, if this is the map form (empty otherwise -- a plain
+    /// list only restricts which architectures auto-discovery considers).
+    pub fn patterns(&self) -> HashMap<String, ArchConfig> {
+        match self {
+            ArchSpec::List(_) => HashMap::new(),
+            ArchSpec::Map(m) => m.clone(),
+        }
+    }
+
+    /// Record a discovered pattern for `arch` (used by zero-config
+    /// auto-discovery to build a config from scratch). Converts a list form
+    /// to a map first, though callers only ever do this on a fresh default.
+    pub fn set_pattern(&mut self, arch: String, acfg: ArchConfig) {
+        if !matches!(self, ArchSpec::Map(_)) {
+            *self = ArchSpec::Map(HashMap::new());
+        }
+        if let ArchSpec::Map(m) = self {
+            m.insert(arch, acfg);
+        }
+    }
 }
 
 impl PackageConfig {
@@ -84,6 +152,11 @@ impl PackageConfig {
                 ),
             }
         }
+        if let ArchSpec::List(names) = &self.architectures {
+            if names.iter().any(|n| n.trim().is_empty()) {
+                bail!("architectures list must not contain empty entries");
+            }
+        }
         Ok(())
     }
 
@@ -108,13 +181,13 @@ impl PackageConfig {
     }
 
     /// Whether the config pins release patterns explicitly (deterministic)
-    /// as opposed to relying on auto-discovery.
+    /// as opposed to relying on auto-discovery. A plain `architectures:`
+    /// list restricts the subset considered but pins nothing.
     pub fn has_manual_patterns(&self) -> bool {
-        !self.architectures.is_empty()
-            && self
-                .architectures
-                .values()
-                .any(|a| !a.release_pattern.is_empty())
+        self.architectures
+            .patterns()
+            .values()
+            .any(|a| !a.release_pattern.is_empty())
     }
 
     /// Resolve the effective distributions, applying built-in rules:
@@ -138,7 +211,7 @@ impl PackageConfig {
                 .map(|s| s.to_string())
                 .collect()
         } else {
-            self.architectures.keys().cloned().collect()
+            self.architectures.names()
         }
     }
 
@@ -221,9 +294,44 @@ architectures:
         );
         assert!(cfg.has_manual_patterns());
         assert_eq!(
-            cfg.architectures["amd64"].release_pattern,
+            cfg.architectures.patterns()["amd64"].release_pattern,
             "atuin-x86_64-unknown-linux-gnu.tar.gz"
         );
+    }
+
+    #[test]
+    fn parses_architectures_simple_list() {
+        let yaml = r#"
+package_name: eza
+github_repo: eza-community/eza
+architectures: [amd64, arm64, armhf]
+"#;
+        let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!cfg.has_manual_patterns());
+        assert!(cfg.architectures.patterns().is_empty());
+        let mut archs = cfg.effective_architectures();
+        archs.sort();
+        assert_eq!(archs, vec!["amd64", "arm64", "armhf"]);
+    }
+
+    #[test]
+    fn rejects_empty_architectures_list_entry() {
+        let yaml = "package_name: x\ngithub_repo: a/b\narchitectures: [amd64, \"\"]\n";
+        let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn parses_bundle_and_depends() {
+        let yaml = r#"
+package_name: zed
+github_repo: zed-industries/zed
+bundle: true
+depends: "libatomic1, libgtk-3-0"
+"#;
+        let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(cfg.bundle);
+        assert_eq!(cfg.depends, "libatomic1, libgtk-3-0");
     }
 
     #[test]
