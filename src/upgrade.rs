@@ -15,6 +15,13 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub no_verify: bool,
 
+    /// Proceed when the release has no sidecar checksum to verify against,
+    /// instead of failing the upgrade. Most releases don't publish a
+    /// checksum sidecar, so without this the default is to refuse to
+    /// install an unverified .deb rather than silently warn and continue.
+    #[arg(long)]
+    pub allow_unverified: bool,
+
     /// Print what would be upgraded without downloading or installing.
     #[arg(long)]
     pub dry_run: bool,
@@ -117,7 +124,7 @@ fn upgrade_one(
     println!("    ↓ downloading {}", asset.name);
     debs::download(client, asset, &dest)?;
     if !args.no_verify {
-        debs::verify_sidecar_or_warn(client, asset, &dest)?;
+        debs::verify_sidecar_or_require_flag(client, asset, &dest, args.allow_unverified)?;
     }
     debs::install_deb(&dest, args.yes)?;
 

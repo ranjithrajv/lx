@@ -16,6 +16,12 @@ source-package compression — all output that real `dpkg-deb`/`dpkg-source`/
 `lintian` accept without complaint, built entirely without Docker or a
 Debian host.
 
+It's also trustworthy by default about what it downloads and repackages:
+a build refuses to proceed on an unverified asset unless you explicitly
+say otherwise, every download's verification method and checksum are
+recorded for later audit, and pinning a prerelease or draft tag gets you
+a warning instead of a silent surprise.
+
 ## Requirements
 
 - Rust (to build `lpt` itself; see [Development](#development)). That's
@@ -106,6 +112,10 @@ entry per unique asset downloaded, with the verification method used
 (--no-verify)`), its resolved SHA-256, and the source URL — plus an
 `unverified_assets` count, so a build can be audited after the fact instead
 of just trusting a console log that's already scrolled away.
+
+`lpt install`/`lpt upgrade` apply the same fail-closed default against the
+release's own sidecar (there's no pin file in that flow): no sidecar means
+no install unless you pass `--allow-unverified` there too.
 
 `install`/`update`/`upgrade`/`remove`/`list` track what they manage in a
 local manifest (`installed.json` under your XDG data dir), cross-checked

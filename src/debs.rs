@@ -132,10 +132,19 @@ pub fn download(client: &GitHubClient, asset: &Asset, dest: &Path) -> Result<()>
 }
 
 /// Verify against a `.sha256`/`.sha256sum` sidecar file if one exists next
-/// to the asset. A missing sidecar is a warning (best-effort provenance);
-/// a checksum that doesn't match is a hard error, since this asset is about
-/// to be installed as root.
-pub fn verify_sidecar_or_warn(client: &GitHubClient, asset: &Asset, path: &Path) -> Result<()> {
+/// to the asset. A checksum that doesn't match is always a hard error,
+/// since this asset is about to be installed as root. A missing sidecar
+/// also fails the install unless `allow_unverified` is set (`--allow-
+/// unverified`) -- matching `build.rs`'s fail-closed default: most
+/// real-world GitHub releases don't publish a sidecar, so silently
+/// proceeding here would mean the *default* install path had zero
+/// integrity verification with only a console line as evidence.
+pub fn verify_sidecar_or_require_flag(
+    client: &GitHubClient,
+    asset: &Asset,
+    path: &Path,
+    allow_unverified: bool,
+) -> Result<()> {
     for suffix in [".sha256", ".sha256sum"] {
         let sidecar_url = format!("{}{}", asset.browser_download_url, suffix);
         let mut resp = match client.raw_get(&sidecar_url) {
@@ -155,11 +164,19 @@ pub fn verify_sidecar_or_warn(client: &GitHubClient, asset: &Asset, path: &Path)
             return Ok(());
         }
     }
-    eprintln!(
-        "    (no sidecar checksum found for '{}'; skipping verification)",
+    if allow_unverified {
+        eprintln!(
+            "    ⚠ (no sidecar checksum found for '{}'; proceeding unverified per \
+             --allow-unverified)",
+            asset.name
+        );
+        return Ok(());
+    }
+    Err(anyhow::anyhow!(
+        "no checksum verification available for '{}': no sidecar checksum found. Pass \
+         --allow-unverified to install anyway.",
         asset.name
-    );
-    Ok(())
+    ))
 }
 
 /// `sudo dpkg -i <path>`, falling back to `sudo apt-get install -f -y` when

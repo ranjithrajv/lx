@@ -33,6 +33,13 @@ pub struct InstallArgs {
     #[arg(long)]
     pub no_verify: bool,
 
+    /// Proceed when the release has no sidecar checksum to verify against,
+    /// instead of failing the install. Most releases don't publish a
+    /// checksum sidecar, so without this the default is to refuse to
+    /// install an unverified .deb rather than silently warn and continue.
+    #[arg(long)]
+    pub allow_unverified: bool,
+
     /// Reinstall even if dpkg already reports this exact version installed.
     #[arg(long)]
     pub reinstall: bool,
@@ -130,7 +137,7 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
     debs::download(&client, asset, &dest)?;
 
     if !args.no_verify {
-        debs::verify_sidecar_or_warn(&client, asset, &dest)?;
+        debs::verify_sidecar_or_require_flag(&client, asset, &dest, args.allow_unverified)?;
     }
 
     if args.download_only.is_some() {
