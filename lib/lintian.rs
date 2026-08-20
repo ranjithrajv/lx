@@ -11,101 +11,60 @@ pub struct LintianReport {
     pub lines: Vec<String>,
 }
 
-const LINTIAN_IMAGE: &str = "lpt-lintian";
-
-/// Run lintian on a built .deb inside a Debian container (the host may be
-/// non-Debian, e.g. Arch), mirroring the action's `run_lintian_check`.
+/// Run the real `lintian` binary on a built .deb, mirroring the action's
+/// `run_lintian_check`.
 ///
 /// - controlled by `--lintian` (default off),
-/// - builds a cached `lpt-lintian` image (debian + lintian) on first use,
+/// - requires `lintian` on `PATH` -- no Docker fallback. lintian is a
+///   large, Debian-native Perl tool with no Rust equivalent to reach for,
+///   so unlike the rest of this pipeline there's nothing to reimplement;
+///   the fix is to just run it directly rather than route through a
+///   container to reach the exact same binary,
 /// - runs `lintian --info [--pedantic] [--suppress-tags ...] <deb>`,
 /// - counts `E:`/`W:`/`I:` output lines.
 pub fn run(deb: &Path, pedantic: bool, suppress_tags: &[String]) -> Result<LintianReport> {
-    check_docker()?;
-    ensure_lintian_image()?;
-
     let deb_abs = deb
         .canonicalize()
         .with_context(|| format!("resolving {}", deb.display()))?;
 
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "run",
-        "--rm",
-        "-v",
-        &format!("{}:/tmp/pkg.deb", deb_abs.display()),
-        LINTIAN_IMAGE,
-        "lintian",
-        "--info",
-    ]);
+    let mut args = vec!["--info".to_string()];
     if pedantic {
-        cmd.arg("--pedantic");
+        args.push("--pedantic".to_string());
     }
     if !suppress_tags.is_empty() {
-        cmd.arg("--suppress-tags").arg(suppress_tags.join(","));
+        args.push("--suppress-tags".to_string());
+        args.push(suppress_tags.join(","));
     }
-    cmd.arg("/tmp/pkg.deb");
 
-    let output = cmd.output().context("failed to run lintian container")?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    Ok(parse(&stdout, &stderr))
+    let output = Command::new("lintian")
+        .args(&args)
+        .arg(&deb_abs)
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                anyhow::anyhow!(
+                    "--lintian requires the `lintian` binary on PATH (e.g. `apt-get install \
+                     lintian` on Debian/Ubuntu); not found"
+                )
+            } else {
+                anyhow::Error::from(e).context("failed to run lintian")
+            }
+        })?;
+    if !output.status.success() && output.stdout.is_empty() && output.stderr.is_empty() {
+        bail!(
+            "lintian exited with {} and produced no output",
+            output.status
+        );
+    }
+    Ok(parse(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    ))
 }
 
 /// Determine whether a report should fail the build.
 pub fn should_fail(report: &LintianReport, fail_on_warnings: bool) -> bool {
     report.errors > 0 || (fail_on_warnings && report.warnings > 0)
-}
-
-fn check_docker() -> Result<()> {
-    let status = Command::new("docker")
-        .arg("version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to run docker")?;
-    if !status.success() {
-        bail!("docker is required to run lintian (the host is non-Debian)");
-    }
-    Ok(())
-}
-
-/// Build a cached image with lintian installed, if not already present.
-fn ensure_lintian_image() -> Result<()> {
-    let inspect = Command::new("docker")
-        .args(["image", "inspect", LINTIAN_IMAGE])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to inspect lintian image")?;
-    if inspect.success() {
-        return Ok(());
-    }
-
-    let dir = tempfile::tempdir().context("failed to create temp dir")?;
-    let df = dir.path().join("Dockerfile");
-    std::fs::write(
-        &df,
-        "FROM debian:bookworm\nRUN apt-get update && apt-get install -y --no-install-recommends lintian && rm -rf /var/lib/apt/lists/*\n",
-    )
-    .context("failed to write lintian Dockerfile")?;
-
-    let status = Command::new("docker")
-        .args([
-            "build",
-            "-t",
-            LINTIAN_IMAGE,
-            "-f",
-            df.to_str().unwrap(),
-            dir.path().to_str().unwrap(),
-        ])
-        .stdout(std::process::Stdio::null())
-        .status()
-        .context("failed to build lintian image")?;
-    if !status.success() {
-        bail!("failed to build lintian image ({LINTIAN_IMAGE})");
-    }
-    Ok(())
 }
 
 fn parse(stdout: &str, stderr: &str) -> LintianReport {

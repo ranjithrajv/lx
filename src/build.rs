@@ -1,8 +1,9 @@
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::io::{Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::discovery::{config_from_release, guess_format, match_assets};
@@ -284,9 +285,6 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         for j in &jobs {
             println!("  {:<8} {:<8} asset={}", j.dist, j.arch, j.asset.name);
         }
-        for arch in arch_assets.iter().map(|(a, _)| a.as_str()) {
-            check_qemu_for(arch);
-        }
         return Ok(());
     }
 
@@ -567,7 +565,6 @@ fn build_jobs(
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let Some(group) = groups.get(i) else { break };
                 let arch = &group[0].arch;
-                check_qemu_for(arch);
                 let _ = progress.as_ref().map(|p| p.set_arch(arch, "running"));
                 // Fresh download map per architecture worker (distinct assets).
                 let mut downloaded: std::collections::HashMap<String, PathBuf> =
@@ -716,8 +713,9 @@ fn build_one(
         );
     }
 
-    // 4. Build the .deb via Docker, mirroring the action's Dockerfile.
-    let (deb, _ctx) = build_deb_via_docker(args, cfg, job, &binary_dir, license)?;
+    // 4. Build the .deb natively (lpt_lib::debarchive) -- no Docker, no
+    // dpkg-deb subprocess.
+    let (deb, _ctx) = build_deb_native(args, cfg, job, &binary_dir, license)?;
     let final_path = args.output.join(deb.file_name().unwrap());
     std::fs::copy(&deb, &final_path)
         .with_context(|| format!("copying {} to {}", deb.display(), final_path.display()))?;
@@ -868,25 +866,20 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_deb_via_docker(
+fn build_deb_native(
     args: &BuildArgs,
     cfg: &PackageConfig,
     job: &ResolvedJob,
     binary_dir: &Path,
     license: Option<&lpt_lib::github::RepoLicense>,
 ) -> Result<(PathBuf, tempfile::TempDir)> {
-    check_docker()?;
-
-    // Stage the Docker build context: output/DEBIAN/control + copyright + changelog.
     let ctx = tempfile::tempdir()?;
-    let output_dir = ctx.path().join("output");
-    let debian_dir = output_dir.join("DEBIAN");
-    let doc_dir = output_dir
+    let root = ctx.path().join("root");
+    let doc_dir = root
         .join("usr")
         .join("share")
         .join("doc")
         .join(&cfg.package_name);
-    std::fs::create_dir_all(&debian_dir)?;
     std::fs::create_dir_all(&doc_dir)?;
 
     // Debian policy requires the Version field to start with a digit, but
@@ -909,110 +902,134 @@ fn build_deb_via_docker(
     );
     let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
 
-    write_control(&debian_dir, cfg, job, &debian_version, &args.build_version)?;
-    write_changelog(&output_dir, cfg, job, &debian_version, &args.build_version)?;
-    write_copyright(&output_dir, cfg, license, job.published_at)?;
+    stage_install_tree(cfg, binary_dir, &root)?;
 
-    // Copy the extracted binaries into the build context so the Dockerfile's
-    // COPY (which must stay inside the context) can reach them. `bundle`
-    // needs the whole tree (subdirectories included, e.g. a `bin/` and
-    // `lib/` layout); the default flat mode only needs top-level files.
-    let bin_in_ctx = ctx.path().join("binary-source");
+    let control = write_control(cfg, job, &debian_version, &args.build_version);
+    let changelog = write_changelog(cfg, job, &debian_version, &args.build_version);
+    let mtime = reproducible_epoch(job.published_at);
+    write_changelog_gz(&doc_dir, &changelog, mtime)?;
+    write_copyright(&doc_dir, cfg, license, job.published_at)?;
+
+    let out_dir = ctx.path().join("out");
+    std::fs::create_dir_all(&out_dir)?;
+    let deb_dest = out_dir.join(&deb_name);
+    lpt_lib::debarchive::build(&root, control.as_bytes(), mtime, &deb_dest)
+        .with_context(|| format!("failed to build {}", deb_dest.display()))?;
+
+    Ok((deb_dest, ctx))
+}
+
+/// Stage the package's installed filesystem tree under `root` (what
+/// becomes `data.tar`'s payload): copy/symlink the extracted release
+/// binaries into place per `bundle`, apply `binary_rename`, and fail
+/// loudly if nothing executable landed in `/usr/bin` -- the same checks
+/// the old Dockerfile-based build ran in shell, just done natively.
+fn stage_install_tree(cfg: &PackageConfig, binary_dir: &Path, root: &Path) -> Result<()> {
+    let usr_bin = root.join("usr").join("bin");
+    std::fs::create_dir_all(&usr_bin)?;
+
     if cfg.bundle {
-        copy_dir_recursive(binary_dir, &bin_in_ctx)?;
+        // Bundle-mode executable discovery covers two shapes, matching
+        // upstream: a bin/ subdirectory (zed.app/{bin,lib,libexec,share},
+        // an FHS-like tree), and executables sitting directly at the
+        // bundle root as siblings of the data directories they need
+        // (pnpm's Node single-executable-application binary needs its own
+        // dist/ alongside it, with no bin/lib/libexec structure at all) --
+        // so both are checked rather than requiring one specific shape.
+        let lib_dir = root.join("usr").join("lib").join(&cfg.package_name);
+        copy_dir_recursive(binary_dir, &lib_dir)?;
+
+        let bin_subdir = lib_dir.join("bin");
+        if bin_subdir.is_dir() {
+            symlink_elf_executables(
+                &bin_subdir,
+                &usr_bin,
+                &format!("/usr/lib/{}/bin", cfg.package_name),
+            )?;
+        }
+        symlink_elf_executables(
+            &lib_dir,
+            &usr_bin,
+            &format!("/usr/lib/{}", cfg.package_name),
+        )?;
     } else {
-        std::fs::create_dir_all(&bin_in_ctx)?;
         for entry in std::fs::read_dir(binary_dir)? {
             let entry = entry?;
-            if entry.file_type()?.is_file() {
-                std::fs::copy(entry.path(), bin_in_ctx.join(entry.file_name()))?;
+            let path = entry.path();
+            if entry.file_type()?.is_file() && is_elf(&path)? {
+                let dest = usr_bin.join(entry.file_name());
+                std::fs::copy(&path, &dest)?;
+                make_executable(&dest)?;
             }
         }
     }
 
-    let out_dir = ctx.path().join("out");
-    std::fs::create_dir_all(&out_dir)?;
-
-    let image_tag = format!("lpt-{}-{}-{}", cfg.package_name, job.dist, job.arch);
-    let dockerfile = render_dockerfile(cfg, job, &full_version, &deb_name);
-
-    let df_path = ctx.path().join("Dockerfile");
-    std::fs::write(&df_path, dockerfile)?;
-
-    let status = Command::new("docker")
-        .args([
-            "build",
-            "-t",
-            &image_tag,
-            "--build-arg",
-            "BINARY_SOURCE=binary-source",
-            "-f",
-            df_path.to_str().unwrap(),
-            ".",
-        ])
-        .current_dir(ctx.path())
-        .stdout(Stdio::null())
-        .status()
-        .context("failed to run docker build")?;
-    if !status.success() {
-        bail!("docker build failed for {}-{}", job.dist, job.arch);
+    if !cfg.binary_rename.is_empty() {
+        apply_binary_rename(&usr_bin, &cfg.binary_rename)?;
     }
 
-    // Extract the .deb from the scratch image. The container name must be
-    // unique per (pid, job): parallel arch workers share the process pid and
-    // would otherwise race on the same name.
-    let deb_dest = out_dir.join(&deb_name);
-    let container = format!("lpt-{}-{}-{}", std::process::id(), job.dist, job.arch);
-    let _ = Command::new("docker")
-        .args(["rm", "-f", &container])
-        .status();
-    let create = Command::new("docker")
-        .args(["create", "--name", &container, &image_tag, "/"])
-        .output()
-        .context("failed to create docker container")?;
-    if !create.status.success() {
+    if std::fs::read_dir(&usr_bin)?.next().is_none() {
         bail!(
-            "docker create failed: {}",
-            String::from_utf8_lossy(&create.stderr)
+            "no executables landed in /usr/bin ({}) - check binary_path/bundle config",
+            if cfg.bundle {
+                "bundle=true"
+            } else {
+                "flat mode"
+            }
         );
     }
-    let id = String::from_utf8_lossy(&create.stdout).trim().to_string();
-
-    let cp = Command::new("docker")
-        .args([
-            "cp",
-            &format!("{id}:{deb_name}"),
-            deb_dest.to_str().unwrap(),
-        ])
-        .output()
-        .context("failed to run docker cp")?;
-    let _ = Command::new("docker")
-        .args(["rm", "-f", &container])
-        .status();
-    if !cp.status.success() {
-        bail!(
-            "failed to copy built .deb out of container (expected '/{deb_name}'): {}",
-            String::from_utf8_lossy(&cp.stderr)
-        );
-    }
-    if !deb_dest.is_file() {
-        bail!(
-            "docker cp reported success but '{deb_name}' missing at {}",
-            deb_dest.display()
-        );
-    }
-    Ok((deb_dest, ctx))
+    Ok(())
 }
 
-fn check_docker() -> Result<()> {
-    let status = Command::new("docker")
-        .arg("version")
-        .stdout(Stdio::null())
-        .status();
-    match status {
-        Ok(s) if s.success() => Ok(()),
-        _ => bail!("docker is required but not available. Install Docker, or use `lpt build --dry-run` to validate without building."),
+/// For each ELF file directly inside `src_dir`, chmod +x it in place and
+/// create a symlink in `usr_bin` pointing at its final *installed*
+/// absolute path (`{abs_prefix}/<name>`) -- not a path relative to the
+/// local staging tree, since the symlink target must resolve correctly
+/// once the package is actually installed at `/`.
+fn symlink_elf_executables(src_dir: &Path, usr_bin: &Path, abs_prefix: &str) -> Result<()> {
+    for entry in std::fs::read_dir(src_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_type()?.is_file() && is_elf(&path)? {
+            make_executable(&path)?;
+            let name = entry.file_name();
+            let target = format!("{abs_prefix}/{}", name.to_string_lossy());
+            std::os::unix::fs::symlink(&target, usr_bin.join(&name))?;
+        }
     }
+    Ok(())
+}
+
+fn is_elf(path: &Path) -> Result<bool> {
+    let mut f = std::fs::File::open(path)?;
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err() {
+        return Ok(false);
+    }
+    Ok(&magic == b"\x7fELF")
+}
+
+fn make_executable(path: &Path) -> Result<()> {
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(perms.mode() | 0o111);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Rename the single executable in `/usr/bin` to `rename`, matching the
+/// old Dockerfile's `find -maxdepth 1 -type f` behavior exactly: `-type f`
+/// does not follow symlinks, so in bundle mode (where `/usr/bin` only ever
+/// contains symlinks) this never actually renames anything -- a
+/// pre-existing quirk carried over unchanged, not introduced here.
+fn apply_binary_rename(usr_bin: &Path, rename: &str) -> Result<()> {
+    let files: Vec<_> = std::fs::read_dir(usr_bin)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+        .collect();
+    if files.len() == 1 {
+        std::fs::rename(files[0].path(), usr_bin.join(rename))?;
+    }
+    Ok(())
 }
 
 /// The host's Debian architecture name (`uname -m` mapped to dpkg naming),
@@ -1034,105 +1051,12 @@ fn host_arch() -> Option<String> {
     })
 }
 
-/// Warn (once per architecture) when building for an architecture other than
-/// the host's: Docker needs QEMU/binfmt registration for the foreign image,
-/// mirroring the action's `docker/setup-qemu-action` + binfmt diagnostics.
-fn check_qemu_for(arch: &str) {
-    let Some(host) = host_arch() else { return };
-    if host == arch {
-        return;
-    }
-    // binfmt_misc handlers for foreign archs are named qemu-*.
-    let registered = std::fs::read_dir("/proc/sys/fs/binfmt_misc")
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .map(|e| e.file_name().to_string_lossy().to_string())
-                .filter(|n| n.starts_with("qemu-"))
-                .count()
-        })
-        .unwrap_or(0);
-    if registered > 0 {
-        return;
-    }
-    eprintln!(
-        "  ⚠️  building for {arch} on {host}: QEMU emulation appears unregistered. \
-         Foreign-arch builds may fail; run `docker run --privileged --rm tonistiigi/binfmt --install all` \
-         (or the action's docker/setup-qemu-action) first."
-    );
-}
-
-fn render_dockerfile(
-    cfg: &PackageConfig,
-    job: &ResolvedJob,
-    _full_version: &str,
-    deb_name: &str,
-) -> String {
-    let binary_rename = if cfg.binary_rename.is_empty() {
-        "".to_string()
-    } else {
-        format!("ARG BINARY_RENAME={}\nRUN if [ -n \"$BINARY_RENAME\" ]; then count=$(find /output/usr/bin -maxdepth 1 -type f | wc -l); if [ \"$count\" = \"1\" ]; then f=$(find /output/usr/bin -maxdepth 1 -type f); mv \"$f\" \"/output/usr/bin/$BINARY_RENAME\"; fi; fi", cfg.binary_rename)
-    };
-    // Bundle-mode executable discovery covers two shapes, matching upstream:
-    // a bin/ subdirectory (zed.app/{bin,lib,libexec,share}, an FHS-like
-    // tree), and executables sitting directly at the bundle root as
-    // siblings of the data directories they need (pnpm's Node
-    // single-executable-application binary needs its own dist/ alongside
-    // it, with no bin/lib/libexec structure at all) -- so both loops run
-    // unconditionally rather than picking one shape.
-    //
-    // A trailing guard fails the build loudly if no executables ended up in
-    // /usr/bin at all (wrong binary_path, empty archive, bundle tree with
-    // no ELF anywhere), instead of silently shipping an empty package.
-    let install = if cfg.bundle {
-        format!(
-            r#"RUN mkdir -p "/output/usr/lib/{pkg}" "/output/usr/share/doc/{pkg}" /output/DEBIAN /output/usr/bin
-COPY ${{BINARY_SOURCE}}/ "/output/usr/lib/{pkg}/"
-RUN for f in "/output/usr/lib/{pkg}/bin"/*; do [ -d "/output/usr/lib/{pkg}/bin" ] || break; [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " || continue; chmod +x "$f"; ln -s "/usr/lib/{pkg}/bin/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; for f in "/output/usr/lib/{pkg}"/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " || continue; chmod +x "$f"; ln -s "/usr/lib/{pkg}/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; [ -n "$(ls -A /output/usr/bin 2>/dev/null)" ] || (echo "ERROR: no executables landed in /usr/bin (bundle=true) - check binary_path/bundle config" >&2; exit 1)"#,
-            pkg = cfg.package_name,
-        )
-    } else {
-        format!(
-            r#"RUN mkdir -p /output/usr/bin "/output/usr/share/doc/{pkg}" /output/DEBIAN
-COPY ${{BINARY_SOURCE}}/ /tmp/binary-source/
-RUN for f in /tmp/binary-source/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && cp "$f" /output/usr/bin/ || true; done && chmod +x /output/usr/bin/* 2>/dev/null; rm -rf /tmp/binary-source; [ -n "$(ls -A /output/usr/bin 2>/dev/null)" ] || (echo "ERROR: no executables landed in /usr/bin - check binary_path config" >&2; exit 1)"#,
-            pkg = cfg.package_name,
-        )
-    };
-    format!(
-        r#"ARG DEBIAN_DIST={dist}
-FROM debian:${{DEBIAN_DIST}}
-ARG BINARY_SOURCE
-ENV DIST={dist} SUPPORTED_ARCHITECTURES={arch}
-RUN apt-get update && apt-get install -y file gzip gettext-base && rm -rf /var/lib/apt/lists/*
-{install}
-{binary_rename}
-COPY output/DEBIAN/control /tmp/control.template
-COPY output/copyright /tmp/copyright.template
-COPY output/changelog.Debian /tmp/changelog.template
-RUN envsubst '${{PACKAGE_NAME}} ${{FULL_VERSION}} ${{DIST}} ${{VERSION}}' < /tmp/control.template > /output/DEBIAN/control
-RUN envsubst '${{PACKAGE_NAME}} ${{FULL_VERSION}} ${{DIST}} ${{VERSION}}' < /tmp/changelog.template | gzip -9 > "/output/usr/share/doc/{pkg}/changelog.Debian.gz"
-RUN YEAR=$(date +%Y) envsubst '${{PACKAGE_NAME}} ${{GITHUB_REPO}} ${{YEAR}} ${{LICENSE}}' < /tmp/copyright.template > "/output/usr/share/doc/{pkg}/copyright"
-RUN rm -f /tmp/control.template /tmp/changelog.template /tmp/copyright.template
-RUN dpkg-deb --build /output "/{deb_name}"
-FROM scratch
-COPY --from=0 "/{deb_name}" /
-"#,
-        dist = job.dist,
-        arch = job.arch,
-        pkg = cfg.package_name,
-        install = install,
-        binary_rename = binary_rename,
-        deb_name = deb_name,
-    )
-}
-
 fn write_control(
-    debian_dir: &Path,
     cfg: &PackageConfig,
     job: &ResolvedJob,
     version: &str,
     build_version: &str,
-) -> Result<()> {
+) -> String {
     let full_version = format!("{version}-{build_version}+{dist}", dist = job.dist);
     let maintainer = if cfg.maintainer.is_empty() {
         "latest-debs maintainers <maintainers@latest-debs.org>".to_string()
@@ -1148,42 +1072,48 @@ fn write_control(
     // Homepage, and an extended description line (a single-line Description
     // synopsis without a continuation paragraph trips lintian's
     // extended-description-is-empty). Depends: is appended after
-    // Description, matching the action's Dockerfile which `>>`-appends it
+    // Description, matching the action's Dockerfile which `>>`-appended it
     // to the already-rendered control file rather than templating it inline.
     let depends = if cfg.depends.trim().is_empty() {
         String::new()
     } else {
         format!("Depends: {}\n", cfg.depends.trim())
     };
-    let control = format!(
+    format!(
         "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{depends}",
         pkg = cfg.package_name,
         repo = cfg.github_repo,
         arch = job.arch,
-    );
-    let mut f = std::fs::File::create(debian_dir.join("control"))?;
-    f.write_all(control.as_bytes())?;
-    Ok(())
+    )
 }
 
 fn write_changelog(
-    output_dir: &Path,
     cfg: &PackageConfig,
     job: &ResolvedJob,
     version: &str,
     build_version: &str,
-) -> Result<()> {
+) -> String {
     let full_version = format!("{version}-{build_version}+{dist}", dist = job.dist);
-    let changelog = format!(
+    format!(
         "{pkg} ({full_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {maintainer}  {date}\n",
         pkg = cfg.package_name,
         dist = job.dist,
         version = version,
         maintainer = if cfg.maintainer.is_empty() { "latest-debs maintainers <maintainers@latest-debs.org>" } else { &cfg.maintainer },
         date = changelog_date(job.published_at),
-    );
-    let mut f = std::fs::File::create(output_dir.join("changelog.Debian"))?;
-    f.write_all(changelog.as_bytes())?;
+    )
+}
+
+/// Gzip-compress a rendered changelog into
+/// `usr/share/doc/<pkg>/changelog.Debian.gz`, deterministically -- fixed
+/// `mtime` in the gzip header, matching `lpt_lib::debarchive`'s reasoning.
+fn write_changelog_gz(doc_dir: &Path, changelog: &str, mtime: i64) -> Result<()> {
+    let out = std::fs::File::create(doc_dir.join("changelog.Debian.gz"))?;
+    let mut encoder = flate2::GzBuilder::new()
+        .mtime(mtime.max(0) as u32)
+        .write(out, flate2::Compression::best());
+    encoder.write_all(changelog.as_bytes())?;
+    encoder.finish()?;
     Ok(())
 }
 
@@ -1195,12 +1125,20 @@ fn write_changelog(
 /// release produce different package metadata depending on when it's
 /// built, which is exactly what reproducible builds rule out.
 fn reproducible_epoch(published_at: Option<i64>) -> i64 {
-    if let Ok(v) = std::env::var("SOURCE_DATE_EPOCH") {
-        if let Ok(secs) = v.trim().parse::<i64>() {
-            return secs;
-        }
-    }
-    published_at.unwrap_or(0)
+    let env_override = std::env::var("SOURCE_DATE_EPOCH").ok();
+    parse_source_date_epoch(env_override.as_deref())
+        .or(published_at)
+        .unwrap_or(0)
+}
+
+/// Parse a `SOURCE_DATE_EPOCH` value, split out from `reproducible_epoch`
+/// so its precedence logic is testable without mutating the real process
+/// environment (a global shared with every other test in this binary,
+/// which run in parallel by default -- a prior version of this test set
+/// and unset the env var directly and intermittently leaked into unrelated
+/// tests reading `reproducible_epoch(None)` concurrently).
+fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
+    raw?.trim().parse::<i64>().ok()
 }
 
 /// RFC 2822 date (e.g. `Thu, 14 Aug 2026 09:30:00 +0000`) for the
@@ -1281,17 +1219,32 @@ mod tests {
     }
 
     #[test]
-    fn reproducible_epoch_prefers_source_date_epoch_env_var() {
-        // SAFETY: single assertion, cleaned up immediately; no other test
-        // reads or writes SOURCE_DATE_EPOCH.
-        unsafe {
-            std::env::set_var("SOURCE_DATE_EPOCH", "1000000000");
-        }
-        let epoch = reproducible_epoch(Some(1_735_689_600));
-        unsafe {
-            std::env::remove_var("SOURCE_DATE_EPOCH");
-        }
-        assert_eq!(epoch, 1_000_000_000);
+    fn parse_source_date_epoch_accepts_valid_and_rejects_bad_values() {
+        assert_eq!(
+            parse_source_date_epoch(Some("1000000000")),
+            Some(1_000_000_000)
+        );
+        assert_eq!(
+            parse_source_date_epoch(Some(" 1000000000 ")),
+            Some(1_000_000_000)
+        );
+        assert_eq!(parse_source_date_epoch(Some("not-a-number")), None);
+        assert_eq!(parse_source_date_epoch(None), None);
+    }
+
+    #[test]
+    fn reproducible_epoch_precedence_is_override_then_published_at_then_zero() {
+        // `or`/`unwrap_or` glue only -- reproducible_epoch's env lookup
+        // itself is exercised through parse_source_date_epoch above so no
+        // test here touches the real process environment (a global shared
+        // with every other test in this binary, which run in parallel).
+        assert_eq!(
+            parse_source_date_epoch(None)
+                .or(Some(1_735_689_600))
+                .unwrap_or(0),
+            1_735_689_600
+        );
+        assert_eq!(parse_source_date_epoch(None).or(None).unwrap_or(0), 0);
     }
 
     #[test]
@@ -1366,86 +1319,126 @@ mod tests {
         }
     }
 
+    /// Real ELF magic bytes (`\x7fELF...`), enough for `is_elf` to accept
+    /// as an executable -- the rest of the content is irrelevant filler.
+    const FAKE_ELF: &[u8] = b"\x7fELF-fake-executable-payload";
+
     #[test]
-    fn render_dockerfile_flat_mode_copies_loose_files() {
+    fn stage_install_tree_flat_mode_copies_elf_files_only() {
+        let binary_dir = tempfile::tempdir().unwrap();
+        std::fs::write(binary_dir.path().join("eza"), FAKE_ELF).unwrap();
+        std::fs::write(binary_dir.path().join("README.md"), b"not an elf").unwrap();
+        let root = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
             package_name: "eza".into(),
             ..PackageConfig::default()
         };
-        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "eza.deb");
-        assert!(out.contains("/tmp/binary-source"));
-        assert!(!out.contains("/usr/lib/eza"));
+
+        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+
+        assert!(root.path().join("usr/bin/eza").is_file());
+        assert!(!root.path().join("usr/bin/README.md").exists());
+        assert!(!root.path().join("usr/lib/eza").exists());
+        let mode = std::fs::metadata(root.path().join("usr/bin/eza"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o111, 0o111, "not executable: {mode:o}");
     }
 
     #[test]
-    fn render_dockerfile_bundle_mode_symlinks_bin_into_usr_bin() {
+    fn stage_install_tree_bundle_mode_symlinks_bin_into_usr_bin() {
+        let binary_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(binary_dir.path().join("bin")).unwrap();
+        std::fs::write(binary_dir.path().join("bin/zed"), FAKE_ELF).unwrap();
+        std::fs::create_dir_all(binary_dir.path().join("lib")).unwrap();
+        std::fs::write(binary_dir.path().join("lib/libfoo.so"), FAKE_ELF).unwrap();
+        let root = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
             package_name: "zed".into(),
             bundle: true,
             ..PackageConfig::default()
         };
-        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "zed.deb");
-        assert!(out.contains("/usr/lib/zed"));
-        assert!(out.contains("ln -s"));
-        assert!(!out.contains("/tmp/binary-source"));
+
+        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+
+        assert!(root.path().join("usr/lib/zed/bin/zed").is_file());
+        assert!(root.path().join("usr/lib/zed/lib/libfoo.so").is_file());
+        let link = root.path().join("usr/bin/zed");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            Path::new("/usr/lib/zed/bin/zed")
+        );
     }
 
     #[test]
-    fn render_dockerfile_bundle_mode_also_symlinks_root_level_executables() {
+    fn stage_install_tree_bundle_mode_also_symlinks_root_level_executables() {
         // pnpm-style bundles ship executables as siblings of their data
         // dirs at the bundle root, with no bin/ subdirectory at all.
+        let binary_dir = tempfile::tempdir().unwrap();
+        std::fs::write(binary_dir.path().join("pnpm"), FAKE_ELF).unwrap();
+        std::fs::create_dir_all(binary_dir.path().join("dist")).unwrap();
+        let root = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
             package_name: "pnpm".into(),
             bundle: true,
             ..PackageConfig::default()
         };
-        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "pnpm.deb");
-        assert!(out.contains(r#"for f in "/output/usr/lib/pnpm"/*"#));
+
+        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+
+        let link = root.path().join("usr/bin/pnpm");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_link(&link).unwrap(),
+            Path::new("/usr/lib/pnpm/pnpm")
+        );
     }
 
     #[test]
-    fn render_dockerfile_fails_build_when_usr_bin_ends_up_empty() {
+    fn stage_install_tree_fails_when_usr_bin_ends_up_empty() {
         for bundle in [false, true] {
+            let binary_dir = tempfile::tempdir().unwrap();
+            std::fs::write(binary_dir.path().join("README.md"), b"not an elf").unwrap();
+            let root = tempfile::tempdir().unwrap();
             let cfg = PackageConfig {
                 package_name: "x".into(),
                 bundle,
                 ..PackageConfig::default()
             };
-            let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "x.deb");
+            let err = stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap_err();
             assert!(
-                out.contains("no executables landed in /usr/bin"),
-                "bundle={bundle}"
+                err.to_string()
+                    .contains("no executables landed in /usr/bin"),
+                "bundle={bundle}: {err}"
             );
         }
     }
 
     #[test]
     fn write_control_includes_depends_when_set() {
-        let dir = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
             package_name: "pnpm".into(),
             github_repo: "pnpm/pnpm".into(),
             depends: "libatomic1, libgtk-3-0".into(),
             ..PackageConfig::default()
         };
-        write_control(dir.path(), &cfg, &job(), "1.0.0", "1").unwrap();
-        let text = std::fs::read_to_string(dir.path().join("control")).unwrap();
+        let text = write_control(&cfg, &job(), "1.0.0", "1");
         assert!(text.contains("Depends: libatomic1, libgtk-3-0\n"));
-        // Matches the action's Dockerfile, which `>>`-appends Depends after
-        // the control file (including Description) is already rendered.
+        // Matches the action's Dockerfile, which `>>`-appended Depends
+        // after the control file (including Description) was rendered.
         assert!(text.trim_end().ends_with("Depends: libatomic1, libgtk-3-0"));
     }
 
     #[test]
     fn write_control_omits_depends_when_empty() {
-        let dir = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
             package_name: "eza".into(),
             github_repo: "eza-community/eza".into(),
             ..PackageConfig::default()
         };
-        write_control(dir.path(), &cfg, &job(), "1.0.0", "1").unwrap();
-        let text = std::fs::read_to_string(dir.path().join("control")).unwrap();
+        let text = write_control(&cfg, &job(), "1.0.0", "1");
         assert!(!text.contains("Depends:"));
     }
 

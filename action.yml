@@ -71,10 +71,16 @@ runs:
           exit 1
         fi
 
-    - name: Set up QEMU for cross-architecture builds
-      uses: docker/setup-qemu-action@v3
-      with:
-        platforms: arm64,arm,i386,ppc64le,s390x,riscv64
+    - name: Install lintian
+      if: inputs.lintian-check == 'true'
+      shell: bash
+      run: |
+        # lpt's --lintian has no Docker fallback (see
+        # docs/decisions/2026-08-20-docker-free-lintian-source.md) -- it
+        # requires a real `lintian` binary on PATH, which GitHub-hosted
+        # runners don't ship by default.
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends lintian
 
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable

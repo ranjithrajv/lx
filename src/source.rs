@@ -1,8 +1,7 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
+use sha1::Sha1;
+use sha2::{Digest, Sha256};
 use std::path::Path;
-use std::process::Command;
-
-const SRC_IMAGE: &str = "lpt-src";
 
 /// Package metadata needed to render the source package templates.
 pub struct Pkg {
@@ -19,8 +18,8 @@ pub struct Pkg {
 /// the built .debs in `out_dir`, mirroring the action's
 /// `build_source_packages`:
 ///   * architecture-independent, so generated once per dist,
-///   * runs `dpkg-source`/`dpkg-deb` inside a Debian container (the host may
-///     be non-Debian, e.g. Arch),
+///   * built entirely in-process (`lpt_lib::debarchive`) -- no Docker, no
+///     `dpkg-source`/`dpkg-deb` subprocess,
 ///   * best-effort: on failure, the binary builds still stand.
 pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
     let dists = unique_dists(out_dir, &pkg.name)?;
@@ -35,9 +34,6 @@ pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
         "Generating Debian source packages for: {}",
         dists.join(", ")
     );
-
-    check_docker()?;
-    ensure_src_image()?;
 
     let debian_version = debian_version_of(&pkg.version);
     let workdir = tempfile::tempdir().context("failed to create temp dir")?;
@@ -94,9 +90,43 @@ fn debian_version_of(version: &str) -> String {
         .collect()
 }
 
+/// One `Checksums-*`/`Files` entry: the `.dsc` lists both tarballs, orig
+/// always before debian (dpkg-source's own convention, verified against a
+/// real `dpkg-source -b` run -- not alphabetical, which would order them
+/// the other way).
+struct DscFile {
+    name: String,
+    size: u64,
+    md5: String,
+    sha1: String,
+    sha256: String,
+}
+
+impl DscFile {
+    fn from_bytes(name: String, data: &[u8]) -> Self {
+        let md5 = format!("{:x}", md5::compute(data));
+        let sha1 = {
+            let mut h = Sha1::new();
+            h.update(data);
+            hex::encode(h.finalize())
+        };
+        let sha256 = {
+            let mut h = Sha256::new();
+            h.update(data);
+            hex::encode(h.finalize())
+        };
+        DscFile {
+            name,
+            size: data.len() as u64,
+            md5,
+            sha1,
+            sha256,
+        }
+    }
+}
+
 /// Build one source package for a single distribution. Returns Ok(true)
-/// when this call created the shared .orig.tar.xz.
-#[allow(clippy::too_many_arguments)]
+/// when this call created the shared `.orig.tar.gz`.
 fn build_source_package(
     out_dir: &Path,
     workdir: &Path,
@@ -108,7 +138,9 @@ fn build_source_package(
     let src_version = format!("{}-{}+{dist}", debian_version, pkg.build_version);
     let tree = format!("{}-{src_version}", pkg.name);
     let tree_dir = workdir.join(&tree);
-    let orig_name = format!("{}_{debian_version}.orig.tar.xz", pkg.name);
+    let orig_name = format!("{}_{debian_version}.orig.tar.gz", pkg.name);
+    let debian_tar_name = format!("{}_{src_version}.debian.tar.gz", pkg.name);
+    let dsc_name = format!("{}_{src_version}.dsc", pkg.name);
 
     // Reference .deb: prefer amd64 for this dist, else the first match.
     let ref_deb = find_ref_deb(out_dir, &pkg.name, dist)?
@@ -117,22 +149,13 @@ fn build_source_package(
     std::fs::create_dir_all(tree_dir.join("debian/source"))
         .context("failed to create debian/source")?;
 
-    // Extract the binary package as the source tree (in-container: the host
-    // may not have dpkg-deb). DEBIAN/ and usr/share/doc are Debian packaging
-    // output, not upstream payload, so strip them here in the same container
-    // (the container owns the extracted files, so only it can remove them).
-    run_container_cmd(
-        out_dir,
-        workdir,
-        &[
-            "bash",
-            "-c",
-            &format!(
-                "set -e; dpkg-deb -x /out/{ref_deb} /work/{tree} && rm -rf /work/{tree}/DEBIAN /work/{tree}/usr/share/doc"
-            ),
-        ],
-    )
-    .with_context(|| format!("dpkg-deb -x failed for {ref_deb}"))?;
+    // Extract the binary package as the source tree. DEBIAN/ and
+    // usr/share/doc are Debian packaging output, not upstream payload, so
+    // strip them.
+    lpt_lib::debarchive::extract(&out_dir.join(&ref_deb), &tree_dir)
+        .with_context(|| format!("failed to extract {ref_deb}"))?;
+    let _ = std::fs::remove_dir_all(tree_dir.join("DEBIAN"));
+    let _ = std::fs::remove_dir_all(tree_dir.join("usr/share/doc"));
 
     // debian/control (mirrors templates/source/control).
     let control = format!(
@@ -182,69 +205,98 @@ fn build_source_package(
 
     // The upstream orig tarball is built once and shared across dists. It
     // must contain a top-level <pkg>-<debian_version>/ directory (standard
-    // upstream layout), so the tree dir name is rewritten in the archive.
+    // upstream layout).
     //
-    // Reproducible-builds hygiene: plain `tar` reads directory entries in
-    // filesystem order, which isn't guaranteed stable across separate
-    // extractions into fresh temp directories -- two builds of the exact
-    // same input could otherwise produce a differently-ordered (and thus
-    // differently-compressed) tarball. --sort=name fixes member order;
-    // --mtime/--owner/--group/--numeric-owner strip the extraction
-    // timestamp and container UID/GID, which would otherwise vary by
-    // build host and build time. --mtime respects SOURCE_DATE_EPOCH (the
-    // reproducible-builds.org standard) when set, else a fixed epoch.
-    let mut created_orig = false;
-    if !orig_done {
+    // Reproducible-builds hygiene: `lpt_lib::debarchive::tar_gz_tree` walks
+    // in sorted order and normalizes mtime/owner/group -- see its own doc
+    // comment. `mtime` respects SOURCE_DATE_EPOCH (the reproducible-builds
+    // .org standard) when set, else a fixed epoch.
+    let source_date_epoch: i64 = std::env::var("SOURCE_DATE_EPOCH")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0);
+    let orig_path = workdir.join(&orig_name);
+    let created_orig = if !orig_done {
         let upstream_dir = format!("{}-{debian_version}", pkg.name);
-        let source_date_epoch =
-            std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "0".to_string());
-        run_container_cmd(
-            out_dir,
-            workdir,
-            &[
-                "tar",
-                "--sort=name",
-                &format!("--mtime=@{source_date_epoch}"),
-                "--owner=0",
-                "--group=0",
-                "--numeric-owner",
-                "-cJf",
-                "/work/orig.tar.xz",
-                "--transform",
-                &format!("s|^{tree}|{upstream_dir}|"),
-                "-C",
-                "/work",
-                &format!("{tree}/usr"),
-            ],
+        let orig_bytes = lpt_lib::debarchive::tar_gz_tree(
+            &tree_dir.join("usr"),
+            &format!("{upstream_dir}/usr/"),
+            source_date_epoch,
         )
-        .context("failed to create orig tarball")?;
-        std::fs::copy(workdir.join("orig.tar.xz"), workdir.join(&orig_name))?;
-        created_orig = true;
-    }
+        .context("failed to build orig tarball")?;
+        std::fs::write(&orig_path, &orig_bytes)?;
+        true
+    } else {
+        false
+    };
+    let orig_bytes = std::fs::read(&orig_path)
+        .with_context(|| format!("failed to read '{}'", orig_path.display()))?;
 
-    // dpkg-source -b writes <pkg>_<src_version>.dsc + .debian.tar.xz into
-    // the cwd. Run it in the container with the workdir mounted; collect
-    // the outputs from the workdir.
-    run_container_cmd(
-        out_dir,
-        workdir,
-        &["bash", "-c", &format!("cd /work && dpkg-source -b {tree}")],
-    )
-    .with_context(|| format!("dpkg-source -b failed for {dist}"))?;
+    // debian.tar.gz: just the debian/ metadata directory -- lpt never
+    // produces quilt patches, so there's no .pc/ or patches/ to include.
+    let debian_bytes =
+        lpt_lib::debarchive::tar_gz_tree(&tree_dir.join("debian"), "debian/", source_date_epoch)
+            .context("failed to build debian.tar.gz")?;
+    std::fs::write(workdir.join(&debian_tar_name), &debian_bytes)?;
 
+    let orig_file = DscFile::from_bytes(orig_name.clone(), &orig_bytes);
+    let debian_file = DscFile::from_bytes(debian_tar_name.clone(), &debian_bytes);
+    let dsc = render_dsc(pkg, &src_version, &orig_file, &debian_file);
+    std::fs::write(workdir.join(&dsc_name), &dsc)?;
+
+    std::fs::copy(workdir.join(&dsc_name), out_dir.join(&dsc_name))?;
     std::fs::copy(
-        workdir.join(format!("{}_{src_version}.dsc", pkg.name)),
-        out_dir.join(format!("{}_{src_version}.dsc", pkg.name)),
-    )?;
-    std::fs::copy(
-        workdir.join(format!("{}_{src_version}.debian.tar.xz", pkg.name)),
-        out_dir.join(format!("{}_{src_version}.debian.tar.xz", pkg.name)),
+        workdir.join(&debian_tar_name),
+        out_dir.join(&debian_tar_name),
     )?;
     if created_orig {
-        std::fs::copy(workdir.join(&orig_name), out_dir.join(&orig_name))?;
+        std::fs::copy(&orig_path, out_dir.join(&orig_name))?;
     }
-    println!("  ✓ source package: {}_{src_version}.dsc", pkg.name);
+    println!("  ✓ source package: {dsc_name}");
     Ok(created_orig)
+}
+
+/// Render a `.dsc` matching `dpkg-source -b`'s own field order and
+/// content, verified field-for-field against a real `dpkg-source -b` run
+/// (see `docs/decisions/2026-08-20-docker-free-lintian-source.md`).
+/// Unsigned, matching the previous Docker-based behavior (which never
+/// signed either).
+fn render_dsc(pkg: &Pkg, src_version: &str, orig: &DscFile, debian: &DscFile) -> String {
+    format!(
+        "Format: 3.0 (quilt)\n\
+         Source: {name}\n\
+         Binary: {name}\n\
+         Architecture: any\n\
+         Version: {src_version}\n\
+         Maintainer: {maintainer}\n\
+         Homepage: https://github.com/{repo}\n\
+         Standards-Version: 4.6.2\n\
+         Build-Depends: debhelper-compat (= 13)\n\
+         Package-List:\n\
+         \x20{name} deb utils optional arch=any\n\
+         Checksums-Sha1:\n\
+         \x20{o_sha1} {o_size} {o_name}\n\
+         \x20{d_sha1} {d_size} {d_name}\n\
+         Checksums-Sha256:\n\
+         \x20{o_sha256} {o_size} {o_name}\n\
+         \x20{d_sha256} {d_size} {d_name}\n\
+         Files:\n\
+         \x20{o_md5} {o_size} {o_name}\n\
+         \x20{d_md5} {d_size} {d_name}\n",
+        name = pkg.name,
+        maintainer = pkg.maintainer,
+        repo = pkg.github_repo,
+        o_sha1 = orig.sha1,
+        o_size = orig.size,
+        o_name = orig.name,
+        d_sha1 = debian.sha1,
+        d_size = debian.size,
+        d_name = debian.name,
+        o_sha256 = orig.sha256,
+        d_sha256 = debian.sha256,
+        o_md5 = orig.md5,
+        d_md5 = debian.md5,
+    )
 }
 
 /// Find a reference .deb for a dist: prefer amd64, else any matching dist.
@@ -269,84 +321,46 @@ fn find_ref_deb(out_dir: &Path, pkg_name: &str, dist: &str) -> Result<Option<Str
     Ok(any)
 }
 
-fn check_docker() -> Result<()> {
-    let status = Command::new("docker")
-        .arg("version")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to run docker")?;
-    if !status.success() {
-        bail!("docker is required to generate source packages (the host is non-Debian)");
-    }
-    Ok(())
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Build a cached image with dpkg-dev installed, if not already present.
-fn ensure_src_image() -> Result<()> {
-    let inspect = Command::new("docker")
-        .args(["image", "inspect", SRC_IMAGE])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .context("failed to inspect source image")?;
-    if inspect.success() {
-        return Ok(());
+    #[test]
+    fn debian_version_strips_leading_non_digits() {
+        assert_eq!(debian_version_of("v1.2.3"), "1.2.3");
+        assert_eq!(debian_version_of("0.23.5"), "0.23.5");
+        assert_eq!(debian_version_of("bun-v1.3.14"), "1.3.14");
     }
 
-    let dir = tempfile::tempdir().context("failed to create temp dir")?;
-    let df = dir.path().join("Dockerfile");
-    std::fs::write(
-        &df,
-        "FROM debian:bookworm\nRUN apt-get update && apt-get install -y --no-install-recommends dpkg-dev xz-utils && rm -rf /var/lib/apt/lists/*\n",
-    )
-    .context("failed to write source Dockerfile")?;
-
-    let status = Command::new("docker")
-        .args([
-            "build",
-            "-t",
-            SRC_IMAGE,
-            "-f",
-            df.to_str().unwrap(),
-            dir.path().to_str().unwrap(),
-        ])
-        .stdout(std::process::Stdio::null())
-        .status()
-        .context("failed to build source image")?;
-    if !status.success() {
-        bail!("failed to build source image ({SRC_IMAGE})");
-    }
-    Ok(())
-}
-
-/// Run a command inside the source image, mounting the real `out_dir` and
-/// `workdir` from the host so dpkg-deb/tar/dpkg-source operate on the same
-/// files the host wrote.
-fn run_container_cmd(out_dir: &Path, workdir: &Path, args: &[&str]) -> Result<()> {
-    let out_abs = out_dir
-        .canonicalize()
-        .unwrap_or_else(|_| out_dir.to_path_buf());
-    let work_abs = workdir
-        .canonicalize()
-        .unwrap_or_else(|_| workdir.to_path_buf());
-    let mut cmd = Command::new("docker");
-    cmd.args([
-        "run",
-        "--rm",
-        "-v",
-        &format!("{}:/out", out_abs.display()),
-        "-v",
-        &format!("{}:/work", work_abs.display()),
-    ]);
-    cmd.arg(SRC_IMAGE);
-    cmd.args(args);
-    let status = cmd.status().context("failed to run source container")?;
-    if !status.success() {
-        bail!(
-            "container command failed: docker run {SRC_IMAGE} {}",
-            args.join(" ")
+    #[test]
+    fn dsc_lists_orig_before_debian_and_matches_dpkg_source_field_order() {
+        let pkg = Pkg {
+            name: "eza".into(),
+            github_repo: "eza-community/eza".into(),
+            description: "eza, packaged from eza-community/eza".into(),
+            maintainer: "latest-debs maintainers <maintainers@latest-debs.org>".into(),
+            version: "0.23.5".into(),
+            build_version: "1".into(),
+            license_spdx: "MIT".into(),
+        };
+        let orig = DscFile::from_bytes("eza_0.23.5.orig.tar.gz".into(), b"orig-bytes");
+        let debian = DscFile::from_bytes(
+            "eza_0.23.5-1+bookworm.debian.tar.gz".into(),
+            b"debian-bytes",
         );
+        let dsc = render_dsc(&pkg, "0.23.5-1+bookworm", &orig, &debian);
+
+        let lines: Vec<&str> = dsc.lines().collect();
+        assert_eq!(lines[0], "Format: 3.0 (quilt)");
+        assert_eq!(lines[1], "Source: eza");
+        assert_eq!(lines[2], "Binary: eza");
+        assert_eq!(lines[3], "Architecture: any");
+        assert_eq!(lines[4], "Version: 0.23.5-1+bookworm");
+        assert!(dsc.contains("Package-List:\n eza deb utils optional arch=any\n"));
+
+        let checksums_idx = dsc.find("Checksums-Sha1:").unwrap();
+        let orig_idx = dsc[checksums_idx..].find("orig.tar.gz").unwrap();
+        let debian_idx = dsc[checksums_idx..].find("debian.tar.gz").unwrap();
+        assert!(orig_idx < debian_idx, "orig must be listed before debian");
     }
-    Ok(())
 }

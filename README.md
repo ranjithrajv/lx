@@ -10,13 +10,24 @@ GitHub Action, usable both as a local CLI and as a GitHub Action
 
 ## Requirements
 
-- [Docker](https://docs.docker.com/get-docker/) — every `.deb`/source
-  package/lintian run happens inside a container, so the host doesn't need
-  `dpkg-dev`, `lintian`, or any Debian toolchain installed.
-- Rust (to build `lpt` itself; see [Development](#development)).
-- For cross-architecture builds on non-matching host hardware: QEMU
-  (`docker run --privileged --rm tonistiigi/binfmt --install all`, or
-  `docker/setup-qemu-action` in CI). Not needed with `--host`.
+- Rust (to build `lpt` itself; see [Development](#development)). That's
+  it — **`lpt` never uses Docker, for anything:**
+  - `lpt build` builds `.deb`s natively (`lib/debarchive.rs`); no
+    `dpkg-deb`, no Debian toolchain, and cross-architecture builds never
+    need QEMU (packaging only copies/`chmod`s the target binary, it's
+    never executed).
+  - `--source` builds source packages (`.dsc`/`.orig.tar.gz`/
+    `.debian.tar.gz`) natively too — no `dpkg-source`.
+  - `--lintian` requires a `lintian` binary on your `PATH` (e.g.
+    `apt-get install lintian` on Debian/Ubuntu). lintian itself has no
+    Rust equivalent to reach for, so this one flag needs it installed —
+    but there's no Docker fallback to reach it through either way.
+
+  See
+  [`docs/decisions/2026-08-20-docker-free-deb-build.md`](docs/decisions/2026-08-20-docker-free-deb-build.md)
+  and
+  [`docs/decisions/2026-08-20-docker-free-lintian-source.md`](docs/decisions/2026-08-20-docker-free-lintian-source.md)
+  for how, and the trade-offs involved.
 
 ## Quick start
 
@@ -66,7 +77,7 @@ out:
   `release-metadata.json` provenance pin captured at vet time, instead of
   (or in addition to) the release's own live checksum sidecar.
 - **`--source`** (`build`): also generate a Debian source package (`.dsc` +
-  `.debian.tar.xz` + a shared `.orig.tar.xz`) per distribution.
+  `.debian.tar.gz` + a shared `.orig.tar.gz`) per distribution.
 - Version/architecture/distribution resolution, checksum verification, and
   reproducible-build hygiene (below) are all shared machinery — see
   `--dry-run` to preview a build matrix without downloading or building
@@ -144,10 +155,11 @@ names):
 
 Outputs: `packages` (space-separated `.deb` filenames), `source-packages`
 (`.dsc` filenames), `summary-path` (`build-summary.json`). It needs no host
-`apt-get` dependency install — lintian and `dpkg-source` run in their own
-containers, and extraction/HTTP/JSON are native Rust rather than shelled-out
-`tar`/`jq`/`yq`. Since this repo has no published binary releases yet, the
-action builds `lpt` from source (cached via `Swatinem/rust-cache`).
+`apt-get` dependency install at all — building, source packages, and
+`lintian` (when the runner has one) are all native or host-tool-backed
+rather than shelled-out `tar`/`jq`/`yq`/`dpkg-*` in a container. Since this
+repo has no published binary releases yet, the action builds `lpt` from
+source (cached via `Swatinem/rust-cache`).
 
 ## Reproducible builds
 
@@ -159,9 +171,10 @@ verified empirically (see
 for the investigation). Package
 metadata timestamps (changelog date, copyright year) come from the GitHub
 release's own publish time rather than build time, and the source-package
-`.orig.tar.xz` is built with `tar --sort=name` plus normalized
-mtime/owner/group. Both respect the standard `SOURCE_DATE_EPOCH` environment
-variable if you want to pin an exact value.
+`.orig.tar.gz`/`.debian.tar.gz` members are built (`lib/debarchive.rs`)
+walking their contents in sorted order with normalized mtime/owner/group.
+Both respect the standard `SOURCE_DATE_EPOCH` environment variable if you
+want to pin an exact value.
 
 ## Development
 

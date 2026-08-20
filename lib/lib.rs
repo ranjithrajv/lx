@@ -3,6 +3,8 @@
 //!
 //! * [`cache`] — flock-guarded persistent download cache with TTL + checksum.
 //! * [`checksum`] — SHA-256 helpers and pinned-metadata verification.
+//! * [`debarchive`] — build a `.deb` (ar + control.tar.gz + data.tar.gz)
+//!   entirely in-process, no `dpkg-deb` or Docker required.
 //! * [`github`] — octocrab-backed GitHub Releases client with a local JSON
 //!   API cache (releases, assets, license/copyright lookups).
 //! * [`lintian`] — run `lintian` against any `.deb` inside a Debian
@@ -16,6 +18,7 @@
 
 pub mod cache;
 pub mod checksum;
+pub mod debarchive;
 pub mod github;
 pub mod lintian;
 pub mod optimize;
