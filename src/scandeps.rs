@@ -115,7 +115,14 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
         }
 
         println!("\n{arch}: {}", asset.name);
-        let asset_path = tmp.path().join(format!("{arch}-{}", asset.name));
+        // Own subdirectory per architecture (not a filename prefix) so
+        // `raw`-format assets (e.g. AppImages) -- whose extracted name
+        // comes from the downloaded file's own on-disk name, see
+        // `build::extract`'s "raw" branch -- keep their real asset name
+        // instead of leaking an internal disambiguation prefix into it.
+        let asset_dir = tmp.path().join(format!("{arch}-download"));
+        std::fs::create_dir_all(&asset_dir)?;
+        let asset_path = asset_dir.join(&asset.name);
         println!("  ↓ downloading (unverified -- inspected locally only, never installed)");
         crate::build::download(&client, asset, &asset_path)?;
 
@@ -251,6 +258,34 @@ mod tests {
         let found = find_elf_files(dir.path()).unwrap();
         assert_eq!(found.len(), 1);
         assert!(found[0].ends_with("bin/tool"));
+    }
+
+    /// Regression test for a real bug found scanning a live `raw`-format
+    /// asset (an AppImage): the download path used to disambiguate
+    /// architectures via a filename prefix (`"{arch}-{asset_name}"`), but
+    /// `build::extract`'s "raw" branch names the extracted file after the
+    /// *downloaded file's own on-disk name* -- so the prefix leaked into
+    /// what got displayed as the scanned binary's name. Downloads now go
+    /// into a per-architecture subdirectory instead, keeping the asset's
+    /// real name intact end to end.
+    #[test]
+    fn raw_format_extraction_preserves_the_real_asset_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let asset_dir = tmp.path().join("amd64-download");
+        std::fs::create_dir_all(&asset_dir).unwrap();
+        let asset_path = asset_dir.join("nvim-linux-x86_64.appimage");
+        std::fs::write(&asset_path, b"\x7fELFfake-appimage-bytes").unwrap();
+
+        let extract_dir = tmp.path().join("amd64-scan-extract");
+        crate::build::extract(&asset_path, &extract_dir, "raw").unwrap();
+
+        let found = find_elf_files(&extract_dir).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            found[0].file_name().unwrap().to_str().unwrap(),
+            "nvim-linux-x86_64.appimage",
+            "extracted raw asset must keep its real name, not an internal disambiguation prefix"
+        );
     }
 
     #[test]
