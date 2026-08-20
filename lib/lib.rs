@@ -12,6 +12,9 @@
 //! * [`lintian`] — run the host `lintian` binary against a `.deb` and parse
 //!   its output into a structured report.
 //! * [`optimize`] — host resource detection and parallel-build tuning.
+//! * [`pkgmeta`] — Debian package metadata rendering (epoch/version,
+//!   reproducible-builds-aware timestamps, changelog/copyright bodies)
+//!   shared by both the binary `.deb` and its source package.
 //! * [`progress`] — cross-process progress tracking with a TTY-friendly bar.
 //! * [`telemetry`] — best-effort metrics/stage/failure logging.
 //!
@@ -25,5 +28,6 @@ pub mod elfdeps;
 pub mod github;
 pub mod lintian;
 pub mod optimize;
+pub mod pkgmeta;
 pub mod progress;
 pub mod telemetry;

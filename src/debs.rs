@@ -3,7 +3,6 @@
 //! out so it isn't duplicated across those four subcommands.
 
 use anyhow::{bail, Context, Result};
-use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 
@@ -148,11 +147,12 @@ pub fn download(client: &GitHubClient, asset: &Asset, dest: &Path) -> Result<()>
 }
 
 /// Verify against a `.sha256`/`.sha256sum` sidecar file if one exists next
-/// to the asset. A checksum that doesn't match is always a hard error,
-/// since this asset is about to be installed as root. A missing sidecar
-/// also fails the install unless `allow_unverified` is set (`--allow-
-/// unverified`) -- matching `build.rs`'s fail-closed default: most
-/// real-world GitHub releases don't publish a sidecar, so silently
+/// to the asset (probe-and-verify logic shared with `build.rs` via
+/// `lpt_lib::checksum::check_sidecar`). A checksum that doesn't match is
+/// always a hard error, since this asset is about to be installed as root.
+/// A missing sidecar also fails the install unless `allow_unverified` is
+/// set (`--allow-unverified`) -- matching `build.rs`'s fail-closed default:
+/// most real-world GitHub releases don't publish a sidecar, so silently
 /// proceeding here would mean the *default* install path had zero
 /// integrity verification with only a console line as evidence.
 pub fn verify_sidecar_or_require_flag(
@@ -161,38 +161,27 @@ pub fn verify_sidecar_or_require_flag(
     path: &Path,
     allow_unverified: bool,
 ) -> Result<()> {
-    for suffix in [".sha256", ".sha256sum"] {
-        let sidecar_url = format!("{}{}", asset.browser_download_url, suffix);
-        let mut resp = match client.raw_get(&sidecar_url) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let mut text = String::new();
-        resp.read_to_string(&mut text)?;
-        let map = lpt_lib::checksum::parse_checksum_file(&text)?;
-        let fname = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        if let Some(expected) = map.get(fname) {
-            lpt_lib::checksum::verify_sha256(path, expected)?;
+    use lpt_lib::checksum::SidecarCheck;
+    match lpt_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)?
+    {
+        SidecarCheck::Verified => {
             println!("    ✓ checksum verified");
-            return Ok(());
+            Ok(())
         }
-    }
-    if allow_unverified {
-        eprintln!(
-            "    ⚠ (no sidecar checksum found for '{}'; proceeding unverified per \
-             --allow-unverified)",
+        SidecarCheck::NotFound if allow_unverified => {
+            eprintln!(
+                "    ⚠ (no sidecar checksum found for '{}'; proceeding unverified per \
+                 --allow-unverified)",
+                asset.name
+            );
+            Ok(())
+        }
+        SidecarCheck::NotFound => Err(anyhow::anyhow!(
+            "no checksum verification available for '{}': no sidecar checksum found. Pass \
+             --allow-unverified to install anyway.",
             asset.name
-        );
-        return Ok(());
+        )),
     }
-    Err(anyhow::anyhow!(
-        "no checksum verification available for '{}': no sidecar checksum found. Pass \
-         --allow-unverified to install anyway.",
-        asset.name
-    ))
 }
 
 /// `sudo dpkg -i <path>`, falling back to `sudo apt-get install -f -y` when

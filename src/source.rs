@@ -12,9 +12,28 @@ pub struct Pkg {
     pub version: String,
     pub build_version: String,
     /// Debian epoch (e.g. "1"), matching the binary package's -- see
-    /// `build.rs::with_epoch`. Empty means none.
+    /// `lpt_lib::pkgmeta::with_epoch`. Empty means none.
     pub epoch: String,
     pub license_spdx: String,
+    /// Dependency-relation fields, matching the binary package's -- a
+    /// source package's `debian/control` binary-package stanza needs the
+    /// same `Depends:`/etc. a `dpkg-buildpackage` build of this tree would
+    /// need to reproduce the shipped binary .deb.
+    pub depends: String,
+    pub recommends: String,
+    pub conflicts: String,
+    pub replaces: String,
+    pub provides: String,
+    pub breaks: String,
+    /// Unix epoch seconds the release was published, for reproducible
+    /// changelog/copyright timestamps -- see
+    /// `lpt_lib::pkgmeta::reproducible_epoch`. Matching the binary
+    /// package's `job.published_at`.
+    pub published_at: Option<i64>,
+    /// The upstream license actually detected from GitHub, when available
+    /// -- preferred over `license_spdx`/generic text in the rendered
+    /// copyright, matching the binary package's behavior.
+    pub license: Option<lpt_lib::github::RepoLicense>,
 }
 
 /// Generate Debian source packages (3.0 quilt) for each distribution among
@@ -38,7 +57,7 @@ pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
         dists.join(", ")
     );
 
-    let debian_version = debian_version_of(&pkg.version);
+    let debian_version = lpt_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
     let workdir = tempfile::tempdir().context("failed to create temp dir")?;
     let mut orig_done = false;
 
@@ -82,15 +101,6 @@ fn unique_dists(out_dir: &Path, pkg_name: &str) -> Result<Vec<String>> {
         }
     }
     Ok(dists)
-}
-
-/// `0.23.5` -> `0.23.5`; `v1.2.3` -> `1.2.3` (strips leading non-digits),
-/// matching the action's `sed -E 's/^[^0-9]*//'`.
-fn debian_version_of(version: &str) -> String {
-    version
-        .chars()
-        .skip_while(|c| !c.is_ascii_digit())
-        .collect()
 }
 
 /// One `Checksums-*`/`Files` entry: the `.dsc` lists both tarballs, orig
@@ -143,7 +153,7 @@ fn build_source_package(
     // filenames -- Debian policy excludes it there since `:` isn't
     // filename-safe. `src_version` above stays epoch-free for filenames;
     // this is the one used for file *content*.
-    let content_version = crate::build::with_epoch(&pkg.epoch, &src_version);
+    let content_version = lpt_lib::pkgmeta::with_epoch(&pkg.epoch, &src_version);
     let tree = format!("{}-{src_version}", pkg.name);
     let tree_dir = workdir.join(&tree);
     let orig_name = format!("{}_{debian_version}.orig.tar.xz", pkg.name);
@@ -165,9 +175,21 @@ fn build_source_package(
     let _ = std::fs::remove_dir_all(tree_dir.join("DEBIAN"));
     let _ = std::fs::remove_dir_all(tree_dir.join("usr/share/doc"));
 
-    // debian/control (mirrors templates/source/control).
+    // debian/control (mirrors templates/source/control). The binary-package
+    // stanza's relation fields mirror the shipped .deb's -- a
+    // `dpkg-buildpackage` build of this tree needs the same Depends/etc. to
+    // reproduce it.
+    let relations = lpt_lib::pkgmeta::Relations {
+        depends: pkg.depends.clone(),
+        recommends: pkg.recommends.clone(),
+        conflicts: pkg.conflicts.clone(),
+        replaces: pkg.replaces.clone(),
+        provides: pkg.provides.clone(),
+        breaks: pkg.breaks.clone(),
+    }
+    .render();
     let control = format!(
-        "Source: {name}\nSection: utils\nPriority: optional\nMaintainer: {m}\nHomepage: https://github.com/{repo}\nStandards-Version: 4.6.2\nBuild-Depends: debhelper-compat (= 13)\n\nPackage: {name}\nArchitecture: any\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n",
+        "Source: {name}\nSection: utils\nPriority: optional\nMaintainer: {m}\nHomepage: https://github.com/{repo}\nStandards-Version: 4.6.2\nBuild-Depends: debhelper-compat (= 13)\n\nPackage: {name}\nArchitecture: any\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{relations}",
         name = pkg.name,
         m = pkg.maintainer,
         repo = pkg.github_repo,
@@ -189,22 +211,28 @@ fn build_source_package(
         )?;
     }
 
-    // debian/changelog (mirrors templates/source/changelog).
-    let changelog = format!(
-        "{name} ({content_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {m}  Mon, 01 Jan 2024 00:00:00 +0000\n",
-        name = pkg.name,
-        version = debian_version,
-        m = pkg.maintainer,
+    // debian/changelog: shares the exact renderer (and thus the exact
+    // reproducible-builds-aware date derivation) the binary .deb's
+    // changelog uses, rather than an independent hardcoded date.
+    let changelog = lpt_lib::pkgmeta::render_changelog_entry(
+        &pkg.name,
+        &content_version,
+        dist,
+        debian_version,
+        &pkg.maintainer,
+        pkg.published_at,
     );
     std::fs::write(tree_dir.join("debian/changelog"), changelog)?;
 
-    // debian/copyright (mirrors templates/output/copyright).
-    let year = 2026;
-    let copyright = format!(
-        "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: {name}\nSource: https://github.com/{repo}\nLicense: {spdx}\n\nFiles: *\nCopyright: {year} {repo}\nLicense: {spdx}\n",
-        name = pkg.name,
-        repo = pkg.github_repo,
-        spdx = pkg.license_spdx,
+    // debian/copyright: same renderer as the binary .deb's, so the source
+    // package gets the full upstream license text/year handling instead of
+    // a hardcoded year and a simplified, less-complete template.
+    let copyright = lpt_lib::pkgmeta::render_copyright(
+        &pkg.name,
+        &pkg.github_repo,
+        pkg.license.as_ref(),
+        &pkg.license_spdx,
+        pkg.published_at,
     );
     std::fs::write(tree_dir.join("debian/copyright"), copyright)?;
 
@@ -218,13 +246,13 @@ fn build_source_package(
     // Reproducible-builds hygiene: `lpt_lib::debarchive::tar_xz_tree` walks
     // in sorted order and normalizes owner/group -- see its own doc
     // comment. `mtime` respects SOURCE_DATE_EPOCH (the reproducible-builds
-    // .org standard) when set, else a fixed epoch. (xz itself has no
-    // mtime field to normalize, unlike gzip -- only the tar entries carry
-    // one.)
-    let source_date_epoch: i64 = std::env::var("SOURCE_DATE_EPOCH")
-        .ok()
-        .and_then(|v| v.trim().parse().ok())
-        .unwrap_or(0);
+    // .org standard) when set, else the release's own publish time, else a
+    // fixed epoch -- the same precedence the binary .deb's mtime uses (see
+    // `lpt_lib::pkgmeta::reproducible_epoch`); previously this only ever
+    // consulted SOURCE_DATE_EPOCH and fell straight to a fixed epoch,
+    // ignoring `published_at` entirely. (xz itself has no mtime field to
+    // normalize, unlike gzip -- only the tar entries carry one.)
+    let source_date_epoch = lpt_lib::pkgmeta::reproducible_epoch(pkg.published_at);
     let orig_path = workdir.join(&orig_name);
     let created_orig = if !orig_done {
         let upstream_dir = format!("{}-{debian_version}", pkg.name);
@@ -335,25 +363,30 @@ fn find_ref_deb(out_dir: &Path, pkg_name: &str, dist: &str) -> Result<Option<Str
 mod tests {
     use super::*;
 
-    #[test]
-    fn debian_version_strips_leading_non_digits() {
-        assert_eq!(debian_version_of("v1.2.3"), "1.2.3");
-        assert_eq!(debian_version_of("0.23.5"), "0.23.5");
-        assert_eq!(debian_version_of("bun-v1.3.14"), "1.3.14");
-    }
-
-    #[test]
-    fn dsc_lists_orig_before_debian_and_matches_dpkg_source_field_order() {
-        let pkg = Pkg {
+    fn test_pkg(epoch: &str) -> Pkg {
+        Pkg {
             name: "eza".into(),
             github_repo: "eza-community/eza".into(),
             description: "eza, packaged from eza-community/eza".into(),
             maintainer: "latest-debs maintainers <maintainers@latest-debs.org>".into(),
             version: "0.23.5".into(),
             build_version: "1".into(),
-            epoch: "".into(),
+            epoch: epoch.into(),
             license_spdx: "MIT".into(),
-        };
+            depends: String::new(),
+            recommends: String::new(),
+            conflicts: String::new(),
+            replaces: String::new(),
+            provides: String::new(),
+            breaks: String::new(),
+            published_at: None,
+            license: None,
+        }
+    }
+
+    #[test]
+    fn dsc_lists_orig_before_debian_and_matches_dpkg_source_field_order() {
+        let pkg = test_pkg("");
         let orig = DscFile::from_bytes("eza_0.23.5.orig.tar.xz".into(), b"orig-bytes");
         let debian = DscFile::from_bytes(
             "eza_0.23.5-1+bookworm.debian.tar.xz".into(),
@@ -382,18 +415,9 @@ mod tests {
         // never is -- Debian policy excludes epoch from filenames since
         // `:` isn't filename-safe. Exercise the exact computation
         // build_source_package uses.
-        let pkg = Pkg {
-            name: "eza".into(),
-            github_repo: "eza-community/eza".into(),
-            description: "eza, packaged from eza-community/eza".into(),
-            maintainer: "latest-debs maintainers <maintainers@latest-debs.org>".into(),
-            version: "0.23.5".into(),
-            build_version: "1".into(),
-            epoch: "1".into(),
-            license_spdx: "MIT".into(),
-        };
+        let pkg = test_pkg("1");
         let src_version = "0.23.5-1+bookworm";
-        let content_version = crate::build::with_epoch(&pkg.epoch, src_version);
+        let content_version = lpt_lib::pkgmeta::with_epoch(&pkg.epoch, src_version);
         assert_eq!(content_version, "1:0.23.5-1+bookworm");
 
         let dsc_name = format!("{}_{src_version}.dsc", pkg.name);

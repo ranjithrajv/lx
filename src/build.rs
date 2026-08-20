@@ -362,6 +362,14 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                     .as_ref()
                     .map(|l| l.spdx.clone())
                     .unwrap_or_else(|| "NOASSERTION".to_string()),
+                depends: cfg.depends.clone(),
+                recommends: cfg.recommends.clone(),
+                conflicts: cfg.conflicts.clone(),
+                replaces: cfg.replaces.clone(),
+                provides: cfg.provides.clone(),
+                breaks: cfg.breaks.clone(),
+                published_at: release.published_at,
+                license: license.clone(),
             },
         )?;
     }
@@ -842,30 +850,6 @@ pub(crate) fn download(client: &GitHubClient, asset: &Asset, dest: &Path) -> Res
     Ok(())
 }
 
-fn verify_sidecar(client: &GitHubClient, asset: &Asset, path: &Path) -> Result<()> {
-    for suffix in [".sha256", ".sha256sum"] {
-        let sidecar_url = format!("{}{}", asset.browser_download_url, suffix);
-        match client.raw_get(&sidecar_url) {
-            Ok(mut resp) => {
-                let mut text = String::new();
-                resp.read_to_string(&mut text)?;
-                let map = lpt_lib::checksum::parse_checksum_file(&text)?;
-                let fname = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or_default();
-                if let Some(expected) = map.get(fname) {
-                    lpt_lib::checksum::verify_sha256(path, expected)?;
-                    println!("    ✓ checksum verified");
-                    return Ok(());
-                }
-            }
-            Err(_) => continue,
-        }
-    }
-    Err(anyhow!("no sidecar checksum found"))
-}
-
 /// How a downloaded asset's integrity was (or wasn't) established --
 /// recorded per-asset into build-summary.json's `provenance` array (see
 /// `build_one`) so a build can be audited after the fact.
@@ -893,32 +877,40 @@ impl VerifyMethod {
     }
 }
 
-/// Live sidecar checksum verification. Most real-world GitHub releases
-/// don't publish a checksum sidecar, so without `--allow-unverified` this
-/// fails the build rather than silently proceeding on an unverified
-/// download that's about to become an installable, often sudo-installed
-/// .deb -- a missing sidecar used to just print a warning and continue,
-/// which meant the *default* path for most repos had zero integrity
-/// verification with only a console line as evidence.
+/// Live sidecar checksum verification (probe-and-verify logic shared with
+/// `debs.rs` via `lpt_lib::checksum::check_sidecar`). Most real-world
+/// GitHub releases don't publish a checksum sidecar, so without
+/// `--allow-unverified` this fails the build rather than silently
+/// proceeding on an unverified download that's about to become an
+/// installable, often sudo-installed .deb -- a missing sidecar used to
+/// just print a warning and continue, which meant the *default* path for
+/// most repos had zero integrity verification with only a console line as
+/// evidence.
 fn verify_sidecar_or_require_flag(
     client: &GitHubClient,
     asset: &Asset,
     path: &Path,
     allow_unverified: bool,
 ) -> Result<VerifyMethod> {
-    match verify_sidecar(client, asset, path) {
-        Ok(()) => Ok(VerifyMethod::Sidecar),
-        Err(e) if allow_unverified => {
+    use lpt_lib::checksum::SidecarCheck;
+    match lpt_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)?
+    {
+        SidecarCheck::Verified => {
+            println!("    ✓ checksum verified");
+            Ok(VerifyMethod::Sidecar)
+        }
+        SidecarCheck::NotFound if allow_unverified => {
             eprintln!(
-                "    ⚠ (no sidecar checksum for '{}': {e}; proceeding unverified per \
-                 --allow-unverified)",
+                "    ⚠ (no sidecar checksum for '{}': no sidecar checksum found; proceeding \
+                 unverified per --allow-unverified)",
                 asset.name
             );
             Ok(VerifyMethod::UnverifiedAllowed)
         }
-        Err(e) => Err(anyhow!(
-            "no checksum verification available for '{}': {e}. Pass --allow-unverified to \
-             build anyway, or supply --pinned-metadata or a checksum sidecar.",
+        SidecarCheck::NotFound => Err(anyhow!(
+            "no checksum verification available for '{}': no sidecar checksum found. Pass \
+             --allow-unverified to build anyway, or supply --pinned-metadata or a checksum \
+             sidecar.",
             asset.name
         )),
     }
@@ -996,9 +988,7 @@ fn build_deb_native(
     } else {
         &cfg.version
     };
-    let debian_version: String = version
-        .trim_start_matches(|c: char| !c.is_ascii_digit())
-        .to_string();
+    let debian_version = lpt_lib::pkgmeta::strip_upstream_prefix(version);
     let full_version = format!(
         "{debian_version}-{}+{dist}_{arch}",
         args.build_version,
@@ -1006,7 +996,7 @@ fn build_deb_native(
         arch = job.arch
     );
     let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
-    let mtime = reproducible_epoch(job.published_at);
+    let mtime = lpt_lib::pkgmeta::reproducible_epoch(job.published_at);
 
     stage_install_tree(cfg, binary_dir, &root, mtime)?;
 
@@ -1240,45 +1230,25 @@ pub(crate) fn host_arch() -> Option<String> {
 /// one is configured, else return it unchanged. Never applied to the .deb
 /// filename itself -- Debian policy excludes epoch there since `:` isn't
 /// filename-safe -- only to the control/changelog `Version:`.
-pub(crate) fn with_epoch(epoch: &str, version: &str) -> String {
-    if epoch.trim().is_empty() {
-        version.to_string()
-    } else {
-        format!("{}:{version}", epoch.trim())
-    }
-}
-
-/// Render a `Name: value\n` control-file line for a comma-separated
-/// relation field (Depends/Recommends/Conflicts/Replaces/Provides/Breaks),
-/// or an empty string when unset.
-fn relation_field(name: &str, value: &str) -> String {
-    if value.trim().is_empty() {
-        String::new()
-    } else {
-        format!("{name}: {}\n", value.trim())
-    }
-}
-
 fn write_control(
     cfg: &PackageConfig,
     job: &ResolvedJob,
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = with_epoch(
+    let full_version = lpt_lib::pkgmeta::with_epoch(
         &cfg.epoch,
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
-    let maintainer = if cfg.maintainer.is_empty() {
-        "latest-debs maintainers <maintainers@latest-debs.org>".to_string()
-    } else {
-        cfg.maintainer.clone()
-    };
-    let desc = if cfg.description.is_empty() {
-        format!("{}, packaged from {}", cfg.package_name, cfg.github_repo)
-    } else {
-        cfg.description.clone()
-    };
+    let relations = lpt_lib::pkgmeta::Relations {
+        depends: cfg.depends.clone(),
+        recommends: cfg.recommends.clone(),
+        conflicts: cfg.conflicts.clone(),
+        replaces: cfg.replaces.clone(),
+        provides: cfg.provides.clone(),
+        breaks: cfg.breaks.clone(),
+    }
+    .render();
     // Mirror the action's templates/output/DEBIAN/control: Section, Priority,
     // Homepage, and an extended description line (a single-line Description
     // synopsis without a continuation paragraph trips lintian's
@@ -1286,20 +1256,13 @@ fn write_control(
     // Description, matching the action's Dockerfile which `>>`-appended
     // Depends to the already-rendered control file rather than templating
     // it inline; the rest follow the same convention for consistency.
-    let relations = [
-        relation_field("Depends", &cfg.depends),
-        relation_field("Recommends", &cfg.recommends),
-        relation_field("Conflicts", &cfg.conflicts),
-        relation_field("Replaces", &cfg.replaces),
-        relation_field("Provides", &cfg.provides),
-        relation_field("Breaks", &cfg.breaks),
-    ]
-    .concat();
     format!(
         "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{relations}",
         pkg = cfg.package_name,
         repo = cfg.github_repo,
         arch = job.arch,
+        maintainer = cfg.effective_maintainer(),
+        desc = cfg.effective_description(),
     )
 }
 
@@ -1309,17 +1272,17 @@ fn write_changelog(
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = with_epoch(
+    let full_version = lpt_lib::pkgmeta::with_epoch(
         &cfg.epoch,
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
-    format!(
-        "{pkg} ({full_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {maintainer}  {date}\n",
-        pkg = cfg.package_name,
-        dist = job.dist,
-        version = version,
-        maintainer = if cfg.maintainer.is_empty() { "latest-debs maintainers <maintainers@latest-debs.org>" } else { &cfg.maintainer },
-        date = changelog_date(job.published_at),
+    lpt_lib::pkgmeta::render_changelog_entry(
+        &cfg.package_name,
+        &full_version,
+        &job.dist,
+        version,
+        &cfg.effective_maintainer(),
+        job.published_at,
     )
 }
 
@@ -1336,69 +1299,18 @@ fn write_changelog_gz(doc_dir: &Path, changelog: &str, mtime: i64) -> Result<()>
     Ok(())
 }
 
-/// Timestamp source for reproducible package metadata (changelog date,
-/// copyright year): the `SOURCE_DATE_EPOCH` env var if set (the
-/// reproducible-builds.org standard, letting operators pin an exact value),
-/// else the release's own publish time, else a fixed epoch. Deliberately
-/// never wall-clock "now" -- building from build time would make the same
-/// release produce different package metadata depending on when it's
-/// built, which is exactly what reproducible builds rule out.
-fn reproducible_epoch(published_at: Option<i64>) -> i64 {
-    let env_override = std::env::var("SOURCE_DATE_EPOCH").ok();
-    parse_source_date_epoch(env_override.as_deref())
-        .or(published_at)
-        .unwrap_or(0)
-}
-
-/// Parse a `SOURCE_DATE_EPOCH` value, split out from `reproducible_epoch`
-/// so its precedence logic is testable without mutating the real process
-/// environment (a global shared with every other test in this binary,
-/// which run in parallel by default -- a prior version of this test set
-/// and unset the env var directly and intermittently leaked into unrelated
-/// tests reading `reproducible_epoch(None)` concurrently).
-fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
-    raw?.trim().parse::<i64>().ok()
-}
-
-/// RFC 2822 date (e.g. `Thu, 14 Aug 2026 09:30:00 +0000`) for the
-/// changelog trailer, derived from the release's publish time (see
-/// `reproducible_epoch`).
-fn changelog_date(published_at: Option<i64>) -> String {
-    let secs = reproducible_epoch(published_at);
-    jiff::Timestamp::from_second(secs)
-        .map(|t| t.strftime("%a, %d %b %Y %H:%M:%S %z").to_string())
-        .unwrap_or_default()
-}
-
 fn write_copyright(
     output_dir: &Path,
     cfg: &PackageConfig,
     license: Option<&lpt_lib::github::RepoLicense>,
     published_at: Option<i64>,
 ) -> Result<()> {
-    let secs = reproducible_epoch(published_at);
-    let year = jiff::Timestamp::from_second(secs)
-        .map(|t| t.strftime("%Y").to_string())
-        .unwrap_or_else(|_| "1970".to_string());
-    let spdx = license
-        .map(|l| l.spdx.as_str())
-        .filter(|s| !s.is_empty() && *s != "NOASSERTION")
-        .unwrap_or_else(|| {
-            if cfg.license_spdx.is_empty() {
-                "NOASSERTION"
-            } else {
-                &cfg.license_spdx
-            }
-        });
-    // Mirror the action's templates/output/copyright. The License body is the
-    // upstream license text (or a manual-review note when undetectable).
-    let body = license
-        .and_then(|l| l.text.clone())
-        .unwrap_or_else(|| " No machine-readable license text could be detected upstream;\n see the project's repository for licensing terms.".to_string());
-    let text = format!(
-        "Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/\nUpstream-Name: {pkg}\nUpstream-Contact: https://github.com/{repo}/issues\nSource: https://github.com/{repo}\n\nFiles: *\nCopyright: {year} {repo} contributors\nLicense: {spdx}\n\nFiles: debian/*\nCopyright: {year} latest-debs\nLicense: {spdx}\n\nLicense: {spdx}\n{body}\n",
-        pkg = cfg.package_name,
-        repo = cfg.github_repo,
+    let text = lpt_lib::pkgmeta::render_copyright(
+        &cfg.package_name,
+        &cfg.github_repo,
+        license,
+        &cfg.license_spdx,
+        published_at,
     );
     let mut f = std::fs::File::create(output_dir.join("copyright"))?;
     f.write_all(text.as_bytes())?;
@@ -1422,22 +1334,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn changelog_date_is_deterministic_from_published_at() {
-        // Same published_at must give the same changelog date no matter
-        // when the test runs -- the whole point of not using
-        // SystemTime::now(). Called twice to make that explicit.
-        let a = changelog_date(Some(1_735_689_600)); // 2025-01-01T00:00:00Z
-        let b = changelog_date(Some(1_735_689_600));
-        assert_eq!(a, b);
-        assert_eq!(a, "Wed, 01 Jan 2025 00:00:00 +0000");
-    }
-
-    #[test]
-    fn changelog_date_falls_back_to_epoch_zero_without_published_at() {
-        assert_eq!(changelog_date(None), "Thu, 01 Jan 1970 00:00:00 +0000");
-    }
-
-    #[test]
     fn verify_method_as_str_names_every_variant() {
         assert_eq!(VerifyMethod::Pinned.as_str(), "pinned");
         assert_eq!(VerifyMethod::Sidecar.as_str(), "sidecar");
@@ -1449,35 +1345,6 @@ mod tests {
             VerifyMethod::SkippedNoVerify.as_str(),
             "skipped (--no-verify)"
         );
-    }
-
-    #[test]
-    fn parse_source_date_epoch_accepts_valid_and_rejects_bad_values() {
-        assert_eq!(
-            parse_source_date_epoch(Some("1000000000")),
-            Some(1_000_000_000)
-        );
-        assert_eq!(
-            parse_source_date_epoch(Some(" 1000000000 ")),
-            Some(1_000_000_000)
-        );
-        assert_eq!(parse_source_date_epoch(Some("not-a-number")), None);
-        assert_eq!(parse_source_date_epoch(None), None);
-    }
-
-    #[test]
-    fn reproducible_epoch_precedence_is_override_then_published_at_then_zero() {
-        // `or`/`unwrap_or` glue only -- reproducible_epoch's env lookup
-        // itself is exercised through parse_source_date_epoch above so no
-        // test here touches the real process environment (a global shared
-        // with every other test in this binary, which run in parallel).
-        assert_eq!(
-            parse_source_date_epoch(None)
-                .or(Some(1_735_689_600))
-                .unwrap_or(0),
-            1_735_689_600
-        );
-        assert_eq!(parse_source_date_epoch(None).or(None).unwrap_or(0), 0);
     }
 
     #[test]

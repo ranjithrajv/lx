@@ -1,0 +1,39 @@
+# DRY/SOLID cleanup: shared package-metadata rendering and checksum verification
+
+**Date:** 2026-08-21
+**Context:** Asked for a DRY/SOLID review of the codebase (`dry-solid-analyzer` agent, report-only). Its top two findings, both verified before acting on them: (1) `src/source.rs` independently reimplemented the control/changelog/copyright rendering `src/build.rs` already had, and the reimplementation had drifted -- a hardcoded changelog date (`Mon, 01 Jan 2024`) and a hardcoded copyright year (`let year = 2026;`), instead of the reproducible-builds-aware timestamp `build.rs` computes; (2) `build.rs` and `debs.rs` had independently evolved near-identical checksum-sidecar-verification functions. Asked to fix both, which meant extracting the shared rendering into its own module (the agent's third finding, SRP on `build.rs`'s size, was really the same fix viewed from a different angle).
+
+## 1. Shared package-metadata rendering: new `lib/pkgmeta.rs`
+
+Extracted `with_epoch`, `strip_upstream_prefix` (the `v0.23.5`/`bun-v1.3.14` → digit-leading-version stripping, previously duplicated as `build.rs`'s inline `trim_start_matches` and `source.rs`'s `debian_version_of`), the `Relations` struct (the six dependency-relation fields + their rendering), `reproducible_epoch`/`changelog_date`/`copyright_year`, `render_changelog_entry`, and `render_copyright` into `lib/pkgmeta.rs`. Both `build.rs` (binary `.deb`) and `source.rs` (source package) now call the same functions instead of maintaining parallel templates.
+
+**Two real bugs closed as a direct result, not just the duplication itself:**
+
+- **Hardcoded date/year in the source package**, exactly as reported: `debian/changelog`'s trailer and `debian/copyright`'s year are now derived from `reproducible_epoch(pkg.published_at)` -- the same precedence (`SOURCE_DATE_EPOCH` env override, else the release's real publish time, else epoch 0) the binary `.deb` already used. Also fixed the *tarball* mtime: `source.rs`'s `.orig.tar.xz`/`.debian.tar.xz` build previously only ever consulted `SOURCE_DATE_EPOCH` and fell straight to epoch 0 otherwise (no `published_at` field existed on `Pkg` at all) -- now it shares the exact same `reproducible_epoch` call the changelog/copyright use, so all three actually agree with each other and with the binary package.
+- **Missing dependency-relation fields in the source package**, found while doing this (not in the original report): `source.rs`'s `debian/control` never rendered `Depends:`/`Recommends:`/etc. in its binary-package stanza at all -- a `dpkg-buildpackage` build of the generated source tree would produce a `.deb` missing every relation field the natively-built one has. `Pkg` gained the six relation fields (threaded from `cfg` at the `build.rs::run()` call site) and the control template now renders them via the same `Relations::render()` the binary control file uses.
+
+`Pkg` also gained `license: Option<lpt_lib::github::RepoLicense>` so the source package's copyright gets the actual detected upstream license (SPDX + full text) instead of `source.rs`'s previous simplified template, which only ever used the pre-resolved SPDX string and a fixed one-line notice with no `Upstream-Contact`/`Files: debian/*` section.
+
+## 2. Shared checksum-sidecar verification: `lpt_lib::checksum::check_sidecar`
+
+`build.rs`'s `verify_sidecar`/`verify_sidecar_or_require_flag` and `debs.rs`'s `verify_sidecar_or_require_flag` were independent implementations of "try `.sha256`/`.sha256sum`, verify, fail closed unless `--allow-unverified`." New `check_sidecar(client, asset_url, asset_filename, path) -> Result<SidecarCheck>` in `lib/checksum.rs` is the single shared probe-and-verify core; each caller layers its own message text and return-type wrapping (`VerifyMethod` for `build.rs`'s provenance recording, plain `Result<()>` for `debs.rs`) on top.
+
+**A real, previously-undetected security bug closed by this, found while designing the shared function's API, not by the original report:** `build.rs`'s old two-function split couldn't distinguish "no sidecar found" from "a sidecar was found but the checksum didn't match" -- both surfaced as a generic `Err` to `verify_sidecar_or_require_flag`'s `match ... Err(e) if allow_unverified` guard, so `--allow-unverified` could silently swallow an actual checksum *mismatch* (a real tamper/corruption signal), not just a genuinely absent checksum. (`debs.rs`'s single-function version didn't have this bug -- its `?` on a mismatch propagated immediately, before ever reaching the `allow_unverified` fallback -- but there was no guarantee the two wouldn't diverge further, or that a future edit wouldn't reintroduce it in either.)
+
+`SidecarCheck` makes the conflation impossible at the type level: `NotFound` is returned only when every sidecar suffix was tried and none listed the asset; a checksum mismatch always propagates as `Err` before that point is ever reached, regardless of what any caller does with `NotFound`.
+
+## Verification
+
+- New tests: `lib/pkgmeta.rs` — 10 tests covering `with_epoch`, `strip_upstream_prefix`, `Relations::render`, `changelog_date`/`copyright_year` determinism and fallback, `render_changelog_entry`, `render_copyright` (both with and without a detected license). `src/source.rs`'s `Pkg` test literals consolidated into one `test_pkg` helper now that the struct carries more fields.
+- **Live, not just unit-tested**: built `BurntSushi/ripgrep` for real with `--source`, reconstructed the source package with real `dpkg-source -x`, and diffed the binary `.deb`'s `usr/share/doc/ripgrep/copyright` against the source package's `debian/copyright` -- **byte-for-byte identical** (previously these were two different, independently-hand-written templates). Confirmed the changelog date now matches the release's real publish time (`Wed, 15 Jul 2026 16:26:10 +0000`) in both packages, and confirmed `debian/control`'s binary stanza now carries `Depends: libc6` / `Recommends: bash-completion` (previously absent entirely).
+- **The checksum-mismatch fix verified live against a real GitHub release**: downloaded ripgrep's real asset, tampered the local bytes so they no longer match the real published `.sha256`, and confirmed `check_sidecar` returns a hard `Err` containing "mismatch" -- never `Ok(SidecarCheck::NotFound)`. Kept as a permanent `#[ignore]`d regression test (`lib/checksum.rs::live_tests::real_mismatch_is_never_reported_as_not_found`), mirroring `debarchive.rs`'s existing pattern for tests needing a real external dependency.
+- Regression-checked `lpt install`'s fail-closed default and `--allow-unverified` override still behave identically post-refactor (real `latest-debs/eza-debian` release, no sidecar published).
+- Full suite: 115 default tests (59 lib + 56 bin) plus 1 `#[ignore]`d live test pass; `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and the full pre-push hook tier (coverage gate, `cargo audit`) all clean.
+
+## Not done (out of scope for this pass, deliberately)
+
+The DRY/SOLID review's remaining findings (duplicate `download()`/`human_size`/`suggest_versions`/`now_rfc3339` helpers between `build.rs` and `debs.rs`, `install.rs`/`upgrade.rs`'s shared download-verify-install-record sequence, `is_elf`'s placement in `build.rs` instead of `lib/elfdeps.rs`, flattening `InstallArgs`/`UpgradeArgs`'s shared clap flags) were flagged as lower-risk cleanup, not load-bearing bugs, and intentionally left for a separate pass rather than bundled into this one.
+
+## Review date
+
+2027-08-21 -- if `write_control`'s and `source.rs`'s control-file assembly (still two separate functions, sharing only `Relations`/`with_epoch` rather than a single template) ever need a third variant (e.g. a different package format), reconsider whether a fuller shared template is warranted at that point rather than before it's needed.

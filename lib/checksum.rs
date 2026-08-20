@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::Path;
 
+use crate::github::GitHubClient;
+
 /// Compute the SHA-256 of a file in chunks (streaming, low memory).
 pub fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)
@@ -81,6 +83,52 @@ pub fn verify_from_checksum_file(file: &Path, checksum_file: &Path) -> Result<()
     );
     let expected = map.get(fname).ok_or_else(|| anyhow!(missing))?;
     verify_sha256(file, expected)
+}
+
+/// Outcome of probing for a live sidecar checksum next to a release asset.
+#[derive(Debug)]
+pub enum SidecarCheck {
+    /// A sidecar was found, listed this asset, and its checksum matched.
+    Verified,
+    /// No sidecar covering this asset could be found at all (tried every
+    /// known suffix). Distinct from a checksum *mismatch*, which is always
+    /// a hard `Err` from `check_sidecar` and never returned as this variant
+    /// -- callers that bypass verification on `NotFound` (e.g. an
+    /// `--allow-unverified` flag) must never be able to accidentally bypass
+    /// an actual tamper/corruption signal instead.
+    NotFound,
+}
+
+/// Try every known sidecar-checksum suffix (`.sha256`, `.sha256sum`) next
+/// to `asset_url`, verifying `path` against whichever one lists
+/// `asset_filename`. Shared by `lpt build` (`src/build.rs`) and `lpt
+/// install`/`lpt upgrade` (`src/debs.rs`), which independently reimplemented
+/// this same probe-and-verify loop before with subtly different bug
+/// surfaces -- see `docs/decisions/2026-08-21-dry-solid-cleanup.md`.
+pub fn check_sidecar(
+    client: &GitHubClient,
+    asset_url: &str,
+    asset_filename: &str,
+    path: &Path,
+) -> Result<SidecarCheck> {
+    for suffix in [".sha256", ".sha256sum"] {
+        let sidecar_url = format!("{asset_url}{suffix}");
+        let mut resp = match client.raw_get(&sidecar_url) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let mut text = String::new();
+        resp.read_to_string(&mut text)?;
+        let map = parse_checksum_file(&text)?;
+        if let Some(expected) = map.get(asset_filename) {
+            // A mismatch here propagates as `Err` immediately, unconditionally
+            // -- never downgraded to `NotFound` regardless of what a caller
+            // does with that variant.
+            verify_sha256(path, expected)?;
+            return Ok(SidecarCheck::Verified);
+        }
+    }
+    Ok(SidecarCheck::NotFound)
 }
 
 /// Vet-time provenance pin (release-metadata.json), mirroring the action's
@@ -285,5 +333,61 @@ mod tests {
         .unwrap();
         let m = PinnedMetadata::load(&f).unwrap();
         assert!(m.sha256_for("v1.0.0", "tool.tar.gz").is_none());
+    }
+}
+
+/// Live, network-dependent regression tests -- `#[ignore]`d by default
+/// (run explicitly via `cargo test -- --ignored`), mirroring
+/// `debarchive.rs`'s pattern for tests that need a real external
+/// dependency (there, a real `dpkg-deb`; here, a real GitHub release).
+#[cfg(test)]
+mod live_tests {
+    use super::*;
+    use crate::github::GitHubClient;
+
+    /// A real checksum MISMATCH must never be downgraded to `NotFound`
+    /// (which callers like `--allow-unverified` treat as "nothing to
+    /// check, proceed") -- confirmed against a real GitHub release with a
+    /// real published sidecar, where the local file is deliberately
+    /// tampered after download so it no longer matches. Regression test
+    /// for a real bug found while unifying `build.rs`'s and `debs.rs`'s
+    /// independent sidecar-verification implementations: `build.rs`'s
+    /// previous split (`verify_sidecar` returning a generic `Result<()>`,
+    /// wrapped by a `match ... Err(e) if allow_unverified` in the caller)
+    /// couldn't distinguish "no sidecar found" from "sidecar found but
+    /// mismatched" -- both looked like a generic `Err` to the wrapper, so
+    /// `--allow-unverified` could silently swallow an actual tamper/
+    /// corruption signal. `check_sidecar`'s `SidecarCheck` enum makes that
+    /// conflation impossible at the type level: `NotFound` is never
+    /// returned on a mismatch, only on an actual absence.
+    #[test]
+    #[ignore]
+    fn real_mismatch_is_never_reported_as_not_found() {
+        let client = GitHubClient::new(None).unwrap();
+        let asset_url = "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz";
+        let asset_name = "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz";
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(asset_name);
+        let mut resp = client.raw_get(asset_url).unwrap();
+        let mut file = std::fs::File::create(&path).unwrap();
+        std::io::copy(&mut resp, &mut file).unwrap();
+        drop(file);
+
+        // Tamper: flip the file's content so its real SHA-256 no longer
+        // matches the real published sidecar.
+        std::fs::write(&path, b"tampered bytes, does not match the real sidecar").unwrap();
+
+        let result = check_sidecar(&client, asset_url, asset_name, &path);
+        eprintln!("result: {result:?}");
+        assert!(
+            result.is_err(),
+            "a checksum mismatch must be a hard Err, never Ok(SidecarCheck::NotFound)"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("mismatch"),
+            "expected a checksum-mismatch error, got: {msg}"
+        );
     }
 }
