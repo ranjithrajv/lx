@@ -38,6 +38,7 @@ ar = "0.9.0"
 md5 = "0.8.1"
 sha1 = "0.10.7"
 lzma-rust2 = { version = "0.19", default-features = false, features = ["encoder", "xz", "std"] }
+object = { version = "0.40.0", default-features = false, features = ["read", "elf", "std"] }
 
 [dev-dependencies]
 assert_cmd = "2.0"

@@ -5,10 +5,12 @@
 //! * [`checksum`] — SHA-256 helpers and pinned-metadata verification.
 //! * [`debarchive`] — build a `.deb` (ar + control.tar.gz + data.tar.gz)
 //!   entirely in-process, no `dpkg-deb` or Docker required.
+//! * [`elfdeps`] — read an ELF binary's `DT_NEEDED` shared-library
+//!   dependencies natively, no `ldd`/`objdump`/`readelf` required.
 //! * [`github`] — octocrab-backed GitHub Releases client with a local JSON
 //!   API cache (releases, assets, license/copyright lookups).
-//! * [`lintian`] — run `lintian` against any `.deb` inside a Debian
-//!   container and parse its output into a structured report.
+//! * [`lintian`] — run the host `lintian` binary against a `.deb` and parse
+//!   its output into a structured report.
 //! * [`optimize`] — host resource detection and parallel-build tuning.
 //! * [`progress`] — cross-process progress tracking with a TTY-friendly bar.
 //! * [`telemetry`] — best-effort metrics/stage/failure logging.
@@ -19,6 +21,7 @@
 pub mod cache;
 pub mod checksum;
 pub mod debarchive;
+pub mod elfdeps;
 pub mod github;
 pub mod lintian;
 pub mod optimize;

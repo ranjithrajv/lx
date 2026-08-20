@@ -71,6 +71,7 @@ lpt init
 | `lpt build [config]` | Build `.deb`s (and optionally source packages) from a `package.yaml`, or zero-config from a GitHub URL |
 | `lpt validate [config]` | Check a config resolves against a real release, without building |
 | `lpt discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
+| `lpt scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lpt init` | Interactively generate a `package.yaml`, with optional auto-discovery |
 | `lpt install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org |
 | `lpt update [package]` | Check installed packages against their latest release, no install |
@@ -175,7 +176,12 @@ instead of flattening loose files there.
 
 **`depends:`** — for binaries needing a runtime library a bare Debian
 install doesn't have by default (e.g. pnpm's Node single-executable binary
-needs `libatomic1`). Emits a `Depends:` control-file line.
+needs `libatomic1`). Emits a `Depends:` control-file line. Run `lpt
+scan-deps` first to see exactly which shared libraries the actual release
+binary needs (parsed natively from its ELF `DT_NEEDED` entries, no
+`ldd`/`objdump` required) rather than guessing -- it flags which ones are
+just glibc/essential and, when `dpkg` is available locally, best-effort
+resolves the rest to an owning package via `dpkg -S`.
 
 **`recommends:`/`conflicts:`/`replaces:`/`provides:`/`breaks:`** — the rest
 of Debian's dependency-relation fields, each emitted only when non-empty.

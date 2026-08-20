@@ -48,6 +48,9 @@ pub enum Commands {
     Remove(crate::remove::RemoveArgs),
     /// List packages installed by lpt
     List(crate::list::ListArgs),
+    /// Scan a release binary's ELF shared-library dependencies (helps
+    /// verify/fill in package.yaml's depends:)
+    ScanDeps(crate::scandeps::ScanDepsArgs),
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -61,5 +64,6 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Upgrade(args) => crate::upgrade::run(args, cli.token.as_deref()),
         Commands::Remove(args) => crate::remove::run(args),
         Commands::List(args) => crate::list::run(args),
+        Commands::ScanDeps(args) => crate::scandeps::run(args, cli.token.as_deref()),
     }
 }

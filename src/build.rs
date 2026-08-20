@@ -370,7 +370,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
 
 /// Print the latest few releases as suggestions when the requested version
 /// was not found (mirrors the action's version-miss hinting).
-fn suggest_versions(client: &GitHubClient, owner: &str, repo: &str, wanted: &str) {
+pub(crate) fn suggest_versions(client: &GitHubClient, owner: &str, repo: &str, wanted: &str) {
     eprintln!("Version '{wanted}' not found for {owner}/{repo}.");
     match client.releases(owner, repo, 5) {
         Ok(metas) if !metas.is_empty() => {
@@ -453,7 +453,7 @@ fn fetch_upstream_license(
 
 /// Map each requested Debian architecture to a concrete release asset using
 /// the config's pinned release_pattern.
-fn resolve_manual(
+pub(crate) fn resolve_manual(
     cfg: &PackageConfig,
     release: &lpt_lib::github::Release,
 ) -> Result<std::collections::HashMap<String, Asset>> {
@@ -491,7 +491,7 @@ fn resolve_manual(
 /// ignoring any further path (a `.git` suffix, `/releases`, a tag, etc.).
 /// Returns `None` for anything that isn't a github.com URL, so callers can
 /// fall through to treating the argument as a package.yaml path.
-fn parse_github_url(s: &str) -> Option<String> {
+pub(crate) fn parse_github_url(s: &str) -> Option<String> {
     let rest = s
         .strip_prefix("https://github.com/")
         .or_else(|| s.strip_prefix("http://github.com/"))?;
@@ -829,7 +829,7 @@ fn print_lintian_report(deb: &Path, report: &lpt_lib::lintian::LintianReport) {
     }
 }
 
-fn download(client: &GitHubClient, asset: &Asset, dest: &Path) -> Result<()> {
+pub(crate) fn download(client: &GitHubClient, asset: &Asset, dest: &Path) -> Result<()> {
     if asset.browser_download_url.is_empty() {
         bail!("asset '{}' has no download URL", asset.name);
     }
@@ -924,7 +924,7 @@ fn verify_sidecar_or_require_flag(
     }
 }
 
-fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
+pub(crate) fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
     std::fs::create_dir_all(dest)?;
     match format {
         "tar.gz" | "tgz" => {
@@ -1126,7 +1126,7 @@ fn symlink_elf_executables(src_dir: &Path, usr_bin: &Path, abs_prefix: &str) -> 
     Ok(())
 }
 
-fn is_elf(path: &Path) -> Result<bool> {
+pub(crate) fn is_elf(path: &Path) -> Result<bool> {
     let mut f = std::fs::File::open(path)?;
     let mut magic = [0u8; 4];
     if f.read_exact(&mut magic).is_err() {
@@ -1220,7 +1220,7 @@ fn apply_binary_rename(usr_bin: &Path, rename: &str) -> Result<()> {
 /// The host's Debian architecture name (`uname -m` mapped to dpkg naming),
 /// or None if it can't be determined. Used both to decide whether a target
 /// architecture needs QEMU emulation, and to resolve `--host`.
-fn host_arch() -> Option<String> {
+pub(crate) fn host_arch() -> Option<String> {
     let out = Command::new("uname").arg("-m").output().ok()?;
     let machine = String::from_utf8(out.stdout).ok()?.trim().to_string();
     Some(match machine.as_str() {

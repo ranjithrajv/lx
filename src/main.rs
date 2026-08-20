@@ -7,6 +7,7 @@ mod install;
 mod list;
 mod manifest;
 mod remove;
+mod scandeps;
 mod source;
 mod summary;
 mod update;
