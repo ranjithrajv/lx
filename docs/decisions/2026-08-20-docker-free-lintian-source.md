@@ -33,7 +33,8 @@ The prior Docker path produced `.orig.tar.xz`/`.debian.tar.xz`. Checked for a pu
 
 ## Known limitations, disclosed rather than silently accepted
 
-- **`.tar.gz` not `.tar.xz`** for source-package tarballs (see above) -- larger output, still fully valid.
+- ~~**`.tar.gz` not `.tar.xz`** for source-package tarballs (see above) -- larger output, still fully valid.~~
+  Resolved -- see the addendum below.
 - **Missing top-level directory self-entries**: `tar_gz_tree`'s walker never emits an entry for its own root (only for children found while recursing), so the orig tarball's `<pkg>-<version>/usr/` and the debian tarball's `debian/` directory itself aren't listed as their own tar members, unlike a real `dpkg-source -b`/`tar` run. Harmless for extraction (any real tar reader creates missing parent directories automatically, and `dpkg-source -x` proved this above) but a cosmetic difference from byte-identical fidelity to the old Docker path, same category as the `.deb`'s own `./`-prefix limitation noted in the prior decision doc.
 - **`--lintian` now hard-requires a host `lintian`, no fallback at all** (see 2026-08-20 addendum below) -- if it's not on `PATH`, the build fails with a clear message rather than trying anything else.
 
@@ -48,6 +49,18 @@ Two follow-on consequences, both handled rather than left as surprises:
 
 Verified without any shim this time -- this dev machine genuinely has no `lintian` installed and no Docker fallback to fall into: `lpt build ... --lintian` failed with exactly the intended message (`--lintian requires the \`lintian\` binary on PATH (e.g. \`apt-get install lintian\` on Debian/Ubuntu); not found`), not a Docker-related error.
 
+## Addendum (2026-08-20, same day): switched to real xz, MSRV bumped to 1.85
+
+Re-checked pure-Rust xz encoders (prompted directly): `lzma-rust2` had reached 0.19.0 but still declared MSRV 1.85, same floor as when gzip was chosen above; a newly-found alternative (`xz` crate's opt-in `xz-core` feature, 0.4.6-rc.0) turned out to need an even higher 1.88 and is still a release candidate. The one option actually under the old 1.75 floor, `lzma-rs`, is unmaintained since 2023 and its own docs describe the encoder as deliberately "dumb" (hardcoded constants, byte-literal-only) -- not production quality. Asked directly to bump MSRV rather than settle for one of those, since 1.85 (released within the ordinary support window) is a small ask compared to shipping either a weak encoder or continued non-standard compression.
+
+- `rust-version` in `Cargo.toml`: `1.75` → `1.85`.
+- New dependency: `lzma-rust2 = "0.19"` (`encoder`, `xz`, `std` features; `default-features = false` -- no need for its lzip/optimization/sha2 extras).
+- `lib/debarchive.rs`: `tar_gz_tree` renamed `tar_xz_tree`, its private `gzip()` helper call swapped for a new `xz()` helper (`XzOptions::with_preset(9)` + single-threaded `XzWriter`, matching `dpkg-source -b`'s own default preset). Deliberately not `XzWriterMt` -- reproducibility here depends on the encoder having no thread-scheduling-dependent block-splitting; unlike gzip, the xz container format itself has no mtime/filename field to normalize, so there's one less thing to get wrong.
+- `src/source.rs`: `orig_name`/`debian_tar_name` now end `.tar.xz`; both `tar_gz_tree` call sites became `tar_xz_tree`. No other change -- `content_version`/epoch handling, `.dsc` field order, and checksum computation are all format-agnostic and untouched.
+- `README.md`: filename references updated to match (`.orig.tar.gz` → `.orig.tar.xz`, etc.).
+
+Verification: new `tar_xz_tree_uses_the_given_prefix_not_dot_slash` test decodes with `lzma_rust2::XzReader` (replacing the old `flate2::GzDecoder`-based version) and asserts the same prefix/no-leading-`./` behavior as before. Full suite (98 tests), `cargo fmt --all -- --check`, `cargo clippy --all-targets --all-features -- -D warnings`, and the full pre-push hook tier all clean under the new MSRV.
+
 ## Review date
 
-2027-08-20 — re-run the empirical Docker-absent + real-dpkg-source-reconstruction checks if `source.rs`, `lib/debarchive.rs`'s tar/extract functions, or `lib/lintian.rs` change. Re-check `lzma-rust2`'s MSRV if this project's own `rust-version` is ever raised past 1.85 -- native XZ becomes viable again at that point.
+2027-08-20 — re-run the empirical Docker-absent + real-dpkg-source-reconstruction checks if `source.rs`, `lib/debarchive.rs`'s tar/extract functions, or `lib/lintian.rs` change.

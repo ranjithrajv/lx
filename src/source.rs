@@ -11,6 +11,9 @@ pub struct Pkg {
     pub maintainer: String,
     pub version: String,
     pub build_version: String,
+    /// Debian epoch (e.g. "1"), matching the binary package's -- see
+    /// `build.rs::with_epoch`. Empty means none.
+    pub epoch: String,
     pub license_spdx: String,
 }
 
@@ -126,7 +129,7 @@ impl DscFile {
 }
 
 /// Build one source package for a single distribution. Returns Ok(true)
-/// when this call created the shared `.orig.tar.gz`.
+/// when this call created the shared `.orig.tar.xz`.
 fn build_source_package(
     out_dir: &Path,
     workdir: &Path,
@@ -136,10 +139,15 @@ fn build_source_package(
     orig_done: bool,
 ) -> Result<bool> {
     let src_version = format!("{}-{}+{dist}", debian_version, pkg.build_version);
+    // Epoch appears in Version: fields (changelog, .dsc) but never in
+    // filenames -- Debian policy excludes it there since `:` isn't
+    // filename-safe. `src_version` above stays epoch-free for filenames;
+    // this is the one used for file *content*.
+    let content_version = crate::build::with_epoch(&pkg.epoch, &src_version);
     let tree = format!("{}-{src_version}", pkg.name);
     let tree_dir = workdir.join(&tree);
-    let orig_name = format!("{}_{debian_version}.orig.tar.gz", pkg.name);
-    let debian_tar_name = format!("{}_{src_version}.debian.tar.gz", pkg.name);
+    let orig_name = format!("{}_{debian_version}.orig.tar.xz", pkg.name);
+    let debian_tar_name = format!("{}_{src_version}.debian.tar.xz", pkg.name);
     let dsc_name = format!("{}_{src_version}.dsc", pkg.name);
 
     // Reference .deb: prefer amd64 for this dist, else the first match.
@@ -183,7 +191,7 @@ fn build_source_package(
 
     // debian/changelog (mirrors templates/source/changelog).
     let changelog = format!(
-        "{name} ({src_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {m}  Mon, 01 Jan 2024 00:00:00 +0000\n",
+        "{name} ({content_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {m}  Mon, 01 Jan 2024 00:00:00 +0000\n",
         name = pkg.name,
         version = debian_version,
         m = pkg.maintainer,
@@ -207,10 +215,12 @@ fn build_source_package(
     // must contain a top-level <pkg>-<debian_version>/ directory (standard
     // upstream layout).
     //
-    // Reproducible-builds hygiene: `lpt_lib::debarchive::tar_gz_tree` walks
-    // in sorted order and normalizes mtime/owner/group -- see its own doc
+    // Reproducible-builds hygiene: `lpt_lib::debarchive::tar_xz_tree` walks
+    // in sorted order and normalizes owner/group -- see its own doc
     // comment. `mtime` respects SOURCE_DATE_EPOCH (the reproducible-builds
-    // .org standard) when set, else a fixed epoch.
+    // .org standard) when set, else a fixed epoch. (xz itself has no
+    // mtime field to normalize, unlike gzip -- only the tar entries carry
+    // one.)
     let source_date_epoch: i64 = std::env::var("SOURCE_DATE_EPOCH")
         .ok()
         .and_then(|v| v.trim().parse().ok())
@@ -218,7 +228,7 @@ fn build_source_package(
     let orig_path = workdir.join(&orig_name);
     let created_orig = if !orig_done {
         let upstream_dir = format!("{}-{debian_version}", pkg.name);
-        let orig_bytes = lpt_lib::debarchive::tar_gz_tree(
+        let orig_bytes = lpt_lib::debarchive::tar_xz_tree(
             &tree_dir.join("usr"),
             &format!("{upstream_dir}/usr/"),
             source_date_epoch,
@@ -232,16 +242,16 @@ fn build_source_package(
     let orig_bytes = std::fs::read(&orig_path)
         .with_context(|| format!("failed to read '{}'", orig_path.display()))?;
 
-    // debian.tar.gz: just the debian/ metadata directory -- lpt never
+    // debian.tar.xz: just the debian/ metadata directory -- lpt never
     // produces quilt patches, so there's no .pc/ or patches/ to include.
     let debian_bytes =
-        lpt_lib::debarchive::tar_gz_tree(&tree_dir.join("debian"), "debian/", source_date_epoch)
-            .context("failed to build debian.tar.gz")?;
+        lpt_lib::debarchive::tar_xz_tree(&tree_dir.join("debian"), "debian/", source_date_epoch)
+            .context("failed to build debian.tar.xz")?;
     std::fs::write(workdir.join(&debian_tar_name), &debian_bytes)?;
 
     let orig_file = DscFile::from_bytes(orig_name.clone(), &orig_bytes);
     let debian_file = DscFile::from_bytes(debian_tar_name.clone(), &debian_bytes);
-    let dsc = render_dsc(pkg, &src_version, &orig_file, &debian_file);
+    let dsc = render_dsc(pkg, &content_version, &orig_file, &debian_file);
     std::fs::write(workdir.join(&dsc_name), &dsc)?;
 
     std::fs::copy(workdir.join(&dsc_name), out_dir.join(&dsc_name))?;
@@ -261,13 +271,13 @@ fn build_source_package(
 /// (see `docs/decisions/2026-08-20-docker-free-lintian-source.md`).
 /// Unsigned, matching the previous Docker-based behavior (which never
 /// signed either).
-fn render_dsc(pkg: &Pkg, src_version: &str, orig: &DscFile, debian: &DscFile) -> String {
+fn render_dsc(pkg: &Pkg, content_version: &str, orig: &DscFile, debian: &DscFile) -> String {
     format!(
         "Format: 3.0 (quilt)\n\
          Source: {name}\n\
          Binary: {name}\n\
          Architecture: any\n\
-         Version: {src_version}\n\
+         Version: {content_version}\n\
          Maintainer: {maintainer}\n\
          Homepage: https://github.com/{repo}\n\
          Standards-Version: 4.6.2\n\
@@ -341,11 +351,12 @@ mod tests {
             maintainer: "latest-debs maintainers <maintainers@latest-debs.org>".into(),
             version: "0.23.5".into(),
             build_version: "1".into(),
+            epoch: "".into(),
             license_spdx: "MIT".into(),
         };
-        let orig = DscFile::from_bytes("eza_0.23.5.orig.tar.gz".into(), b"orig-bytes");
+        let orig = DscFile::from_bytes("eza_0.23.5.orig.tar.xz".into(), b"orig-bytes");
         let debian = DscFile::from_bytes(
-            "eza_0.23.5-1+bookworm.debian.tar.gz".into(),
+            "eza_0.23.5-1+bookworm.debian.tar.xz".into(),
             b"debian-bytes",
         );
         let dsc = render_dsc(&pkg, "0.23.5-1+bookworm", &orig, &debian);
@@ -359,8 +370,42 @@ mod tests {
         assert!(dsc.contains("Package-List:\n eza deb utils optional arch=any\n"));
 
         let checksums_idx = dsc.find("Checksums-Sha1:").unwrap();
-        let orig_idx = dsc[checksums_idx..].find("orig.tar.gz").unwrap();
-        let debian_idx = dsc[checksums_idx..].find("debian.tar.gz").unwrap();
+        let orig_idx = dsc[checksums_idx..].find("orig.tar.xz").unwrap();
+        let debian_idx = dsc[checksums_idx..].find("debian.tar.xz").unwrap();
         assert!(orig_idx < debian_idx, "orig must be listed before debian");
+    }
+
+    #[test]
+    fn content_version_gets_epoch_but_filenames_dont() {
+        // content_version (fed to the changelog and .dsc Version: field) is
+        // computed from with_epoch(); src_version (fed to every filename)
+        // never is -- Debian policy excludes epoch from filenames since
+        // `:` isn't filename-safe. Exercise the exact computation
+        // build_source_package uses.
+        let pkg = Pkg {
+            name: "eza".into(),
+            github_repo: "eza-community/eza".into(),
+            description: "eza, packaged from eza-community/eza".into(),
+            maintainer: "latest-debs maintainers <maintainers@latest-debs.org>".into(),
+            version: "0.23.5".into(),
+            build_version: "1".into(),
+            epoch: "1".into(),
+            license_spdx: "MIT".into(),
+        };
+        let src_version = "0.23.5-1+bookworm";
+        let content_version = crate::build::with_epoch(&pkg.epoch, src_version);
+        assert_eq!(content_version, "1:0.23.5-1+bookworm");
+
+        let dsc_name = format!("{}_{src_version}.dsc", pkg.name);
+        assert_eq!(dsc_name, "eza_0.23.5-1+bookworm.dsc");
+        assert!(!dsc_name.contains(':'));
+
+        let dsc = render_dsc(
+            &pkg,
+            &content_version,
+            &DscFile::from_bytes("o".into(), b"x"),
+            &DscFile::from_bytes("d".into(), b"y"),
+        );
+        assert!(dsc.contains("Version: 1:0.23.5-1+bookworm\n"));
     }
 }

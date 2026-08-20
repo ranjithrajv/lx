@@ -8,6 +8,14 @@ It's a Rust rewrite of the
 GitHub Action, usable both as a local CLI and as a GitHub Action
 (`action.yml`, see below).
 
+Every package it produces is a real Debian package, not a thin ZIP-in-an-ar
+wrapper: full dependency relations (`Depends`/`Recommends`/`Conflicts`/
+`Replaces`/`Provides`/`Breaks`), epoch-aware versioning, man pages and
+license files placed at their conventional FHS paths, and genuine `xz`
+source-package compression — all output that real `dpkg-deb`/`dpkg-source`/
+`lintian` accept without complaint, built entirely without Docker or a
+Debian host.
+
 ## Requirements
 
 - Rust (to build `lpt` itself; see [Development](#development)). That's
@@ -16,8 +24,8 @@ GitHub Action, usable both as a local CLI and as a GitHub Action
     `dpkg-deb`, no Debian toolchain, and cross-architecture builds never
     need QEMU (packaging only copies/`chmod`s the target binary, it's
     never executed).
-  - `--source` builds source packages (`.dsc`/`.orig.tar.gz`/
-    `.debian.tar.gz`) natively too — no `dpkg-source`.
+  - `--source` builds source packages (`.dsc`/`.orig.tar.xz`/
+    `.debian.tar.xz`) natively too — no `dpkg-source`.
   - `--lintian` requires a `lintian` binary on your `PATH` (e.g.
     `apt-get install lintian` on Debian/Ubuntu). lintian itself has no
     Rust equivalent to reach for, so this one flag needs it installed —
@@ -77,7 +85,7 @@ out:
   `release-metadata.json` provenance pin captured at vet time, instead of
   (or in addition to) the release's own live checksum sidecar.
 - **`--source`** (`build`): also generate a Debian source package (`.dsc` +
-  `.debian.tar.gz` + a shared `.orig.tar.gz`) per distribution.
+  `.debian.tar.xz` + a shared `.orig.tar.xz`) per distribution.
 - Version/architecture/distribution resolution, checksum verification, and
   reproducible-build hygiene (below) are all shared machinery — see
   `--dry-run` to preview a build matrix without downloading or building
@@ -104,10 +112,17 @@ debian_distributions: [bookworm, trixie, forky, sid]   # default: all four
 binary_path: ""              # path to the binary within the extracted archive
 binary_rename: ""            # rename the single installed binary to this name
 bundle: false                 # see below
+
 depends: ""                   # e.g. "libatomic1, libgtk-3-0"
+recommends: ""                 # e.g. "bash-completion"
+conflicts: ""                  # e.g. "eza-legacy"
+replaces: ""                   # e.g. "eza-legacy"
+provides: ""                   # e.g. "eza-cli"
+breaks: ""                     # e.g. "eza-legacy (<< 2.0)"
 
 version: ""                   # pin a specific upstream version (else: latest)
 build_version: "1"            # Debian revision
+epoch: ""                     # e.g. "1" -- for upstream version-numbering resets
 ```
 
 **`architectures:`** — omit entirely for full auto-discovery across every
@@ -135,6 +150,24 @@ instead of flattening loose files there.
 **`depends:`** — for binaries needing a runtime library a bare Debian
 install doesn't have by default (e.g. pnpm's Node single-executable binary
 needs `libatomic1`). Emits a `Depends:` control-file line.
+
+**`recommends:`/`conflicts:`/`replaces:`/`provides:`/`breaks:`** — the rest
+of Debian's dependency-relation fields, each emitted only when non-empty.
+Useful for packages superseding an older name, providing a virtual package,
+or needing a version-gated incompatibility declared up front rather than
+discovered at install time.
+
+**`epoch:`** — set when an upstream project resets or renumbers its own
+versioning (e.g. `1.0.0` after a `2024.03` calendar-versioned run) such
+that plain string comparison would otherwise sort the new release as
+*older*. Appears in the `Version:` field (`<epoch>:<version>`) but never in
+filenames, per Debian policy.
+
+Man pages (`*.1`–`*.9`, gzipped) and license files (`LICENSE`/`COPYING`/
+`NOTICE`, any casing) sitting alongside the binary in a flat-mode release
+are auto-installed to `/usr/share/man/man<N>/` and `/usr/share/doc/<pkg>/`
+— no config needed. (Bundle-mode installs already preserve everything in
+the upstream tree.)
 
 ## GitHub Action
 
@@ -171,7 +204,7 @@ verified empirically (see
 for the investigation). Package
 metadata timestamps (changelog date, copyright year) come from the GitHub
 release's own publish time rather than build time, and the source-package
-`.orig.tar.gz`/`.debian.tar.gz` members are built (`lib/debarchive.rs`)
+`.orig.tar.xz`/`.debian.tar.xz` members are built (`lib/debarchive.rs`)
 walking their contents in sorted order with normalized mtime/owner/group.
 Both respect the standard `SOURCE_DATE_EPOCH` environment variable if you
 want to pin an exact value.

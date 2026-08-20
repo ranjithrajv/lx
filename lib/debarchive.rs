@@ -44,21 +44,22 @@ fn build_data_tar_gz(root: &Path, mtime: i64, md5sums: &mut String) -> Result<Ve
     gzip(&tar_bytes, mtime)
 }
 
-/// Tar+gzip `fs_root`'s entire subtree (sorted, normalized ownership and
+/// Tar+xz `fs_root`'s entire subtree (sorted, normalized ownership and
 /// mtime), with every entry's archive path prefixed by `archive_prefix`
 /// (e.g. `"eza-0.23.5/usr/"` so `fs_root/bin/eza` becomes
 /// `"eza-0.23.5/usr/bin/eza"` in the archive -- the upstream/Debian source
 /// tarball convention, not `data.tar`'s `"./"`-relative one). Used by
-/// `source.rs` for a generated source package's `.orig.tar.gz` and
-/// `.debian.tar.gz` members.
-pub fn tar_gz_tree(fs_root: &Path, archive_prefix: &str, mtime: i64) -> Result<Vec<u8>> {
+/// `source.rs` for a generated source package's `.orig.tar.xz` and
+/// `.debian.tar.xz` members, matching real `dpkg-source -b` output (see
+/// `docs/decisions/2026-08-20-docker-free-lintian-source.md`'s xz addendum).
+pub fn tar_xz_tree(fs_root: &Path, archive_prefix: &str, mtime: i64) -> Result<Vec<u8>> {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_dir_sorted(&mut builder, fs_root, archive_prefix, fs_root, mtime, None)?;
         builder.finish()?;
     }
-    gzip(&tar_bytes, mtime)
+    xz(&tar_bytes)
 }
 
 /// Extract a `.deb`'s `data.tar(.gz)` payload into `dest` (the inverse of
@@ -213,6 +214,17 @@ fn gzip(data: &[u8], mtime: i64) -> Result<Vec<u8>> {
     Ok(encoder.finish()?)
 }
 
+/// Deterministic xz (single-threaded, preset 9 -- `dpkg-source -b`'s own
+/// default): the xz container has no mtime/filename field to normalize
+/// (unlike gzip), so determinism just requires avoiding the multi-threaded
+/// encoder, whose block-splitting could vary with thread scheduling.
+fn xz(data: &[u8]) -> Result<Vec<u8>> {
+    let options = lzma_rust2::XzOptions::with_preset(9);
+    let mut writer = lzma_rust2::XzWriter::new(Vec::new(), options)?;
+    writer.write_all(data)?;
+    Ok(writer.finish()?)
+}
+
 /// Write the outer `ar` container: `debian-binary`, `control.tar.gz`,
 /// `data.tar.gz`, in that order (dpkg requires this exact order and reads
 /// only as much of the archive as it needs, so anything after `data.tar.*`
@@ -286,13 +298,13 @@ mod tests {
     }
 
     #[test]
-    fn tar_gz_tree_uses_the_given_prefix_not_dot_slash() {
+    fn tar_xz_tree_uses_the_given_prefix_not_dot_slash() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("bin")).unwrap();
         std::fs::write(root.path().join("bin/eza"), b"elf").unwrap();
 
-        let bytes = tar_gz_tree(root.path(), "eza-0.23.5/usr/", 0).unwrap();
-        let decoder = flate2::read::GzDecoder::new(bytes.as_slice());
+        let bytes = tar_xz_tree(root.path(), "eza-0.23.5/usr/", 0).unwrap();
+        let decoder = lzma_rust2::XzReader::new(bytes.as_slice(), true);
         let mut archive = tar::Archive::new(decoder);
         let names: Vec<String> = archive
             .entries()

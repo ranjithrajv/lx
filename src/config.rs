@@ -42,6 +42,26 @@ pub struct PackageConfig {
     /// library not present on a bare Debian install (e.g. "libatomic1").
     #[serde(default)]
     pub depends: String,
+    /// Comma-separated `Recommends:` line (strongly-associated but
+    /// non-essential packages apt installs by default alongside this one).
+    #[serde(default)]
+    pub recommends: String,
+    /// Comma-separated `Conflicts:` line (packages that cannot be
+    /// installed at the same time as this one).
+    #[serde(default)]
+    pub conflicts: String,
+    /// Comma-separated `Replaces:` line (packages/files this package
+    /// takes over from, e.g. a distro's own older build of the same tool).
+    #[serde(default)]
+    pub replaces: String,
+    /// Comma-separated `Provides:` line (virtual packages this package
+    /// satisfies).
+    #[serde(default)]
+    pub provides: String,
+    /// Comma-separated `Breaks:` line (packages this version is known to
+    /// break, without literally conflicting with them).
+    #[serde(default)]
+    pub breaks: String,
     /// SPDX license identifier.
     #[serde(default)]
     pub license_spdx: String,
@@ -54,6 +74,12 @@ pub struct PackageConfig {
     /// Debian build version number (revision).
     #[serde(default)]
     pub build_version: String,
+    /// Debian epoch (e.g. "1"), for the rare case upstream renumbers
+    /// versions downward. Prefixed onto the control file's Version field
+    /// as `<epoch>:<version>`; never part of the .deb filename itself
+    /// (Debian policy excludes it there since `:` isn't filename-safe).
+    #[serde(default)]
+    pub epoch: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -332,6 +358,27 @@ depends: "libatomic1, libgtk-3-0"
         let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(cfg.bundle);
         assert_eq!(cfg.depends, "libatomic1, libgtk-3-0");
+    }
+
+    #[test]
+    fn parses_dependency_relations_and_epoch() {
+        let yaml = r#"
+package_name: foo
+github_repo: owner/foo
+recommends: "bash-completion"
+conflicts: "foo-legacy"
+replaces: "foo-legacy"
+provides: "foo-cli"
+breaks: "foo-legacy (<< 2.0)"
+epoch: "1"
+"#;
+        let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.recommends, "bash-completion");
+        assert_eq!(cfg.conflicts, "foo-legacy");
+        assert_eq!(cfg.replaces, "foo-legacy");
+        assert_eq!(cfg.provides, "foo-cli");
+        assert_eq!(cfg.breaks, "foo-legacy (<< 2.0)");
+        assert_eq!(cfg.epoch, "1");
     }
 
     #[test]

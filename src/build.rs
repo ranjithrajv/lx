@@ -91,8 +91,8 @@ pub struct BuildArgs {
 
     /// Also generate Debian source packages (3.0 quilt: .dsc +
     /// .debian.tar.xz + .orig.tar.xz) for each distribution built,
-    /// mirroring the action's build_source_packages. Runs dpkg-source in a
-    /// Debian container (the host may be non-Debian).
+    /// mirroring the action's build_source_packages. Built natively
+    /// in-process -- no Docker, no dpkg-source subprocess.
     #[arg(long)]
     pub source: bool,
 
@@ -347,6 +347,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 maintainer: cfg.effective_maintainer(),
                 version: release.tag_name.clone(),
                 build_version: args.build_version.clone(),
+                epoch: cfg.epoch.clone(),
                 license_spdx: license
                     .as_ref()
                     .map(|l| l.spdx.clone())
@@ -901,12 +902,12 @@ fn build_deb_native(
         arch = job.arch
     );
     let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
+    let mtime = reproducible_epoch(job.published_at);
 
-    stage_install_tree(cfg, binary_dir, &root)?;
+    stage_install_tree(cfg, binary_dir, &root, mtime)?;
 
     let control = write_control(cfg, job, &debian_version, &args.build_version);
     let changelog = write_changelog(cfg, job, &debian_version, &args.build_version);
-    let mtime = reproducible_epoch(job.published_at);
     write_changelog_gz(&doc_dir, &changelog, mtime)?;
     write_copyright(&doc_dir, cfg, license, job.published_at)?;
 
@@ -924,7 +925,12 @@ fn build_deb_native(
 /// binaries into place per `bundle`, apply `binary_rename`, and fail
 /// loudly if nothing executable landed in `/usr/bin` -- the same checks
 /// the old Dockerfile-based build ran in shell, just done natively.
-fn stage_install_tree(cfg: &PackageConfig, binary_dir: &Path, root: &Path) -> Result<()> {
+fn stage_install_tree(
+    cfg: &PackageConfig,
+    binary_dir: &Path,
+    root: &Path,
+    mtime: i64,
+) -> Result<()> {
     let usr_bin = root.join("usr").join("bin");
     std::fs::create_dir_all(&usr_bin)?;
 
@@ -936,6 +942,10 @@ fn stage_install_tree(cfg: &PackageConfig, binary_dir: &Path, root: &Path) -> Re
         // (pnpm's Node single-executable-application binary needs its own
         // dist/ alongside it, with no bin/lib/libexec structure at all) --
         // so both are checked rather than requiring one specific shape.
+        // The whole tree (including any man pages/licenses) is preserved
+        // as-is under /usr/lib/<pkg>/ regardless, so there's no equivalent
+        // ancillary-file loss to worry about here -- only flat mode drops
+        // non-ELF files.
         let lib_dir = root.join("usr").join("lib").join(&cfg.package_name);
         copy_dir_recursive(binary_dir, &lib_dir)?;
 
@@ -956,10 +966,22 @@ fn stage_install_tree(cfg: &PackageConfig, binary_dir: &Path, root: &Path) -> Re
         for entry in std::fs::read_dir(binary_dir)? {
             let entry = entry?;
             let path = entry.path();
-            if entry.file_type()?.is_file() && is_elf(&path)? {
+            if !entry.file_type()?.is_file() {
+                continue;
+            }
+            if is_elf(&path)? {
                 let dest = usr_bin.join(entry.file_name());
                 std::fs::copy(&path, &dest)?;
                 make_executable(&dest)?;
+            } else {
+                // Man pages and license files are common at the top level
+                // of a release tarball alongside the binary; recognize and
+                // install them to their conventional FHS locations rather
+                // than silently dropping them (the prior behavior: flat
+                // mode kept only ELF files). Shell completions are
+                // deliberately not attempted -- upstream layouts vary too
+                // much to guess reliably without risking false positives.
+                stage_ancillary_file(&path, root, &cfg.package_name, mtime)?;
             }
         }
     }
@@ -1016,6 +1038,65 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Install a recognized non-ELF top-level file (man page or license) to
+/// its conventional FHS location under `root`. Anything not recognized is
+/// left alone (not an error -- a release tarball's top level commonly has
+/// files this tool has no opinion about, e.g. a checksum sidecar or a
+/// README already covered by generated docs).
+fn stage_ancillary_file(path: &Path, root: &Path, pkg_name: &str, mtime: i64) -> Result<()> {
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n,
+        None => return Ok(()),
+    };
+    if let Some(section) = man_section(name) {
+        let man_dir = root.join("usr/share/man").join(format!("man{section}"));
+        std::fs::create_dir_all(&man_dir)?;
+        if name.ends_with(".gz") {
+            std::fs::copy(path, man_dir.join(name))?;
+        } else {
+            gzip_file_to(path, &man_dir.join(format!("{name}.gz")), mtime)?;
+        }
+    } else if is_license_like(name) {
+        let doc_dir = root.join("usr/share/doc").join(pkg_name);
+        std::fs::create_dir_all(&doc_dir)?;
+        std::fs::copy(path, doc_dir.join(name))?;
+    }
+    Ok(())
+}
+
+/// `foo.1` / `foo.1.gz` -> `Some(1)`; anything else -> `None`. Only the
+/// common single-digit man sections (1-9); doesn't attempt suffixed
+/// sections like `.3pm`.
+fn man_section(name: &str) -> Option<u8> {
+    let stem = name.strip_suffix(".gz").unwrap_or(name);
+    let ext = Path::new(stem).extension()?.to_str()?;
+    if ext.len() == 1 {
+        let c = ext.as_bytes()[0];
+        if c.is_ascii_digit() && c != b'0' {
+            return Some(c - b'0');
+        }
+    }
+    None
+}
+
+fn is_license_like(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
+    upper.starts_with("LICENSE") || upper.starts_with("COPYING") || upper.starts_with("NOTICE")
+}
+
+/// Gzip-compress `src` into `dest`, deterministically -- same fixed-mtime
+/// treatment as `write_changelog_gz`/`lpt_lib::debarchive`'s gzip calls.
+fn gzip_file_to(src: &Path, dest: &Path, mtime: i64) -> Result<()> {
+    let data = std::fs::read(src)?;
+    let out = std::fs::File::create(dest)?;
+    let mut encoder = flate2::GzBuilder::new()
+        .mtime(mtime.max(0) as u32)
+        .write(out, flate2::Compression::best());
+    encoder.write_all(&data)?;
+    encoder.finish()?;
+    Ok(())
+}
+
 /// Rename the single executable in `/usr/bin` to `rename`, matching the
 /// old Dockerfile's `find -maxdepth 1 -type f` behavior exactly: `-type f`
 /// does not follow symlinks, so in bundle mode (where `/usr/bin` only ever
@@ -1051,13 +1132,39 @@ fn host_arch() -> Option<String> {
     })
 }
 
+/// Prefix a Debian epoch onto a version string (`<epoch>:<version>`) when
+/// one is configured, else return it unchanged. Never applied to the .deb
+/// filename itself -- Debian policy excludes epoch there since `:` isn't
+/// filename-safe -- only to the control/changelog `Version:`.
+pub(crate) fn with_epoch(epoch: &str, version: &str) -> String {
+    if epoch.trim().is_empty() {
+        version.to_string()
+    } else {
+        format!("{}:{version}", epoch.trim())
+    }
+}
+
+/// Render a `Name: value\n` control-file line for a comma-separated
+/// relation field (Depends/Recommends/Conflicts/Replaces/Provides/Breaks),
+/// or an empty string when unset.
+fn relation_field(name: &str, value: &str) -> String {
+    if value.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{name}: {}\n", value.trim())
+    }
+}
+
 fn write_control(
     cfg: &PackageConfig,
     job: &ResolvedJob,
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = format!("{version}-{build_version}+{dist}", dist = job.dist);
+    let full_version = with_epoch(
+        &cfg.epoch,
+        &format!("{version}-{build_version}+{dist}", dist = job.dist),
+    );
     let maintainer = if cfg.maintainer.is_empty() {
         "latest-debs maintainers <maintainers@latest-debs.org>".to_string()
     } else {
@@ -1071,16 +1178,21 @@ fn write_control(
     // Mirror the action's templates/output/DEBIAN/control: Section, Priority,
     // Homepage, and an extended description line (a single-line Description
     // synopsis without a continuation paragraph trips lintian's
-    // extended-description-is-empty). Depends: is appended after
-    // Description, matching the action's Dockerfile which `>>`-appended it
-    // to the already-rendered control file rather than templating it inline.
-    let depends = if cfg.depends.trim().is_empty() {
-        String::new()
-    } else {
-        format!("Depends: {}\n", cfg.depends.trim())
-    };
+    // extended-description-is-empty). Relation fields are appended after
+    // Description, matching the action's Dockerfile which `>>`-appended
+    // Depends to the already-rendered control file rather than templating
+    // it inline; the rest follow the same convention for consistency.
+    let relations = [
+        relation_field("Depends", &cfg.depends),
+        relation_field("Recommends", &cfg.recommends),
+        relation_field("Conflicts", &cfg.conflicts),
+        relation_field("Replaces", &cfg.replaces),
+        relation_field("Provides", &cfg.provides),
+        relation_field("Breaks", &cfg.breaks),
+    ]
+    .concat();
     format!(
-        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{depends}",
+        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{relations}",
         pkg = cfg.package_name,
         repo = cfg.github_repo,
         arch = job.arch,
@@ -1093,7 +1205,10 @@ fn write_changelog(
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = format!("{version}-{build_version}+{dist}", dist = job.dist);
+    let full_version = with_epoch(
+        &cfg.epoch,
+        &format!("{version}-{build_version}+{dist}", dist = job.dist),
+    );
     format!(
         "{pkg} ({full_version}) {dist}; urgency=medium\n\n  * New upstream release {version}\n\n -- {maintainer}  {date}\n",
         pkg = cfg.package_name,
@@ -1334,7 +1449,7 @@ mod tests {
             ..PackageConfig::default()
         };
 
-        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+        stage_install_tree(&cfg, binary_dir.path(), root.path(), 0).unwrap();
 
         assert!(root.path().join("usr/bin/eza").is_file());
         assert!(!root.path().join("usr/bin/README.md").exists());
@@ -1344,6 +1459,65 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o111, 0o111, "not executable: {mode:o}");
+    }
+
+    #[test]
+    fn stage_install_tree_flat_mode_installs_man_pages_and_license() {
+        let binary_dir = tempfile::tempdir().unwrap();
+        std::fs::write(binary_dir.path().join("eza"), FAKE_ELF).unwrap();
+        std::fs::write(binary_dir.path().join("eza.1"), b"man page text").unwrap();
+        std::fs::write(binary_dir.path().join("LICENSE"), b"MIT license text").unwrap();
+        std::fs::write(binary_dir.path().join("checksums.txt"), b"unrecognized").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let cfg = PackageConfig {
+            package_name: "eza".into(),
+            ..PackageConfig::default()
+        };
+
+        stage_install_tree(&cfg, binary_dir.path(), root.path(), 1_735_689_600).unwrap();
+
+        // Man page: installed gzip-compressed under the right section dir.
+        let man_gz = root.path().join("usr/share/man/man1/eza.1.gz");
+        assert!(man_gz.is_file());
+        let decompressed = {
+            let f = std::fs::File::open(&man_gz).unwrap();
+            let mut gz = flate2::read::GzDecoder::new(f);
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut gz, &mut s).unwrap();
+            s
+        };
+        assert_eq!(decompressed, "man page text");
+
+        // License: copied as-is into usr/share/doc/<pkg>/.
+        assert_eq!(
+            std::fs::read_to_string(root.path().join("usr/share/doc/eza/LICENSE")).unwrap(),
+            "MIT license text"
+        );
+
+        // Unrecognized top-level file: left alone, not an error.
+        assert!(!root.path().join("usr/share/doc/eza/checksums.txt").exists());
+        assert!(!root.path().join("usr/bin/checksums.txt").exists());
+    }
+
+    #[test]
+    fn man_section_recognizes_plain_and_gzipped_pages() {
+        assert_eq!(man_section("eza.1"), Some(1));
+        assert_eq!(man_section("eza.1.gz"), Some(1));
+        assert_eq!(man_section("eza.9"), Some(9));
+        assert_eq!(man_section("eza.0"), None); // no man section 0
+        assert_eq!(man_section("eza.tar.gz"), None);
+        assert_eq!(man_section("README.md"), None);
+    }
+
+    #[test]
+    fn is_license_like_matches_common_names_case_insensitively() {
+        assert!(is_license_like("LICENSE"));
+        assert!(is_license_like("LICENSE.md"));
+        assert!(is_license_like("license.txt"));
+        assert!(is_license_like("COPYING"));
+        assert!(is_license_like("NOTICE"));
+        assert!(!is_license_like("README.md"));
+        assert!(!is_license_like("eza"));
     }
 
     #[test]
@@ -1360,7 +1534,7 @@ mod tests {
             ..PackageConfig::default()
         };
 
-        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+        stage_install_tree(&cfg, binary_dir.path(), root.path(), 0).unwrap();
 
         assert!(root.path().join("usr/lib/zed/bin/zed").is_file());
         assert!(root.path().join("usr/lib/zed/lib/libfoo.so").is_file());
@@ -1386,7 +1560,7 @@ mod tests {
             ..PackageConfig::default()
         };
 
-        stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap();
+        stage_install_tree(&cfg, binary_dir.path(), root.path(), 0).unwrap();
 
         let link = root.path().join("usr/bin/pnpm");
         assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
@@ -1407,7 +1581,7 @@ mod tests {
                 bundle,
                 ..PackageConfig::default()
             };
-            let err = stage_install_tree(&cfg, binary_dir.path(), root.path()).unwrap_err();
+            let err = stage_install_tree(&cfg, binary_dir.path(), root.path(), 0).unwrap_err();
             assert!(
                 err.to_string()
                     .contains("no executables landed in /usr/bin"),
@@ -1440,6 +1614,65 @@ mod tests {
         };
         let text = write_control(&cfg, &job(), "1.0.0", "1");
         assert!(!text.contains("Depends:"));
+    }
+
+    #[test]
+    fn write_control_includes_all_relation_fields_when_set() {
+        let cfg = PackageConfig {
+            package_name: "foo".into(),
+            github_repo: "owner/foo".into(),
+            depends: "libatomic1".into(),
+            recommends: "bash-completion".into(),
+            conflicts: "foo-legacy".into(),
+            replaces: "foo-legacy".into(),
+            provides: "foo-cli".into(),
+            breaks: "foo-legacy (<< 2.0)".into(),
+            ..PackageConfig::default()
+        };
+        let text = write_control(&cfg, &job(), "1.0.0", "1");
+        assert!(text.contains("Depends: libatomic1\n"));
+        assert!(text.contains("Recommends: bash-completion\n"));
+        assert!(text.contains("Conflicts: foo-legacy\n"));
+        assert!(text.contains("Replaces: foo-legacy\n"));
+        assert!(text.contains("Provides: foo-cli\n"));
+        assert!(text.contains("Breaks: foo-legacy (<< 2.0)\n"));
+    }
+
+    #[test]
+    fn write_control_prefixes_version_with_epoch_but_not_filename() {
+        let cfg = PackageConfig {
+            package_name: "foo".into(),
+            github_repo: "owner/foo".into(),
+            epoch: "1".into(),
+            ..PackageConfig::default()
+        };
+        let text = write_control(&cfg, &job(), "2.0.0", "1");
+        assert!(text.contains("Version: 1:2.0.0-1+trixie\n"));
+    }
+
+    #[test]
+    fn write_control_omits_epoch_prefix_when_unset() {
+        let cfg = PackageConfig {
+            package_name: "foo".into(),
+            github_repo: "owner/foo".into(),
+            ..PackageConfig::default()
+        };
+        let text = write_control(&cfg, &job(), "2.0.0", "1");
+        // Exactly "Version: 2.0.0-..." -- no epoch prefix sneaking in
+        // before the version number itself.
+        assert!(text.contains("Version: 2.0.0-1+trixie\n"));
+    }
+
+    #[test]
+    fn write_changelog_includes_epoch_in_version() {
+        let cfg = PackageConfig {
+            package_name: "foo".into(),
+            github_repo: "owner/foo".into(),
+            epoch: "1".into(),
+            ..PackageConfig::default()
+        };
+        let text = write_changelog(&cfg, &job(), "2.0.0", "1");
+        assert!(text.starts_with("foo (1:2.0.0-1+trixie) trixie;"));
     }
 
     #[test]
