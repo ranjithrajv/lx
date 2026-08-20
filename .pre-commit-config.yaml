@@ -1,9 +1,10 @@
 repos:
   - repo: local
     hooks:
+      # --- pre-commit tier: fast, runs on every commit ---
       - id: cargo-fmt
-        name: cargo fmt
-        entry: cargo fmt --all -- --check
+        name: cargo fmt (auto-fix)
+        entry: cargo fmt --all
         language: system
         pass_filenames: false
 
@@ -13,14 +14,41 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+
+      - id: secret-scan
+        name: secret scan (staged diff)
+        entry: ./utils/secret-scan.sh
+        language: system
+        pass_filenames: false
+
+      # --- pre-push tier: slower, needs `pre-commit install --hook-type pre-push` ---
       - id: cargo-test
         name: cargo test
         entry: cargo test --all-targets
         language: system
         pass_filenames: false
+        stages: [pre-push]
 
       - id: coverage-gate
         name: coverage gate (>= 40%)
         entry: ./utils/coverage.sh
         language: system
         pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-audit
+        name: cargo audit
+        # RUSTSEC-2023-0071 (rsa/Marvin Attack, via octocrab's JWT feature) is
+        # a documented, accepted exception -- see
+        # docs/decisions/2026-08-14-octocrab.md. This cargo-audit version
+        # (0.22.2) has no config-file auto-discovery, so the ignore has to be
+        # a CLI flag rather than an audit.toml.
+        entry: cargo audit --ignore RUSTSEC-2023-0071
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
