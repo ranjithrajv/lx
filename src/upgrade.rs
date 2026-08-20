@@ -91,7 +91,7 @@ fn upgrade_one(
     entry: &PackageEntry,
     args: &UpgradeArgs,
 ) -> Result<bool> {
-    let release = client.latest_release(debs::LATEST_DEBS_ORG, package)?;
+    let release = client.latest_release(debs::LATEST_DEBS_ORG, &debs::repo_name(package))?;
     let asset =
         debs::find_asset(&release, package, &entry.arch, &entry.distribution).ok_or_else(|| {
             anyhow!(

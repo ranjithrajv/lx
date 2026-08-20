@@ -8,7 +8,8 @@ use lpt_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
-    /// Package name (repo under the latest-debs GitHub org).
+    /// Package name (e.g. "eza"), looked up as "<package>-debian" under
+    /// the latest-debs GitHub org.
     pub package: String,
 
     /// Version/tag to install (defaults to the latest release).
@@ -51,9 +52,10 @@ pub struct InstallArgs {
 
 pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
     let client = GitHubClient::new(token.map(|s| s.to_string()))?;
+    let repo = debs::repo_name(&args.package);
 
     let release = match &args.version {
-        Some(v) => match client.release_by_tag(debs::LATEST_DEBS_ORG, &args.package, v) {
+        Some(v) => match client.release_by_tag(debs::LATEST_DEBS_ORG, &repo, v) {
             Ok(r) => r,
             Err(e) => {
                 debs::suggest_versions(&client, &args.package, v);
@@ -61,13 +63,12 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
             }
         },
         None => client
-            .latest_release(debs::LATEST_DEBS_ORG, &args.package)
+            .latest_release(debs::LATEST_DEBS_ORG, &repo)
             .with_context(|| {
                 format!(
-                    "no releases found for '{}/{}'. Is '{}' published under \
+                    "no releases found for '{}/{repo}'. Is '{}' published under \
                      https://github.com/orgs/{}/repositories ?",
                     debs::LATEST_DEBS_ORG,
-                    args.package,
                     args.package,
                     debs::LATEST_DEBS_ORG
                 )

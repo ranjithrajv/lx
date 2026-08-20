@@ -9,9 +9,22 @@ use std::process::Command;
 
 use lpt_lib::github::{Asset, GitHubClient, Release};
 
-/// GitHub org hosting pre-built `.deb`s, named
-/// `{package}_{version}+{dist}_{arch}.deb` per `build.rs`'s naming.
+/// GitHub org hosting pre-built `.deb`s. Each package lives in its own repo
+/// under this org, named `<package>-debian` (see `repo_name`); the release
+/// assets inside that repo are named `{package}_{version}+{dist}_{arch}.deb`
+/// per `build.rs`'s naming -- the repo name and the asset's embedded
+/// package name are two different strings that both derive from the same
+/// bare package name (e.g. repo `eza-debian`, asset `eza_0.23.5-...`).
 pub const LATEST_DEBS_ORG: &str = "latest-debs";
+
+/// The `latest-debs` org repo name for a package: `<package>-debian`. The
+/// user-facing `package` argument to `install`/`upgrade` is always the bare
+/// upstream name (matching `build.rs`'s `package_name`, and the name
+/// embedded in asset filenames via `find_asset`/`control_version`); this is
+/// the one place that maps it to the org's actual repo-naming convention.
+pub fn repo_name(package: &str) -> String {
+    format!("{package}-debian")
+}
 
 /// Match a release asset against `build.rs`'s naming scheme:
 /// `{package}_{version}-{build}+{dist}_{arch}.deb`.
@@ -42,10 +55,13 @@ pub fn control_version(asset_name: &str, package: &str, arch: &str) -> Option<St
 }
 
 /// Print the latest few releases as suggestions when the requested version
-/// was not found, mirroring `build.rs`'s `suggest_versions`.
+/// was not found, mirroring `build.rs`'s `suggest_versions`. `package` is
+/// the bare upstream name; resolved to the org's actual repo via
+/// `repo_name` for both the API call and the printed URL.
 pub fn suggest_versions(client: &GitHubClient, package: &str, wanted: &str) {
-    eprintln!("Version '{wanted}' not found for {LATEST_DEBS_ORG}/{package}.");
-    match client.releases(LATEST_DEBS_ORG, package, 5) {
+    let repo = repo_name(package);
+    eprintln!("Version '{wanted}' not found for {LATEST_DEBS_ORG}/{repo}.");
+    match client.releases(LATEST_DEBS_ORG, &repo, 5) {
         Ok(metas) if !metas.is_empty() => {
             eprintln!("  Recent releases:");
             for m in metas {
@@ -60,7 +76,7 @@ pub fn suggest_versions(client: &GitHubClient, package: &str, wanted: &str) {
         _ => {
             eprintln!(
                 "  No recent releases could be listed; check \
-                 https://github.com/{LATEST_DEBS_ORG}/{package}/releases"
+                 https://github.com/{LATEST_DEBS_ORG}/{repo}/releases"
             );
         }
     }
@@ -289,6 +305,12 @@ mod tests {
             assets,
             published_at: None,
         }
+    }
+
+    #[test]
+    fn repo_name_appends_debian_suffix() {
+        assert_eq!(repo_name("eza"), "eza-debian");
+        assert_eq!(repo_name("git-delta"), "git-delta-debian");
     }
 
     #[test]
