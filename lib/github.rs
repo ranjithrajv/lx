@@ -328,6 +328,12 @@ pub struct Release {
     pub draft: bool,
     pub html_url: String,
     pub assets: Vec<Asset>,
+    /// Unix epoch seconds the release was published, when GitHub reports
+    /// one. Used as the reproducible-build timestamp source for generated
+    /// package metadata (changelog date, copyright year) instead of
+    /// wall-clock build time, so the same release always produces the same
+    /// bytes regardless of when it's built.
+    pub published_at: Option<i64>,
 }
 
 impl From<octocrab::models::repos::Release> for Release {
@@ -339,6 +345,7 @@ impl From<octocrab::models::repos::Release> for Release {
             draft: r.draft,
             html_url: r.html_url.to_string(),
             assets: r.assets.into_iter().map(Into::into).collect(),
+            published_at: r.published_at.map(|t| t.timestamp()),
         }
     }
 }
@@ -407,5 +414,6 @@ mod tests {
         assert_eq!(r.assets.len(), 1);
         assert_eq!(r.assets[0].name, "eza_x86_64-unknown-linux-gnu.tar.gz");
         assert_eq!(r.assets[0].size, Some(123));
+        assert_eq!(r.published_at, Some(1_735_689_600)); // 2025-01-01T00:00:00Z
     }
 }

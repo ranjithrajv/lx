@@ -183,14 +183,31 @@ fn build_source_package(
     // The upstream orig tarball is built once and shared across dists. It
     // must contain a top-level <pkg>-<debian_version>/ directory (standard
     // upstream layout), so the tree dir name is rewritten in the archive.
+    //
+    // Reproducible-builds hygiene: plain `tar` reads directory entries in
+    // filesystem order, which isn't guaranteed stable across separate
+    // extractions into fresh temp directories -- two builds of the exact
+    // same input could otherwise produce a differently-ordered (and thus
+    // differently-compressed) tarball. --sort=name fixes member order;
+    // --mtime/--owner/--group/--numeric-owner strip the extraction
+    // timestamp and container UID/GID, which would otherwise vary by
+    // build host and build time. --mtime respects SOURCE_DATE_EPOCH (the
+    // reproducible-builds.org standard) when set, else a fixed epoch.
     let mut created_orig = false;
     if !orig_done {
         let upstream_dir = format!("{}-{debian_version}", pkg.name);
+        let source_date_epoch =
+            std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "0".to_string());
         run_container_cmd(
             out_dir,
             workdir,
             &[
                 "tar",
+                "--sort=name",
+                &format!("--mtime=@{source_date_epoch}"),
+                "--owner=0",
+                "--group=0",
+                "--numeric-owner",
                 "-cJf",
                 "/work/orig.tar.xz",
                 "--transform",

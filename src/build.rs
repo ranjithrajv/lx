@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::config::PackageConfig;
-use crate::discovery::{config_from_release, match_assets};
+use crate::discovery::{config_from_release, guess_format, match_assets};
 use lpt_lib::github::{Asset, GitHubClient};
 
 #[derive(Debug, Clone, Args)]
@@ -25,6 +25,12 @@ pub struct BuildArgs {
     /// Restrict to specific architectures (comma-separated).
     #[arg(long)]
     pub architectures: Option<String>,
+
+    /// Build only for this machine's own architecture (auto-detected via
+    /// `uname -m`), skipping QEMU emulation entirely. Conflicts with
+    /// --architectures; pass one or the other.
+    #[arg(long)]
+    pub host: bool,
 
     /// Restrict to specific distributions (comma-separated).
     #[arg(long)]
@@ -117,6 +123,9 @@ pub struct ResolvedJob {
     pub arch: String,
     pub asset: Asset,
     pub tag: String,
+    /// The release's own publish time (Unix epoch seconds), used instead of
+    /// wall-clock build time for reproducible package metadata.
+    pub published_at: Option<i64>,
 }
 
 pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
@@ -129,7 +138,28 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     let mut args = args;
     args.max_parallel = effective_parallel;
 
-    let mut cfg = PackageConfig::load(&args.config)?;
+    // A bare GitHub URL in place of a package.yaml path triggers a fully
+    // zero-config build: no manual patterns, every supported architecture,
+    // and source packages included (there's no config file to opt out via,
+    // so the most useful default wins).
+    let mut cfg = match parse_github_url(&args.config.to_string_lossy()) {
+        Some(github_repo) => {
+            println!("Zero-config build from {github_repo} (no package.yaml)");
+            args.source = true;
+            let cfg = PackageConfig {
+                package_name: github_repo
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(&github_repo)
+                    .to_string(),
+                github_repo,
+                ..PackageConfig::default()
+            };
+            cfg.validate()?;
+            cfg
+        }
+        None => PackageConfig::load(&args.config)?,
+    };
     if let Some(v) = &args.version {
         cfg.version = v.clone();
     }
@@ -159,6 +189,10 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // on failure, fall back to the config's license_spdx and continue.
     let license = fetch_upstream_license(&client, &cfg).unwrap_or(None);
 
+    if args.host && args.architectures.is_some() {
+        bail!("--host conflicts with --architectures; pass one or the other");
+    }
+
     // Determine the effective build matrix.
     let mut dists = cfg.effective_distributions();
     let mut archs = cfg.effective_architectures();
@@ -177,6 +211,13 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect();
+    }
+    if args.host {
+        let detected = host_arch().ok_or_else(|| {
+            anyhow!("could not detect this machine's architecture from `uname -m`; use --architectures instead")
+        })?;
+        println!("Building for host architecture: {detected} (--host; no QEMU needed)");
+        archs = vec![detected];
     }
 
     // Resolve one asset per architecture.
@@ -205,6 +246,15 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         bail!("no release assets matched any requested architecture");
     }
 
+    // Zero-config (no artifact_format in package.yaml, or none at all in
+    // URL mode) previously left this empty all the way to `extract()`,
+    // which would then reject it outright -- config_from_release's own
+    // guess only ever landed on a throwaway `auto` config above, never on
+    // `cfg` itself. Guess it here from whatever got resolved.
+    if cfg.artifact_format.is_empty() {
+        cfg.artifact_format = guess_format(&arch_assets[0].1.name).to_string();
+    }
+
     let jobs: Vec<ResolvedJob> = dists
         .iter()
         .flat_map(|dist| {
@@ -222,6 +272,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                         arch: arch.clone(),
                         asset: asset.clone(),
                         tag: release.tag_name.clone(),
+                        published_at: release.published_at,
                     })
                 })
                 .collect::<Vec<_>>()
@@ -425,6 +476,23 @@ fn resolve_manual(
             .or_insert(asset_from_name(release, &m.asset));
     }
     Ok(out)
+}
+
+/// Parse a bare `https://github.com/<owner>/<repo>` URL into `"owner/repo"`,
+/// ignoring any further path (a `.git` suffix, `/releases`, a tag, etc.).
+/// Returns `None` for anything that isn't a github.com URL, so callers can
+/// fall through to treating the argument as a package.yaml path.
+fn parse_github_url(s: &str) -> Option<String> {
+    let rest = s
+        .strip_prefix("https://github.com/")
+        .or_else(|| s.strip_prefix("http://github.com/"))?;
+    let mut parts = rest.trim_end_matches('/').splitn(3, '/');
+    let owner = parts.next()?;
+    let repo = parts.next()?.trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }
 
 fn asset_from_name(release: &lpt_lib::github::Release, name: &str) -> Asset {
@@ -777,16 +845,21 @@ fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
 }
 
 /// Recursively copy `src`'s contents into `dst` (`dst` is created if
-/// missing). Used by `bundle: true` packaging, which needs the whole
-/// extracted tree preserved (e.g. a `bin/`+`lib/` layout), not just its
-/// top-level files.
+/// missing), preserving symlinks rather than following them -- matching the
+/// action's `cp -a`. Used by `bundle: true` packaging, which needs the
+/// whole extracted tree preserved (e.g. a `bin/`+`lib/` layout, including
+/// any versioned-library symlinks like `libfoo.so -> libfoo.so.1`), not
+/// just its top-level files.
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
         let ty = entry.file_type()?;
         let dest_path = dst.join(entry.file_name());
-        if ty.is_dir() {
+        if ty.is_symlink() {
+            let target = std::fs::read_link(entry.path())?;
+            std::os::unix::fs::symlink(&target, &dest_path)?;
+        } else if ty.is_dir() {
             copy_dir_recursive(&entry.path(), &dest_path)?;
         } else if ty.is_file() {
             std::fs::copy(entry.path(), &dest_path)?;
@@ -838,7 +911,7 @@ fn build_deb_via_docker(
 
     write_control(&debian_dir, cfg, job, &debian_version, &args.build_version)?;
     write_changelog(&output_dir, cfg, job, &debian_version, &args.build_version)?;
-    write_copyright(&output_dir, cfg, license)?;
+    write_copyright(&output_dir, cfg, license, job.published_at)?;
 
     // Copy the extracted binaries into the build context so the Dockerfile's
     // COPY (which must stay inside the context) can reach them. `bundle`
@@ -943,8 +1016,8 @@ fn check_docker() -> Result<()> {
 }
 
 /// The host's Debian architecture name (`uname -m` mapped to dpkg naming),
-/// or None if it can't be determined. Used to decide whether a target
-/// architecture needs QEMU emulation.
+/// or None if it can't be determined. Used both to decide whether a target
+/// architecture needs QEMU emulation, and to resolve `--host`.
 fn host_arch() -> Option<String> {
     let out = Command::new("uname").arg("-m").output().ok()?;
     let machine = String::from_utf8(out.stdout).ok()?.trim().to_string();
@@ -999,22 +1072,29 @@ fn render_dockerfile(
     } else {
         format!("ARG BINARY_RENAME={}\nRUN if [ -n \"$BINARY_RENAME\" ]; then count=$(find /output/usr/bin -maxdepth 1 -type f | wc -l); if [ \"$count\" = \"1\" ]; then f=$(find /output/usr/bin -maxdepth 1 -type f); mv \"$f\" \"/output/usr/bin/$BINARY_RENAME\"; fi; fi", cfg.binary_rename)
     };
+    // Bundle-mode executable discovery covers two shapes, matching upstream:
+    // a bin/ subdirectory (zed.app/{bin,lib,libexec,share}, an FHS-like
+    // tree), and executables sitting directly at the bundle root as
+    // siblings of the data directories they need (pnpm's Node
+    // single-executable-application binary needs its own dist/ alongside
+    // it, with no bin/lib/libexec structure at all) -- so both loops run
+    // unconditionally rather than picking one shape.
+    //
+    // A trailing guard fails the build loudly if no executables ended up in
+    // /usr/bin at all (wrong binary_path, empty archive, bundle tree with
+    // no ELF anywhere), instead of silently shipping an empty package.
     let install = if cfg.bundle {
-        // Install the whole extracted tree under /usr/lib/<pkg>/ and
-        // symlink its bin/ executables into /usr/bin, preserving relative
-        // layout for $ORIGIN-relative RPATH binaries (e.g. zed).
         format!(
             r#"RUN mkdir -p "/output/usr/lib/{pkg}" "/output/usr/share/doc/{pkg}" /output/DEBIAN /output/usr/bin
 COPY ${{BINARY_SOURCE}}/ "/output/usr/lib/{pkg}/"
-RUN find "/output/usr/lib/{pkg}" -type f -exec sh -c 'file -b "$1" | grep -q "^ELF " && chmod +x "$1"' _ {{}} \;
-RUN if [ -d "/output/usr/lib/{pkg}/bin" ]; then for f in "/output/usr/lib/{pkg}/bin"/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && ln -s "/usr/lib/{pkg}/bin/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; fi"#,
+RUN for f in "/output/usr/lib/{pkg}/bin"/*; do [ -d "/output/usr/lib/{pkg}/bin" ] || break; [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " || continue; chmod +x "$f"; ln -s "/usr/lib/{pkg}/bin/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; for f in "/output/usr/lib/{pkg}"/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " || continue; chmod +x "$f"; ln -s "/usr/lib/{pkg}/$(basename "$f")" "/output/usr/bin/$(basename "$f")"; done; [ -n "$(ls -A /output/usr/bin 2>/dev/null)" ] || (echo "ERROR: no executables landed in /usr/bin (bundle=true) - check binary_path/bundle config" >&2; exit 1)"#,
             pkg = cfg.package_name,
         )
     } else {
         format!(
             r#"RUN mkdir -p /output/usr/bin "/output/usr/share/doc/{pkg}" /output/DEBIAN
 COPY ${{BINARY_SOURCE}}/ /tmp/binary-source/
-RUN for f in /tmp/binary-source/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && cp "$f" /output/usr/bin/ || true; done && chmod +x /output/usr/bin/* && rm -rf /tmp/binary-source"#,
+RUN for f in /tmp/binary-source/*; do [ -f "$f" ] || continue; file -b "$f" | grep -q "^ELF " && cp "$f" /output/usr/bin/ || true; done && chmod +x /output/usr/bin/* 2>/dev/null; rm -rf /tmp/binary-source; [ -n "$(ls -A /output/usr/bin 2>/dev/null)" ] || (echo "ERROR: no executables landed in /usr/bin - check binary_path config" >&2; exit 1)"#,
             pkg = cfg.package_name,
         )
     };
@@ -1067,14 +1147,16 @@ fn write_control(
     // Mirror the action's templates/output/DEBIAN/control: Section, Priority,
     // Homepage, and an extended description line (a single-line Description
     // synopsis without a continuation paragraph trips lintian's
-    // extended-description-is-empty).
+    // extended-description-is-empty). Depends: is appended after
+    // Description, matching the action's Dockerfile which `>>`-appends it
+    // to the already-rendered control file rather than templating it inline.
     let depends = if cfg.depends.trim().is_empty() {
         String::new()
     } else {
         format!("Depends: {}\n", cfg.depends.trim())
     };
     let control = format!(
-        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\n{depends}Maintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n",
+        "Section: utils\nPriority: optional\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: https://github.com/{repo}\nDescription: {desc}\n Packaged from the upstream GitHub release for Debian.\n{depends}",
         pkg = cfg.package_name,
         repo = cfg.github_repo,
         arch = job.arch,
@@ -1098,22 +1180,36 @@ fn write_changelog(
         dist = job.dist,
         version = version,
         maintainer = if cfg.maintainer.is_empty() { "latest-debs maintainers <maintainers@latest-debs.org>" } else { &cfg.maintainer },
-        date = changelog_date(),
+        date = changelog_date(job.published_at),
     );
     let mut f = std::fs::File::create(output_dir.join("changelog.Debian"))?;
     f.write_all(changelog.as_bytes())?;
     Ok(())
 }
 
-/// RFC 2822 date (e.g. `Thu, 14 Aug 2026 00:00:00 +0000`) for the
-/// changelog trailer. The action's template uses a fixed placeholder date.
-fn changelog_date() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    jiff::Timestamp::from_second(secs as i64)
-        .map(|t| t.strftime("%a, %d %b %Y 00:00:00 %z").to_string())
+/// Timestamp source for reproducible package metadata (changelog date,
+/// copyright year): the `SOURCE_DATE_EPOCH` env var if set (the
+/// reproducible-builds.org standard, letting operators pin an exact value),
+/// else the release's own publish time, else a fixed epoch. Deliberately
+/// never wall-clock "now" -- building from build time would make the same
+/// release produce different package metadata depending on when it's
+/// built, which is exactly what reproducible builds rule out.
+fn reproducible_epoch(published_at: Option<i64>) -> i64 {
+    if let Ok(v) = std::env::var("SOURCE_DATE_EPOCH") {
+        if let Ok(secs) = v.trim().parse::<i64>() {
+            return secs;
+        }
+    }
+    published_at.unwrap_or(0)
+}
+
+/// RFC 2822 date (e.g. `Thu, 14 Aug 2026 09:30:00 +0000`) for the
+/// changelog trailer, derived from the release's publish time (see
+/// `reproducible_epoch`).
+fn changelog_date(published_at: Option<i64>) -> String {
+    let secs = reproducible_epoch(published_at);
+    jiff::Timestamp::from_second(secs)
+        .map(|t| t.strftime("%a, %d %b %Y %H:%M:%S %z").to_string())
         .unwrap_or_default()
 }
 
@@ -1121,11 +1217,12 @@ fn write_copyright(
     output_dir: &Path,
     cfg: &PackageConfig,
     license: Option<&lpt_lib::github::RepoLicense>,
+    published_at: Option<i64>,
 ) -> Result<()> {
-    let year = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() / 31_556_952 + 1970)
-        .unwrap_or(2026);
+    let secs = reproducible_epoch(published_at);
+    let year = jiff::Timestamp::from_second(secs)
+        .map(|t| t.strftime("%Y").to_string())
+        .unwrap_or_else(|_| "1970".to_string());
     let spdx = license
         .map(|l| l.spdx.as_str())
         .filter(|s| !s.is_empty() && *s != "NOASSERTION")
@@ -1167,6 +1264,94 @@ fn human_size(bytes: u64) -> String {
 mod tests {
     use super::*;
 
+    #[test]
+    fn changelog_date_is_deterministic_from_published_at() {
+        // Same published_at must give the same changelog date no matter
+        // when the test runs -- the whole point of not using
+        // SystemTime::now(). Called twice to make that explicit.
+        let a = changelog_date(Some(1_735_689_600)); // 2025-01-01T00:00:00Z
+        let b = changelog_date(Some(1_735_689_600));
+        assert_eq!(a, b);
+        assert_eq!(a, "Wed, 01 Jan 2025 00:00:00 +0000");
+    }
+
+    #[test]
+    fn changelog_date_falls_back_to_epoch_zero_without_published_at() {
+        assert_eq!(changelog_date(None), "Thu, 01 Jan 1970 00:00:00 +0000");
+    }
+
+    #[test]
+    fn reproducible_epoch_prefers_source_date_epoch_env_var() {
+        // SAFETY: single assertion, cleaned up immediately; no other test
+        // reads or writes SOURCE_DATE_EPOCH.
+        unsafe {
+            std::env::set_var("SOURCE_DATE_EPOCH", "1000000000");
+        }
+        let epoch = reproducible_epoch(Some(1_735_689_600));
+        unsafe {
+            std::env::remove_var("SOURCE_DATE_EPOCH");
+        }
+        assert_eq!(epoch, 1_000_000_000);
+    }
+
+    #[test]
+    fn write_copyright_year_comes_from_published_at() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = PackageConfig {
+            package_name: "eza".into(),
+            github_repo: "eza-community/eza".into(),
+            ..PackageConfig::default()
+        };
+        write_copyright(dir.path(), &cfg, None, Some(1_735_689_600)).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("copyright")).unwrap();
+        assert!(text.contains("Copyright: 2025 eza-community/eza contributors"));
+    }
+
+    #[test]
+    fn parse_github_url_extracts_owner_repo() {
+        assert_eq!(
+            parse_github_url("https://github.com/eza-community/eza").as_deref(),
+            Some("eza-community/eza")
+        );
+    }
+
+    #[test]
+    fn parse_github_url_ignores_trailing_path() {
+        assert_eq!(
+            parse_github_url("https://github.com/eza-community/eza/releases/tag/v0.24.0")
+                .as_deref(),
+            Some("eza-community/eza")
+        );
+        assert_eq!(
+            parse_github_url("https://github.com/eza-community/eza.git").as_deref(),
+            Some("eza-community/eza")
+        );
+        assert_eq!(
+            parse_github_url("https://github.com/eza-community/eza/").as_deref(),
+            Some("eza-community/eza")
+        );
+    }
+
+    #[test]
+    fn parse_github_url_rejects_non_github_or_incomplete() {
+        assert!(parse_github_url("package.yaml").is_none());
+        assert!(parse_github_url("configs/eza.yaml").is_none());
+        assert!(parse_github_url("https://gitlab.com/owner/repo").is_none());
+        assert!(parse_github_url("https://github.com/owner-only").is_none());
+    }
+
+    #[test]
+    fn host_arch_returns_a_known_debian_arch() {
+        // Smoke test on this (Linux) dev/CI host: --host relies on
+        // host_arch() resolving to one of the architectures the build
+        // matrix actually knows about.
+        let arch = host_arch().expect("uname -m should resolve on Linux");
+        assert!(
+            crate::config::DEFAULT_ARCHITECTURES.contains(&arch.as_str()),
+            "unexpected arch: {arch}"
+        );
+    }
+
     fn job() -> ResolvedJob {
         ResolvedJob {
             dist: "trixie".into(),
@@ -1177,6 +1362,7 @@ mod tests {
                 browser_download_url: String::new(),
             },
             tag: "v1.0.0".into(),
+            published_at: Some(1_735_689_600), // 2025-01-01T00:00:00Z
         }
     }
 
@@ -1205,6 +1391,35 @@ mod tests {
     }
 
     #[test]
+    fn render_dockerfile_bundle_mode_also_symlinks_root_level_executables() {
+        // pnpm-style bundles ship executables as siblings of their data
+        // dirs at the bundle root, with no bin/ subdirectory at all.
+        let cfg = PackageConfig {
+            package_name: "pnpm".into(),
+            bundle: true,
+            ..PackageConfig::default()
+        };
+        let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "pnpm.deb");
+        assert!(out.contains(r#"for f in "/output/usr/lib/pnpm"/*"#));
+    }
+
+    #[test]
+    fn render_dockerfile_fails_build_when_usr_bin_ends_up_empty() {
+        for bundle in [false, true] {
+            let cfg = PackageConfig {
+                package_name: "x".into(),
+                bundle,
+                ..PackageConfig::default()
+            };
+            let out = render_dockerfile(&cfg, &job(), "1.0.0-1+trixie_amd64", "x.deb");
+            assert!(
+                out.contains("no executables landed in /usr/bin"),
+                "bundle={bundle}"
+            );
+        }
+    }
+
+    #[test]
     fn write_control_includes_depends_when_set() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = PackageConfig {
@@ -1216,6 +1431,9 @@ mod tests {
         write_control(dir.path(), &cfg, &job(), "1.0.0", "1").unwrap();
         let text = std::fs::read_to_string(dir.path().join("control")).unwrap();
         assert!(text.contains("Depends: libatomic1, libgtk-3-0\n"));
+        // Matches the action's Dockerfile, which `>>`-appends Depends after
+        // the control file (including Description) is already rendered.
+        assert!(text.trim_end().ends_with("Depends: libatomic1, libgtk-3-0"));
     }
 
     #[test]
@@ -1248,5 +1466,22 @@ mod tests {
             std::fs::read(dst_path.join("lib/libfoo.so")).unwrap(),
             b"lib"
         );
+    }
+
+    #[test]
+    fn copy_dir_recursive_preserves_symlinks() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("lib")).unwrap();
+        std::fs::write(src.path().join("lib/libfoo.so.1"), b"lib").unwrap();
+        std::os::unix::fs::symlink("libfoo.so.1", src.path().join("lib/libfoo.so")).unwrap();
+
+        let dst = tempfile::tempdir().unwrap();
+        let dst_path = dst.path().join("out");
+        copy_dir_recursive(src.path(), &dst_path).unwrap();
+
+        let link = dst_path.join("lib/libfoo.so");
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_link(&link).unwrap(), Path::new("libfoo.so.1"));
+        assert_eq!(std::fs::read(&link).unwrap(), b"lib");
     }
 }

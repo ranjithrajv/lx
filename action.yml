@@ -1,0 +1,140 @@
+name: 'lpt: Latest Package Tool'
+description: 'Build Debian packages for multiple architectures from upstream GitHub releases. Drop-in replacement for ranjithrajv/debian-multiarch-builder: same inputs/outputs, backed by the lpt Rust CLI instead of the bash implementation.'
+author: 'ranjithrajv'
+
+branding:
+  icon: 'package'
+  color: 'red'
+
+inputs:
+  config-file:
+    description: 'Path to the package.yaml configuration file'
+    required: true
+  version:
+    description: 'Version of the software to build'
+    required: true
+  build-version:
+    description: 'Debian build version number'
+    required: true
+  architecture:
+    description: 'Architecture to build (amd64, arm64, armel, armhf, i386, ppc64el, s390x, riscv64, loong64, or "all")'
+    required: false
+    default: 'all'
+  max-parallel:
+    description: 'Maximum number of parallel architecture builds'
+    required: false
+    default: '4'
+  lintian-check:
+    description: 'Enable Lintian checks on each built .deb'
+    required: false
+    default: 'false'
+  telemetry-enabled:
+    description: 'Enable build telemetry/metrics collection'
+    required: false
+    default: 'true'
+  save-baseline:
+    description: 'Accepted for compatibility with debian-multiarch-builder; not implemented (this input crashed the build there too - save_as_baseline was called but never defined). Setting it here is a safe no-op.'
+    required: false
+    default: 'false'
+  pinned-metadata:
+    description: 'Path to a release-metadata.json provenance pin (captured at vet time). When set and the release matches the vetted version, downloaded upstream assets are verified against the pinned SHA-256 and a mismatch fails the build.'
+    required: false
+    default: ''
+  output-dir:
+    description: 'Directory to write built .deb and .dsc source package files into'
+    required: false
+    default: 'dist'
+  github-token:
+    description: 'GitHub token for API requests (raises the anonymous rate limit). Defaults to the workflow-provided token.'
+    required: false
+    default: ''
+
+outputs:
+  packages:
+    description: 'Space-separated list of generated .deb package filenames'
+    value: ${{ steps.build.outputs.packages }}
+  source-packages:
+    description: 'Space-separated list of generated Debian source package (.dsc) filenames'
+    value: ${{ steps.build.outputs.source-packages }}
+  summary-path:
+    description: 'Path to build-summary.json (package list, sizes, timing, success rate)'
+    value: ${{ steps.build.outputs.summary-path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      run: |
+        if [ ! -f "${{ inputs.config-file }}" ]; then
+          echo "::error::Configuration file not found: ${{ inputs.config-file }}"
+          exit 1
+        fi
+
+    - name: Set up QEMU for cross-architecture builds
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64,arm,i386,ppc64le,s390x,riscv64
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache lpt build
+      uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ github.action_path }}
+        save-if: ${{ github.ref == 'refs/heads/main' }}
+
+    - name: Build lpt
+      shell: bash
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        cargo build --release --manifest-path "$ACTION_PATH/Cargo.toml"
+        echo "$ACTION_PATH/target/release" >> "$GITHUB_PATH"
+
+    - name: Build packages
+      id: build
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        arch_flag=()
+        if [ "${{ inputs.architecture }}" != "all" ]; then
+          arch_flag=(--architectures "${{ inputs.architecture }}")
+        fi
+        lintian_flag=()
+        if [ "${{ inputs.lintian-check }}" = "true" ]; then
+          lintian_flag=(--lintian)
+        fi
+        telemetry_flag=()
+        if [ "${{ inputs.telemetry-enabled }}" = "true" ]; then
+          telemetry_flag=(--telemetry)
+        fi
+        pin_flag=()
+        if [ -n "${{ inputs.pinned-metadata }}" ]; then
+          pin_flag=(--pinned-metadata "${{ inputs.pinned-metadata }}")
+        fi
+
+        # --source: debian-multiarch-builder always generated source
+        # packages alongside binary ones (no opt-in flag existed there
+        # either), so this stays unconditional for drop-in parity.
+        lpt build "${{ inputs.config-file }}" \
+          --version "${{ inputs.version }}" \
+          --build-version "${{ inputs.build-version }}" \
+          --max-parallel "${{ inputs.max-parallel }}" \
+          --output "${{ inputs.output-dir }}" \
+          --source \
+          --summary \
+          "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}"
+
+        cd "${{ inputs.output-dir }}"
+        packages=$(ls -- *.deb 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+        echo "packages=$packages" >> "$GITHUB_OUTPUT"
+        echo "Generated packages: $packages"
+
+        source_packages=$(ls -- *.dsc 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+        echo "source-packages=$source_packages" >> "$GITHUB_OUTPUT"
+        echo "Generated source packages: $source_packages"
+
+        echo "summary-path=${{ inputs.output-dir }}/build-summary.json" >> "$GITHUB_OUTPUT"

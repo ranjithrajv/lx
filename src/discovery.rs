@@ -242,6 +242,7 @@ mod tests {
             draft: false,
             html_url: "https://github.com/x/y/releases".into(),
             assets,
+            published_at: None,
         }
     }
 
