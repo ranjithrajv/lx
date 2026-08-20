@@ -16,6 +16,11 @@ pub struct SummaryInputs {
     /// `telemetry` object from telemetry.sh's get_telemetry_summary
     /// ({} when disabled).
     pub telemetry: serde_json::Value,
+    /// One entry per unique asset download: how (or whether) its integrity
+    /// was verified, so a build can be audited after the fact instead of
+    /// just trusting a console log that's already scrolled away. See
+    /// `build::VerifyMethod`.
+    pub provenance: Vec<serde_json::Value>,
 }
 
 /// Write `build-summary.json` into `out_dir`, mirroring the action's
@@ -68,6 +73,12 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
         0
     };
 
+    let unverified_assets = inputs
+        .provenance
+        .iter()
+        .filter(|p| p["method"] != "pinned" && p["method"] != "sidecar")
+        .count();
+
     let duration = inputs.start.elapsed().as_secs();
     let end_epoch = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -95,6 +106,8 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
         "packages": packages,
         "lintian": {},
         "telemetry": inputs.telemetry,
+        "provenance": inputs.provenance,
+        "unverified_assets": unverified_assets,
         "success_rate": success_rate,
     });
 
@@ -170,6 +183,7 @@ mod tests {
             max_parallel: 2,
             start: Instant::now(),
             telemetry: serde_json::json!({ "build_duration_seconds": 7 }),
+            provenance: vec![],
         };
         write(path, 2, &inputs).unwrap();
 
@@ -183,5 +197,41 @@ mod tests {
         assert_eq!(v["full_version"], "v1.0-1");
         assert_eq!(v["packages"].as_array().unwrap().len(), 2);
         assert_eq!(v["telemetry"]["build_duration_seconds"], 7);
+    }
+
+    #[test]
+    fn provenance_is_embedded_and_unverified_assets_are_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        std::fs::write(path.join("eza_1.0-1+bookworm_amd64.deb"), b"x").unwrap();
+
+        let inputs = SummaryInputs {
+            package: "eza".into(),
+            version: "v1.0".into(),
+            build_version: "1".into(),
+            github_repo: "eza-community/eza".into(),
+            architectures: vec!["amd64".into()],
+            distributions: vec!["bookworm".into()],
+            max_parallel: 1,
+            start: Instant::now(),
+            telemetry: serde_json::json!({}),
+            provenance: vec![
+                serde_json::json!({"asset": "a", "method": "pinned", "sha256": "aa"}),
+                serde_json::json!({"asset": "b", "method": "sidecar", "sha256": "bb"}),
+                serde_json::json!({
+                    "asset": "c",
+                    "method": "unverified (--allow-unverified)",
+                    "sha256": "cc"
+                }),
+            ],
+        };
+        write(path, 1, &inputs).unwrap();
+
+        let text = std::fs::read_to_string(path.join("build-summary.json")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["provenance"].as_array().unwrap().len(), 3);
+        assert_eq!(v["provenance"][0]["asset"], "a");
+        // Only the pinned and sidecar entries count as verified.
+        assert_eq!(v["unverified_assets"], 1);
     }
 }

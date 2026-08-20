@@ -52,6 +52,7 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
         release.tag_name,
         release.assets.len()
     );
+    crate::build::warn_if_prerelease_or_draft(&release);
 
     // Verify every pinned pattern resolves to an actual asset.
     if cfg.has_manual_patterns() {

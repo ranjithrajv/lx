@@ -45,6 +45,14 @@ pub struct BuildArgs {
     #[arg(long)]
     pub no_verify: bool,
 
+    /// Proceed when an asset has no pinned or sidecar checksum to verify
+    /// against, instead of failing the build. Most GitHub releases don't
+    /// publish a checksum sidecar, so without either this or
+    /// --pinned-metadata, the default is to refuse to build from an
+    /// unverified download rather than silently warn and continue.
+    #[arg(long)]
+    pub allow_unverified: bool,
+
     /// Run lintian on each built .deb (fails on errors by default).
     #[arg(long)]
     pub lintian: bool,
@@ -184,6 +192,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         // Zero-config mode: auto-discover from the latest release.
         client.latest_release(owner, repo)?
     };
+    warn_if_prerelease_or_draft(&release);
 
     // Fetch the upstream license once (not per-architecture), mirroring the
     // action's fetch_upstream_license + dual-license detection. Best-effort:
@@ -306,7 +315,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         None
     };
 
-    build_jobs(
+    let provenance = build_jobs(
         &args,
         &cfg,
         &jobs,
@@ -333,6 +342,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 max_parallel: args.max_parallel,
                 start: build_start,
                 telemetry: telemetry.summary_json(),
+                provenance,
             },
         )?;
     }
@@ -494,6 +504,25 @@ fn parse_github_url(s: &str) -> Option<String> {
     Some(format!("{owner}/{repo}"))
 }
 
+/// Surface a resolved release's prerelease/draft status. Both fields were
+/// already parsed off the GitHub API response but never consulted anywhere
+/// -- someone pinning an explicit tag that happens to be an RC/beta got no
+/// signal that they were about to package pre-stable software.
+pub(crate) fn warn_if_prerelease_or_draft(release: &lpt_lib::github::Release) {
+    if release.draft {
+        println!(
+            "  ⚠️  '{}' is a draft release -- not yet publicly published",
+            release.tag_name
+        );
+    }
+    if release.prerelease {
+        println!(
+            "  ⚠️  '{}' is marked as a pre-release (not yet considered stable upstream)",
+            release.tag_name
+        );
+    }
+}
+
 fn asset_from_name(release: &lpt_lib::github::Release, name: &str) -> Asset {
     release
         .assets
@@ -515,7 +544,7 @@ fn build_jobs(
     token: Option<String>,
     progress: Option<&lpt_lib::progress::Progress>,
     telemetry: &lpt_lib::telemetry::Telemetry,
-) -> Result<()> {
+) -> Result<Vec<serde_json::Value>> {
     std::fs::create_dir_all(&args.output)?;
 
     let pin = match &args.pinned_metadata {
@@ -543,6 +572,9 @@ fn build_jobs(
     let workers = args.max_parallel.max(1);
     let mut handles = Vec::new();
     let failures = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    // Shared across every worker thread -- one entry per unique asset
+    // download, regardless of which architecture/distribution triggered it.
+    let provenance = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
 
     // A simple bounded pool: each worker grabs the next arch group until
     // none remain, so runtime parallelism is capped at `workers`.
@@ -551,6 +583,7 @@ fn build_jobs(
         let groups = groups.clone();
         let next = std::sync::Arc::clone(&next);
         let failures = std::sync::Arc::clone(&failures);
+        let provenance = std::sync::Arc::clone(&provenance);
         let tmp = tmp.path().to_path_buf();
         let args = args.clone();
         let cfg = cfg.clone();
@@ -581,6 +614,7 @@ fn build_jobs(
                         &mut downloaded,
                         license.as_ref(),
                         pin.as_ref(),
+                        &provenance,
                     );
                     match result {
                         Ok(deb) => println!("  ✓ built {} ({})", deb.display(), job.dist),
@@ -628,7 +662,9 @@ fn build_jobs(
     if failures > 0 {
         bail!("{failures} of {} builds failed", jobs.len());
     }
-    Ok(())
+    Ok(std::sync::Arc::try_unwrap(provenance)
+        .map(|m| m.into_inner().unwrap_or_default())
+        .unwrap_or_default())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -641,6 +677,7 @@ fn build_one(
     downloaded: &mut std::collections::HashMap<String, PathBuf>,
     license: Option<&lpt_lib::github::RepoLicense>,
     pin: Option<&lpt_lib::checksum::PinnedMetadata>,
+    provenance: &std::sync::Mutex<Vec<serde_json::Value>>,
 ) -> Result<PathBuf> {
     // 1. Download the asset (once per asset name).
     let asset_path = match downloaded.get(&job.asset.name) {
@@ -673,25 +710,45 @@ fn build_one(
                 }
                 None => download(client, &job.asset, &path)?,
             }
-            if !args.no_verify {
+            let method = if args.no_verify {
+                VerifyMethod::SkippedNoVerify
+            } else if let Some(pin) = pin {
                 // Prefer the vet-time provenance pin over the live sidecar,
                 // mirroring the action's build.sh precedence.
-                if let Some(pin) = pin {
-                    if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
-                        lpt_lib::checksum::verify_sha256(&path, &expected)?;
-                        println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
-                    } else {
-                        eprintln!(
-                            "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
-                            job.asset.name, job.tag
-                        );
-                        verify_sidecar_or_warn(client, &job.asset, &path);
-                    }
+                if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
+                    lpt_lib::checksum::verify_sha256(&path, &expected)?;
+                    println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
+                    VerifyMethod::Pinned
                 } else {
-                    // No pin file supplied: try the live sidecar, else warn.
-                    verify_sidecar_or_warn(client, &job.asset, &path);
+                    eprintln!(
+                        "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
+                        job.asset.name, job.tag
+                    );
+                    verify_sidecar_or_require_flag(
+                        client,
+                        &job.asset,
+                        &path,
+                        args.allow_unverified,
+                    )?
                 }
-            }
+            } else {
+                // No pin file supplied: try the live sidecar, else require
+                // --allow-unverified to proceed anyway.
+                verify_sidecar_or_require_flag(client, &job.asset, &path, args.allow_unverified)?
+            };
+
+            // Audit trail: one entry per unique download, regardless of
+            // outcome, so build-summary.json's `provenance` array records
+            // exactly how (or whether) every asset was verified.
+            let sha256 = lpt_lib::checksum::sha256_file(&path).unwrap_or_default();
+            provenance.lock().unwrap().push(serde_json::json!({
+                "asset": job.asset.name,
+                "url": job.asset.browser_download_url,
+                "tag": job.tag,
+                "method": method.as_str(),
+                "sha256": sha256,
+            }));
+
             downloaded.insert(job.asset.name.clone(), path.clone());
             path
         }
@@ -809,14 +866,61 @@ fn verify_sidecar(client: &GitHubClient, asset: &Asset, path: &Path) -> Result<(
     Err(anyhow!("no sidecar checksum found"))
 }
 
-/// Best-effort live sidecar verification: warn (don't fail) when no sidecar
-/// exists, matching the action's optional live verification.
-fn verify_sidecar_or_warn(client: &GitHubClient, asset: &Asset, path: &Path) {
-    if let Err(e) = verify_sidecar(client, asset, path) {
-        eprintln!(
-            "    (no sidecar checksum for '{}': {e}; skipping verification)",
+/// How a downloaded asset's integrity was (or wasn't) established --
+/// recorded per-asset into build-summary.json's `provenance` array (see
+/// `build_one`) so a build can be audited after the fact.
+#[derive(Clone, Copy)]
+enum VerifyMethod {
+    /// Matched a `--pinned-metadata` vet-time provenance pin.
+    Pinned,
+    /// Matched a live `.sha256`/`.sha256sum` sidecar next to the asset.
+    Sidecar,
+    /// No pin and no sidecar existed; proceeded anyway because
+    /// `--allow-unverified` was passed.
+    UnverifiedAllowed,
+    /// Verification was skipped entirely via `--no-verify`.
+    SkippedNoVerify,
+}
+
+impl VerifyMethod {
+    fn as_str(self) -> &'static str {
+        match self {
+            VerifyMethod::Pinned => "pinned",
+            VerifyMethod::Sidecar => "sidecar",
+            VerifyMethod::UnverifiedAllowed => "unverified (--allow-unverified)",
+            VerifyMethod::SkippedNoVerify => "skipped (--no-verify)",
+        }
+    }
+}
+
+/// Live sidecar checksum verification. Most real-world GitHub releases
+/// don't publish a checksum sidecar, so without `--allow-unverified` this
+/// fails the build rather than silently proceeding on an unverified
+/// download that's about to become an installable, often sudo-installed
+/// .deb -- a missing sidecar used to just print a warning and continue,
+/// which meant the *default* path for most repos had zero integrity
+/// verification with only a console line as evidence.
+fn verify_sidecar_or_require_flag(
+    client: &GitHubClient,
+    asset: &Asset,
+    path: &Path,
+    allow_unverified: bool,
+) -> Result<VerifyMethod> {
+    match verify_sidecar(client, asset, path) {
+        Ok(()) => Ok(VerifyMethod::Sidecar),
+        Err(e) if allow_unverified => {
+            eprintln!(
+                "    ⚠ (no sidecar checksum for '{}': {e}; proceeding unverified per \
+                 --allow-unverified)",
+                asset.name
+            );
+            Ok(VerifyMethod::UnverifiedAllowed)
+        }
+        Err(e) => Err(anyhow!(
+            "no checksum verification available for '{}': {e}. Pass --allow-unverified to \
+             build anyway, or supply --pinned-metadata or a checksum sidecar.",
             asset.name
-        );
+        )),
     }
 }
 
@@ -1331,6 +1435,20 @@ mod tests {
     #[test]
     fn changelog_date_falls_back_to_epoch_zero_without_published_at() {
         assert_eq!(changelog_date(None), "Thu, 01 Jan 1970 00:00:00 +0000");
+    }
+
+    #[test]
+    fn verify_method_as_str_names_every_variant() {
+        assert_eq!(VerifyMethod::Pinned.as_str(), "pinned");
+        assert_eq!(VerifyMethod::Sidecar.as_str(), "sidecar");
+        assert_eq!(
+            VerifyMethod::UnverifiedAllowed.as_str(),
+            "unverified (--allow-unverified)"
+        );
+        assert_eq!(
+            VerifyMethod::SkippedNoVerify.as_str(),
+            "skipped (--no-verify)"
+        );
     }
 
     #[test]

@@ -91,6 +91,22 @@ out:
   `--dry-run` to preview a build matrix without downloading or building
   anything.
 
+**Checksum verification is required by default.** When neither
+`--pinned-metadata` nor a live `.sha256`/`.sha256sum` sidecar is available
+for a downloaded asset (most GitHub releases don't publish one), `lpt
+build` fails rather than silently continuing — pass `--allow-unverified` to
+build anyway. `--no-verify` skips verification entirely, sidecar or not.
+`lpt build`/`lpt validate` also flag prerelease and draft releases (e.g.
+pinning `version: nightly` on a repo whose "latest" tag is an RC) so you
+don't package pre-stable software without noticing.
+
+With `--summary`, `build-summary.json` gets a `provenance` array — one
+entry per unique asset downloaded, with the verification method used
+(`pinned`/`sidecar`/`unverified (--allow-unverified)`/`skipped
+(--no-verify)`), its resolved SHA-256, and the source URL — plus an
+`unverified_assets` count, so a build can be audited after the fact instead
+of just trusting a console log that's already scrolled away.
+
 `install`/`update`/`upgrade`/`remove`/`list` track what they manage in a
 local manifest (`installed.json` under your XDG data dir), cross-checked
 against `dpkg`'s own record of what's actually installed — `lpt` is never
