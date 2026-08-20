@@ -1,0 +1,44 @@
+[package]
+name = "lpt"
+version = "0.1.0"
+edition = "2021"
+description = "Latest Package Tool: build and install .deb packages repackaged from GitHub release binaries across suites and architectures"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/ranjithrajv/lpt"
+rust-version = "1.75"
+
+[lib]
+name = "lpt_lib"
+path = "lib/lib.rs"
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+thiserror = "1.0"
+regex = "1.10"
+flate2 = "1.0"
+tar = "0.4"
+tempfile = "3.10"
+colored = "2.1"
+dirs = "5.0"
+sha2 = "0.10"
+hex = "0.4"
+wait-timeout = "0.2"
+libc = "0.2"
+jiff = "0.2.35"
+glob = "0.3.4"
+tokio = { version = "1.0", features = ["rt", "macros"] }
+octocrab = { version = "0.54.1", default-features = false, features = ["rustls", "rustls-ring", "retry", "timeout", "default-client", "jwt-rust-crypto"] }
+
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+
+[profile.release]
+lto = true
+strip = true
