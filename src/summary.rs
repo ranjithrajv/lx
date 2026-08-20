@@ -121,19 +121,62 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
         duration,
         total_packages as u64,
         inputs.architectures.len(),
+        &inputs.architectures,
+        &inputs.distributions,
     );
     Ok(())
 }
 
-/// Print the "viral badge" markdown block, mirroring the action's
-/// `generate_viral_badge` in src/lib/summary.sh. Printed after every
-/// summary so users can paste the badge into their README.
-fn viral_badge(success_rate: u64, build_time: u64, packages: u64, arch_count: usize) {
+/// Print a markdown badge block for pasting into the packaging repo's own
+/// README, mirroring the (now-superseded) action's `generate_viral_badge`
+/// in src/lib/summary.sh but pointed at `lpt` itself rather than its bash
+/// predecessor. Printed after every summary.
+fn viral_badge(
+    success_rate: u64,
+    build_time: u64,
+    packages: u64,
+    arch_count: usize,
+    architectures: &[String],
+    distributions: &[String],
+) {
+    // Latest-release/downloads badges need to know *this* repo (the one
+    // publishing the built .deb as a GitHub release), which is distinct
+    // from `github_repo` (the upstream source being packaged) -- only
+    // knowable when actually running as the GitHub Action, via the
+    // standard `GITHUB_REPOSITORY` env var. Omitted entirely on a local
+    // run rather than guessed, since there's no other reliable source for
+    // where (or whether) the package gets published.
+    let release_badges = std::env::var("GITHUB_REPOSITORY")
+        .ok()
+        .filter(|r| !r.trim().is_empty())
+        .map(|repo| {
+            format!(
+                "[![Latest Release](https://img.shields.io/github/v/release/{repo})](https://github.com/{repo}/releases/latest) \
+                 [![Downloads](https://img.shields.io/github/downloads/{repo}/total)](https://github.com/{repo}/releases)\n"
+            )
+        })
+        .unwrap_or_default();
+
+    let mut coverage_badges = String::new();
+    if !distributions.is_empty() {
+        coverage_badges.push_str(&format!(
+            "![Suites](https://img.shields.io/badge/suites-{}-blue) ",
+            badge_encode(distributions)
+        ));
+    }
+    if !architectures.is_empty() {
+        coverage_badges.push_str(&format!(
+            "![Architectures](https://img.shields.io/badge/architectures-{}-blue)",
+            badge_encode(architectures)
+        ));
+    }
+
     println!(
         r#"
 ---
-🚀 Built with **debian-multiarch-builder**
-[![Built with debian-multiarch-builder](https://img.shields.io/badge/built%20with-debian--multiarch--builder-blue?logo=github)](https://github.com/ranjithrajv/debian-multiarch-builder)
+🚀 Built with **lpt**
+[![Built with lpt](https://img.shields.io/badge/built%20with-lpt-blue?logo=github)](https://github.com/ranjithrajv/lpt)
+{release_badges}{coverage_badges}
 
 **Build Stats:**
 - ⚡ Success Rate: {success_rate}%
@@ -141,8 +184,21 @@ fn viral_badge(success_rate: u64, build_time: u64, packages: u64, arch_count: us
 - 📦 Packages: {packages}
 - 🏗️  Architectures: {arch_count}
 
-→ Try it free: `./build.sh --setup` or `./build.sh --zc owner/repo version 1`"#
+→ Try it: `lpt build https://github.com/<owner>/<repo>`"#
     );
+}
+
+/// Join badge label segments the way shields.io's static-badge endpoint
+/// expects: spaces and `|` percent-encoded so `bookworm | trixie` renders
+/// as one readable badge message instead of breaking the URL.
+fn badge_encode(items: &[String]) -> String {
+    items
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" | ")
+        .replace(' ', "%20")
+        .replace('|', "%7C")
 }
 
 /// Format a Unix epoch timestamp as RFC 3339 in UTC (the action uses
@@ -156,6 +212,15 @@ fn rfc3339(epoch: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn badge_encode_percent_encodes_spaces_and_pipes() {
+        assert_eq!(
+            badge_encode(&["bookworm".into(), "trixie".into(), "sid".into()]),
+            "bookworm%20%7C%20trixie%20%7C%20sid"
+        );
+        assert_eq!(badge_encode(&["amd64".into()]), "amd64");
+    }
 
     #[test]
     fn glob_match_basic() {

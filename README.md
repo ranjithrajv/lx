@@ -118,6 +118,12 @@ of just trusting a console log that's already scrolled away.
 release's own sidecar (there's no pin file in that flow): no sidecar means
 no install unless you pass `--allow-unverified` there too.
 
+`--summary` also prints a markdown badge block for your packaging repo's
+own README: a "Built with lpt" badge, a suites/architectures-coverage
+badge pair, and — only when running as the GitHub Action, where
+`GITHUB_REPOSITORY` identifies the repo publishing the release —
+latest-release and downloads badges too. Never guessed on a local run.
+
 `install`/`update`/`upgrade`/`remove`/`list` track what they manage in a
 local manifest (`installed.json` under your XDG data dir), cross-checked
 against `dpkg`'s own record of what's actually installed — `lpt` is never
