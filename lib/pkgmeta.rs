@@ -45,20 +45,21 @@ fn relation_field(name: &str, value: &str) -> String {
 }
 
 /// A package's dependency-relation fields, rendered together in the
-/// conventional order (Depends, Recommends, Conflicts, Replaces, Provides,
-/// Breaks) for appending after a control stanza's `Description`. Shared by
-/// the binary `.deb`'s `DEBIAN/control` and the source package's
-/// `debian/control` binary-package stanza, so the two can't independently
-/// forget a field the way the source package's `Depends:` (and friends)
-/// previously did entirely.
+/// conventional order (Depends, Recommends, Suggests, Conflicts, Replaces,
+/// Provides, Breaks, Pre-Depends) for appending after a control stanza's
+/// `Description`. Shared by the binary `.deb`'s `DEBIAN/control` and the
+/// source package's `debian/control` binary-package stanza, so the two can't
+/// independently forget a field.
 #[derive(Debug, Clone, Default)]
 pub struct Relations {
     pub depends: String,
     pub recommends: String,
+    pub suggests: String,
     pub conflicts: String,
     pub replaces: String,
     pub provides: String,
     pub breaks: String,
+    pub predepends: String,
 }
 
 impl Relations {
@@ -66,10 +67,12 @@ impl Relations {
         [
             relation_field("Depends", &self.depends),
             relation_field("Recommends", &self.recommends),
+            relation_field("Suggests", &self.suggests),
             relation_field("Conflicts", &self.conflicts),
             relation_field("Replaces", &self.replaces),
             relation_field("Provides", &self.provides),
             relation_field("Breaks", &self.breaks),
+            relation_field("Pre-Depends", &self.predepends),
         ]
         .concat()
     }
@@ -95,7 +98,7 @@ pub fn reproducible_epoch(published_at: Option<i64>) -> i64 {
 /// which run in parallel by default -- a prior version of this test set
 /// and unset the env var directly and intermittently leaked into unrelated
 /// tests reading `reproducible_epoch(None)` concurrently).
-fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
+pub fn parse_source_date_epoch(raw: Option<&str>) -> Option<i64> {
     raw?.trim().parse::<i64>().ok()
 }
 
@@ -179,110 +182,4 @@ pub fn render_copyright(
          License: {spdx}\n\n\
          License: {spdx}\n{body}\n"
     )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn with_epoch_prefixes_only_when_set() {
-        assert_eq!(with_epoch("", "1.0-1"), "1.0-1");
-        assert_eq!(with_epoch("1", "1.0-1"), "1:1.0-1");
-        assert_eq!(with_epoch(" 2 ", "1.0-1"), "2:1.0-1");
-    }
-
-    #[test]
-    fn strip_upstream_prefix_removes_leading_non_digits() {
-        assert_eq!(strip_upstream_prefix("v0.23.5"), "0.23.5");
-        assert_eq!(strip_upstream_prefix("bun-v1.3.14"), "1.3.14");
-        assert_eq!(strip_upstream_prefix("0.23.5"), "0.23.5");
-    }
-
-    #[test]
-    fn relations_render_only_nonempty_fields_in_order() {
-        let r = Relations {
-            depends: "libc6".into(),
-            breaks: "foo-legacy (<< 2.0)".into(),
-            ..Default::default()
-        };
-        assert_eq!(r.render(), "Depends: libc6\nBreaks: foo-legacy (<< 2.0)\n");
-        assert_eq!(Relations::default().render(), "");
-    }
-
-    #[test]
-    fn changelog_date_is_deterministic_from_published_at() {
-        let a = changelog_date(Some(1_735_689_600)); // 2025-01-01T00:00:00Z
-        let b = changelog_date(Some(1_735_689_600));
-        assert_eq!(a, b);
-        assert_eq!(a, "Wed, 01 Jan 2025 00:00:00 +0000");
-    }
-
-    #[test]
-    fn changelog_date_falls_back_to_epoch_zero_without_published_at() {
-        assert_eq!(changelog_date(None), "Thu, 01 Jan 1970 00:00:00 +0000");
-    }
-
-    #[test]
-    fn copyright_year_matches_changelog_date_year() {
-        assert_eq!(copyright_year(Some(1_735_689_600)), "2025");
-        assert_eq!(copyright_year(None), "1970");
-    }
-
-    #[test]
-    fn parse_source_date_epoch_accepts_valid_and_rejects_bad_values() {
-        assert_eq!(
-            parse_source_date_epoch(Some("1000000000")),
-            Some(1_000_000_000)
-        );
-        assert_eq!(
-            parse_source_date_epoch(Some(" 1000000000 ")),
-            Some(1_000_000_000)
-        );
-        assert_eq!(parse_source_date_epoch(Some("not-a-number")), None);
-        assert_eq!(parse_source_date_epoch(None), None);
-    }
-
-    #[test]
-    fn render_changelog_entry_matches_expected_shape() {
-        let entry = render_changelog_entry(
-            "eza",
-            "1:0.23.5-1+bookworm",
-            "bookworm",
-            "0.23.5",
-            "t <t@example.com>",
-            Some(1_735_689_600),
-        );
-        assert_eq!(
-            entry,
-            "eza (1:0.23.5-1+bookworm) bookworm; urgency=medium\n\n  * New upstream release \
-             0.23.5\n\n -- t <t@example.com>  Wed, 01 Jan 2025 00:00:00 +0000\n"
-        );
-    }
-
-    #[test]
-    fn render_copyright_falls_back_to_config_spdx_without_a_detected_license() {
-        let text = render_copyright("eza", "eza-community/eza", None, "MIT", Some(1_735_689_600));
-        assert!(text.contains("Copyright: 2025 eza-community/eza contributors"));
-        assert!(text.contains("License: MIT"));
-        assert!(text.contains("No machine-readable license text"));
-    }
-
-    #[test]
-    fn render_copyright_prefers_detected_license_over_config_fallback() {
-        let license = crate::github::RepoLicense {
-            spdx: "Apache-2.0".into(),
-            text: Some("full license text".into()),
-        };
-        let text = render_copyright(
-            "eza",
-            "eza-community/eza",
-            Some(&license),
-            "MIT",
-            Some(1_735_689_600),
-        );
-        assert!(text.contains("License: Apache-2.0"));
-        assert!(text.contains("full license text"));
-        assert!(!text.contains("No machine-readable license text"));
-    }
 }

@@ -91,6 +91,21 @@ runs:
         workspaces: ${{ github.action_path }}
         save-if: ${{ github.ref == 'refs/heads/main' }}
 
+    - name: Compute cache date
+      id: cache-date
+      shell: bash
+      run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+
+    - name: Cache lpt download/API cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cache/lpt/downloads
+          ~/.cache/lpt/api
+        key: lpt-cache-${{ github.repository }}-${{ steps.cache-date.outputs.date }}
+        restore-keys: |
+          lpt-cache-${{ github.repository }}-
+
     - name: Build lpt
       shell: bash
       env:
@@ -132,6 +147,8 @@ runs:
           --output "${{ inputs.output-dir }}" \
           --source \
           --summary \
+          --cache-dir "$HOME/.cache/lpt/downloads" \
+          --api-cache-dir "$HOME/.cache/lpt/api" \
           "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}"
 
         cd "${{ inputs.output-dir }}"

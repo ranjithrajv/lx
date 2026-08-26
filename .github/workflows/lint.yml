@@ -1,0 +1,20 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # -D warnings turns on rustc's dead_code lint (on by default) as a
+      # hard failure, so unused functions/fields/imports block the PR
+      # instead of accumulating behind #[allow(dead_code)].
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings

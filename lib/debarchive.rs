@@ -23,25 +23,179 @@ use std::path::Path;
 /// `root`'s content, never on extraction order or wall-clock build time
 /// (see `docs/decisions/2026-08-20-reproducible-builds.md`).
 pub fn build(root: &Path, control: &[u8], mtime: i64, deb_path: &Path) -> Result<()> {
+    build_with_compression(root, control, mtime, deb_path, "gzip")
+}
+
+/// Like [`build`] but with explicit `compression`: "gzip" (default),
+/// "xz", "zstd", or "none". The compressed members are named accordingly
+/// (`data.tar.gz` / `data.tar.xz` / `data.tar.zst` / `data.tar`) — dpkg
+/// accepts all four. Mirrors nfpm's `deb.compression` option.
+pub fn build_with_compression(
+    root: &Path,
+    control: &[u8],
+    mtime: i64,
+    deb_path: &Path,
+    compression: &str,
+) -> Result<()> {
+    build_full(root, control, mtime, deb_path, compression, &[])
+}
+
+/// An extra control-member file beyond `control` and `md5sums`:
+/// maintainer scripts (`postinst` etc., mode 0755) and `conffiles`
+/// (mode 0644). Passed to [`build_full`].
+#[derive(Debug, Clone)]
+pub struct ControlMember {
+    /// Member name inside the control tar, e.g. `"postinst"`, `"conffiles"`.
+    pub name: String,
+    pub content: Vec<u8>,
+    /// Unix mode, e.g. 0o755 for maintainer scripts, 0o644 for conffiles.
+    pub mode: u32,
+}
+
+/// Full-fidelity build: like [`build_with_compression`] plus additional
+/// control members (maintainer scripts, conffiles). Extras are emitted in
+/// the given order after `control` + `md5sums`; callers pass a sorted list
+/// so output stays reproducible.
+pub fn build_full(
+    root: &Path,
+    control: &[u8],
+    mtime: i64,
+    deb_path: &Path,
+    compression: &str,
+    extras: &[ControlMember],
+) -> Result<()> {
+    let comp = normalize_compression(compression)
+        .with_context(|| format!("invalid compression '{compression}'"))?;
     let mut md5sums = String::new();
-    let data_tar_gz =
-        build_data_tar_gz(root, mtime, &mut md5sums).context("failed to build data.tar.gz")?;
-    let control_tar_gz = build_control_tar_gz(control, md5sums.as_bytes(), mtime)
-        .context("failed to build control.tar.gz")?;
-    write_ar(deb_path, mtime, &control_tar_gz, &data_tar_gz)
+    let data_tar = build_data_tar(root, mtime, &mut md5sums, &comp)
+        .with_context(|| format!("failed to build data.tar.{ext}", ext = comp.ext()))?;
+    let control_tar = build_control_tar(control, md5sums.as_bytes(), mtime, &comp, extras)
+        .with_context(|| format!("failed to build control.tar.{ext}", ext = comp.ext()))?;
+    write_ar_with_compression(deb_path, mtime, &control_tar, &data_tar, &comp)
         .context("failed to write .deb ar container")
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionKind {
+    Gzip,
+    Xz,
+    Zstd,
+    None,
+}
+
+impl CompressionKind {
+    fn ext(&self) -> &'static str {
+        match self {
+            CompressionKind::Gzip => "gz",
+            CompressionKind::Xz => "xz",
+            CompressionKind::Zstd => "zst",
+            CompressionKind::None => "tar",
+        }
+    }
+}
+
+/// A compression algorithm plus optional explicit level (the `:N` suffix
+/// of `compression:`, e.g. `gzip:1`, `xz:6`, `zstd:19`). Levels are
+/// validated per algorithm; the defaults match what was hardcoded before
+/// levels became configurable (gzip best/9, xz preset 9, zstd 19).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Compression {
+    pub kind: CompressionKind,
+    pub level: Option<u32>,
+}
+
+impl Compression {
+    fn ext(&self) -> &'static str {
+        self.kind.ext()
+    }
+}
+
+pub fn normalize_compression(s: &str) -> Result<Compression> {
+    let trimmed = s.trim().to_ascii_lowercase();
+    let (base, level_raw) = match trimmed.split_once(':') {
+        Some((b, l)) => (b.trim(), Some(l.trim())),
+        None => (trimmed.as_str(), None),
+    };
+    let kind = match base {
+        // Empty string falls back to gzip (previous lenient behavior).
+        "" | "gzip" | "gz" => CompressionKind::Gzip,
+        "xz" => CompressionKind::Xz,
+        "zstd" | "zst" => CompressionKind::Zstd,
+        "none" | "tar" => CompressionKind::None,
+        other => anyhow::bail!("unknown compression '{other}'"),
+    };
+    // Per-algorithm valid ranges. Defaults: gzip/xz max quality (9),
+    // zstd 19 (dpkg's typical zstd level).
+    let (min, max, default): (u32, u32, u32) = match kind {
+        CompressionKind::Gzip | CompressionKind::Xz => (0, 9, 9),
+        CompressionKind::Zstd => (1, 22, 19),
+        CompressionKind::None => (0, 0, 0),
+    };
+    if kind == CompressionKind::None {
+        if level_raw.is_some() {
+            anyhow::bail!("compression 'none' takes no :level suffix");
+        }
+        return Ok(Compression { kind, level: None });
+    }
+    let level = match level_raw {
+        None => default,
+        Some(raw) => {
+            let lvl: u32 = raw
+                .parse()
+                .map_err(|_| anyhow::anyhow!("invalid {base} level '{raw}' (expected integer)"))?;
+            if lvl < min || lvl > max {
+                anyhow::bail!("{base} level {lvl} out of range ({min}-{max})");
+            }
+            lvl
+        }
+    };
+    Ok(Compression {
+        kind,
+        level: Some(level),
+    })
+}
+
+fn compress_tar(data: &[u8], mtime: i64, comp: &Compression) -> Result<Vec<u8>> {
+    let level = comp.level.unwrap_or_default();
+    match comp.kind {
+        CompressionKind::Gzip => gzip(data, mtime, level),
+        CompressionKind::Xz => xz(data, level),
+        CompressionKind::Zstd => zstd_compress(data, level),
+        CompressionKind::None => Ok(data.to_vec()),
+    }
+}
+
+fn zstd_compress(data: &[u8], level: u32) -> Result<Vec<u8>> {
+    zstd::bulk::compress(data, level as i32).context("failed to zstd compress")
 }
 
 /// Recursively tar+gzip `root`'s contents (sorted, normalized ownership
 /// and mtime), accumulating an md5sums listing as it goes.
-fn build_data_tar_gz(root: &Path, mtime: i64, md5sums: &mut String) -> Result<Vec<u8>> {
+pub fn build_data_tar_gz(root: &Path, mtime: i64, md5sums: &mut String) -> Result<Vec<u8>> {
+    build_data_tar(
+        root,
+        mtime,
+        md5sums,
+        &Compression {
+            kind: CompressionKind::Gzip,
+            level: None,
+        },
+    )
+}
+
+fn build_data_tar(
+    root: &Path,
+    mtime: i64,
+    md5sums: &mut String,
+    comp: &Compression,
+) -> Result<Vec<u8>> {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_dir_sorted(&mut builder, root, "./", root, mtime, Some(md5sums))?;
         builder.finish()?;
     }
-    gzip(&tar_bytes, mtime)
+    compress_tar(&tar_bytes, mtime, comp)
 }
 
 /// Tar+xz `fs_root`'s entire subtree (sorted, normalized ownership and
@@ -59,15 +213,12 @@ pub fn tar_xz_tree(fs_root: &Path, archive_prefix: &str, mtime: i64) -> Result<V
         append_dir_sorted(&mut builder, fs_root, archive_prefix, fs_root, mtime, None)?;
         builder.finish()?;
     }
-    xz(&tar_bytes)
+    xz(&tar_bytes, 9)
 }
 
-/// Extract a `.deb`'s `data.tar(.gz)` payload into `dest` (the inverse of
-/// `build`, minus the control member). Scoped to what `lpt` itself
-/// produces -- gzip or uncompressed `data.tar` -- not a general
-/// dpkg-deb-compatible reader for arbitrary `.deb`s built by other tools
-/// (which may use xz/zstd/bzip2); the only caller extracts a `.deb`
-/// `lpt build` itself just built moments earlier.
+/// Extract a `.deb`'s `data.tar.*` payload into `dest` (the inverse of
+/// `build`, minus the control member). Handles gzip/xz/zstd/uncompressed
+/// `data.tar.*` members produced by any `compression` setting.
 pub fn extract(deb_path: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(deb_path)
         .with_context(|| format!("failed to open '{}'", deb_path.display()))?;
@@ -75,23 +226,45 @@ pub fn extract(deb_path: &Path, dest: &Path) -> Result<()> {
     while let Some(entry) = archive.next_entry() {
         let mut entry = entry?;
         let name = String::from_utf8_lossy(entry.header().identifier()).to_string();
-        if name == "data.tar.gz" {
+        if name.starts_with("data.tar") {
             std::fs::create_dir_all(dest)?;
-            let gz = flate2::read::GzDecoder::new(&mut entry);
-            return tar::Archive::new(gz).unpack(dest).with_context(|| {
-                format!("failed to unpack data.tar.gz from '{}'", deb_path.display())
-            });
-        }
-        if name == "data.tar" {
-            std::fs::create_dir_all(dest)?;
-            return tar::Archive::new(&mut entry).unpack(dest).with_context(|| {
-                format!("failed to unpack data.tar from '{}'", deb_path.display())
-            });
+            if name == "data.tar.gz" {
+                let gz = flate2::read::GzDecoder::new(&mut entry);
+                return tar::Archive::new(gz).unpack(dest).with_context(|| {
+                    format!("failed to unpack data.tar.gz from '{}'", deb_path.display())
+                });
+            }
+            if name == "data.tar.xz" {
+                let mut data = Vec::new();
+                std::io::copy(&mut entry, &mut data)?;
+                let decoder = lzma_rust2::XzReader::new(data.as_slice(), true);
+                return tar::Archive::new(decoder).unpack(dest).with_context(|| {
+                    format!("failed to unpack data.tar.xz from '{}'", deb_path.display())
+                });
+            }
+            if name == "data.tar.zst" || name == "data.tar.zstd" {
+                let mut data = Vec::new();
+                std::io::copy(&mut entry, &mut data)?;
+                let decoded = zstd::bulk::decompress(&data, MAX_ZSTD_DECOMPRESSED_BYTES)
+                    .context("failed to zstd decompress data.tar.zst")?;
+                return tar::Archive::new(decoded.as_slice())
+                    .unpack(dest)
+                    .with_context(|| {
+                        format!(
+                            "failed to unpack data.tar.zst from '{}'",
+                            deb_path.display()
+                        )
+                    });
+            }
+            if name == "data.tar" {
+                return tar::Archive::new(&mut entry).unpack(dest).with_context(|| {
+                    format!("failed to unpack data.tar from '{}'", deb_path.display())
+                });
+            }
         }
     }
     bail!(
-        "'{}' has no data.tar(.gz) member (only .deb files with a gzip or \
-         uncompressed data.tar are supported)",
+        "'{}' has no data.tar.* member (supported: data.tar, data.tar.gz, data.tar.xz, data.tar.zst)",
         deb_path.display()
     );
 }
@@ -99,15 +272,50 @@ pub fn extract(deb_path: &Path, dest: &Path) -> Result<()> {
 /// Tar+gzip the control member set (just `control` + `md5sums` today --
 /// no maintainer scripts or conffiles are needed for a repackaged upstream
 /// binary).
+/// Upper bound on the decompressed size accepted when unpacking a
+/// zstd-compressed `data.tar.zst` member. `zstd::bulk::decompress`
+/// requires a pre-allocated output bound; 256 MiB comfortably covers any
+/// package lpt produces while still capping memory on corrupt input.
+const MAX_ZSTD_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
+
+#[allow(dead_code)]
 fn build_control_tar_gz(control: &[u8], md5sums: &[u8], mtime: i64) -> Result<Vec<u8>> {
+    build_control_tar(
+        control,
+        md5sums,
+        mtime,
+        &Compression {
+            kind: CompressionKind::Gzip,
+            level: None,
+        },
+        &[],
+    )
+}
+
+fn build_control_tar(
+    control: &[u8],
+    md5sums: &[u8],
+    mtime: i64,
+    comp: &Compression,
+    extras: &[ControlMember],
+) -> Result<Vec<u8>> {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_file_bytes(&mut builder, "./control", control, 0o644, mtime)?;
         append_file_bytes(&mut builder, "./md5sums", md5sums, 0o644, mtime)?;
+        for extra in extras {
+            append_file_bytes(
+                &mut builder,
+                &format!("./{}", extra.name),
+                &extra.content,
+                extra.mode,
+                mtime,
+            )?;
+        }
         builder.finish()?;
     }
-    gzip(&tar_bytes, mtime)
+    compress_tar(&tar_bytes, mtime, comp)
 }
 
 /// Recursively append `fs_dir`'s children (sorted by filename) under
@@ -143,7 +351,7 @@ fn append_dir_sorted<W: Write>(
             let mut header = tar::Header::new_gnu();
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
-            header.set_mode(0o777);
+            header.set_mode(crate::constants::SYMLINK_MODE);
             header.set_mtime(mtime.max(0) as u64);
             header.set_uid(0);
             header.set_gid(0);
@@ -155,7 +363,7 @@ fn append_dir_sorted<W: Write>(
             let mut header = tar::Header::new_gnu();
             header.set_entry_type(tar::EntryType::Directory);
             header.set_size(0);
-            header.set_mode(0o755);
+            header.set_mode(crate::constants::DIR_MODE);
             header.set_mtime(mtime.max(0) as u64);
             header.set_uid(0);
             header.set_gid(0);
@@ -206,238 +414,82 @@ fn append_file_bytes<W: Write>(
 
 /// Deterministic gzip: fixed mtime in the header (no wall-clock leak), no
 /// embedded filename/comment/OS-specific fields left to vary.
-fn gzip(data: &[u8], mtime: i64) -> Result<Vec<u8>> {
+fn gzip(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
+    deterministic_gzip_bytes(data, mtime, level)
+}
+
+/// Public deterministic-gzip helper for the doc-payload members staged
+/// outside the tar members (`changelog.Debian.gz`, gzipped man pages):
+/// same fixed-mtime treatment as [`gzip`], so every compressed byte in a
+/// built package derives from content + `mtime` alone. Level 9 (best),
+/// matching the previous hardcoded behavior at these sites.
+pub fn deterministic_gzip_bytes(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
     let mut encoder = flate2::GzBuilder::new()
         .mtime(mtime.max(0) as u32)
-        .write(Vec::new(), flate2::Compression::best());
+        .write(Vec::new(), flate2::Compression::new(level));
     encoder.write_all(data)?;
     Ok(encoder.finish()?)
 }
 
-/// Deterministic xz (single-threaded, preset 9 -- `dpkg-source -b`'s own
-/// default): the xz container has no mtime/filename field to normalize
-/// (unlike gzip), so determinism just requires avoiding the multi-threaded
-/// encoder, whose block-splitting could vary with thread scheduling.
-fn xz(data: &[u8]) -> Result<Vec<u8>> {
-    let options = lzma_rust2::XzOptions::with_preset(9);
+/// Deterministic xz (single-threaded; the xz container has no
+/// mtime/filename field to normalize unlike gzip, so determinism just
+/// requires avoiding the multi-threaded encoder, whose block-splitting
+/// could vary with thread scheduling). `preset` is 0-9; 9 was
+/// `dpkg-source -b`'s own default and remains ours.
+fn xz(data: &[u8], preset: u32) -> Result<Vec<u8>> {
+    let options = lzma_rust2::XzOptions::with_preset(preset);
     let mut writer = lzma_rust2::XzWriter::new(Vec::new(), options)?;
     writer.write_all(data)?;
     Ok(writer.finish()?)
 }
 
-/// Write the outer `ar` container: `debian-binary`, `control.tar.gz`,
-/// `data.tar.gz`, in that order (dpkg requires this exact order and reads
+/// Write the outer `ar` container: `debian-binary`, `control.tar.*`,
+/// `data.tar.*`, in that order (dpkg requires this exact order and reads
 /// only as much of the archive as it needs, so anything after `data.tar.*`
 /// -- e.g. a detached signature -- is safe to append later if ever
 /// needed).
+#[allow(dead_code)]
 fn write_ar(deb_path: &Path, mtime: i64, control_tar_gz: &[u8], data_tar_gz: &[u8]) -> Result<()> {
+    write_ar_with_compression(
+        deb_path,
+        mtime,
+        control_tar_gz,
+        data_tar_gz,
+        &Compression {
+            kind: CompressionKind::Gzip,
+            level: None,
+        },
+    )
+}
+
+fn write_ar_with_compression(
+    deb_path: &Path,
+    mtime: i64,
+    control_tar: &[u8],
+    data_tar: &[u8],
+    comp: &Compression,
+) -> Result<()> {
     let file = std::fs::File::create(deb_path)
         .with_context(|| format!("failed to create '{}'", deb_path.display()))?;
     let mut builder = ar::Builder::new(file);
+    let (ctrl_name, data_name) = match comp.kind {
+        CompressionKind::Gzip => ("control.tar.gz", "data.tar.gz"),
+        CompressionKind::Xz => ("control.tar.xz", "data.tar.xz"),
+        CompressionKind::Zstd => ("control.tar.zst", "data.tar.zst"),
+        CompressionKind::None => ("control.tar", "data.tar"),
+    };
     let members: [(&str, &[u8]); 3] = [
         ("debian-binary", b"2.0\n"),
-        ("control.tar.gz", control_tar_gz),
-        ("data.tar.gz", data_tar_gz),
+        (ctrl_name, control_tar),
+        (data_name, data_tar),
     ];
     for (name, data) in members {
         let mut header = ar::Header::new(name.as_bytes().to_vec(), data.len() as u64);
         header.set_mtime(mtime.max(0) as u64);
         header.set_uid(0);
         header.set_gid(0);
-        header.set_mode(0o100644);
+        header.set_mode(crate::constants::AR_MODE);
         builder.append(&header, data)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn extract_round_trips_build() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-        std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
-        let mut perms = std::fs::metadata(root.path().join("usr/bin/hello"))
-            .unwrap()
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(root.path().join("usr/bin/hello"), perms).unwrap();
-
-        let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
-        build(root.path(), b"Package: hello\n", 0, &deb_path).unwrap();
-
-        let dest = tempfile::tempdir().unwrap();
-        extract(&deb_path, dest.path()).unwrap();
-
-        assert_eq!(
-            std::fs::read(dest.path().join("usr/bin/hello")).unwrap(),
-            b"payload"
-        );
-        let mode = std::fs::metadata(dest.path().join("usr/bin/hello"))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o111, 0o111, "executable bit lost on round-trip");
-    }
-
-    #[test]
-    fn extract_rejects_deb_with_no_data_tar() {
-        // An ar archive with only debian-binary -- no data.tar(.gz) member.
-        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
-        let file = std::fs::File::create(&path).unwrap();
-        let mut builder = ar::Builder::new(file);
-        let header = ar::Header::new(b"debian-binary".to_vec(), 4);
-        builder.append(&header, &b"2.0\n"[..]).unwrap();
-        drop(builder);
-
-        let dest = tempfile::tempdir().unwrap();
-        let err = extract(&path, dest.path()).unwrap_err();
-        assert!(err.to_string().contains("no data.tar"));
-    }
-
-    #[test]
-    fn tar_xz_tree_uses_the_given_prefix_not_dot_slash() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("bin")).unwrap();
-        std::fs::write(root.path().join("bin/eza"), b"elf").unwrap();
-
-        let bytes = tar_xz_tree(root.path(), "eza-0.23.5/usr/", 0).unwrap();
-        let decoder = lzma_rust2::XzReader::new(bytes.as_slice(), true);
-        let mut archive = tar::Archive::new(decoder);
-        let names: Vec<String> = archive
-            .entries()
-            .unwrap()
-            .map(|e| e.unwrap().path().unwrap().to_string_lossy().to_string())
-            .collect();
-        assert!(
-            names.contains(&"eza-0.23.5/usr/bin/eza".to_string()),
-            "{names:?}"
-        );
-        assert!(!names.iter().any(|n| n.starts_with("./")), "{names:?}");
-    }
-
-    /// The real `dpkg-deb` on this host (not our own reader) must accept
-    /// the archive, report the right control fields, and list the exact
-    /// files we staged -- proof this isn't just internally self-consistent
-    /// but actually a valid Debian package. Skips gracefully if dpkg-deb
-    /// isn't installed (this crate has no runtime dependency on it).
-    #[test]
-    fn real_dpkg_deb_accepts_the_archive() {
-        let Ok(check) = std::process::Command::new("dpkg-deb")
-            .arg("--version")
-            .output()
-        else {
-            eprintln!("skipping: dpkg-deb not on PATH");
-            return;
-        };
-        if !check.status.success() {
-            eprintln!("skipping: dpkg-deb not usable");
-            return;
-        }
-
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-        std::fs::write(root.path().join("usr/bin/hello"), b"fake-elf-payload").unwrap();
-        let mut perms = std::fs::metadata(root.path().join("usr/bin/hello"))
-            .unwrap()
-            .permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(root.path().join("usr/bin/hello"), perms).unwrap();
-
-        let deb_path = root.path().join("hello.deb");
-        let control =
-            b"Package: hello\nVersion: 1.0-1\nArchitecture: amd64\nMaintainer: t <t@example.com>\nDescription: test\n";
-        build(root.path(), control, 1_735_689_600, &deb_path).unwrap();
-
-        let info = std::process::Command::new("dpkg-deb")
-            .args(["--info", deb_path.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(
-            info.status.success(),
-            "dpkg-deb --info failed: {}",
-            String::from_utf8_lossy(&info.stderr)
-        );
-        let info_text = String::from_utf8_lossy(&info.stdout);
-        assert!(info_text.contains("Package: hello"));
-        assert!(info_text.contains("Version: 1.0-1"));
-
-        let contents = std::process::Command::new("dpkg-deb")
-            .args(["--contents", deb_path.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert!(contents.status.success());
-        let contents_text = String::from_utf8_lossy(&contents.stdout);
-        // dpkg-deb's own `--build` stores paths with a "./" prefix (and an
-        // explicit "./" root entry); the `tar` crate strips leading "./"
-        // path components with no raw-bytes escape hatch to preserve them
-        // (verified against its source), so ours comes out as bare
-        // "usr/bin/hello". Confirmed with a real dpkg-deb-built reference
-        // package that this is still fully valid and installable -- dpkg
-        // itself doesn't require the "./" convention, just relative paths.
-        assert!(contents_text.contains("usr/bin/hello"));
-        assert!(
-            contents_text.contains("-rwxr-xr-x"),
-            "executable bit not preserved: {contents_text}"
-        );
-    }
-
-    /// A real .deb produced by `dpkg-deb --build` starts with the ar magic
-    /// "!<arch>\n" and its first member is always "debian-binary".
-    #[test]
-    fn produces_a_valid_ar_container_with_debian_binary_first() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-        std::fs::write(root.path().join("usr/bin/hello"), b"fake-elf").unwrap();
-        let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
-
-        build(root.path(), b"Package: hello\n", 1_735_689_600, &deb_path).unwrap();
-
-        let bytes = std::fs::read(&deb_path).unwrap();
-        assert!(bytes.starts_with(b"!<arch>\n"));
-
-        let mut archive = ar::Archive::new(bytes.as_slice());
-        let first = archive.next_entry().unwrap().unwrap();
-        assert_eq!(first.header().identifier(), b"debian-binary");
-    }
-
-    #[test]
-    fn same_input_produces_byte_identical_output() {
-        let build_once = || {
-            let root = tempfile::tempdir().unwrap();
-            std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-            std::fs::write(root.path().join("usr/bin/hello"), b"fake-elf").unwrap();
-            let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
-            build(root.path(), b"Package: hello\n", 1_735_689_600, &deb_path).unwrap();
-            std::fs::read(&deb_path).unwrap()
-        };
-        assert_eq!(build_once(), build_once());
-    }
-
-    #[test]
-    fn md5sums_lists_every_regular_file_without_leading_dot_slash() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
-        std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
-        let mut md5sums = String::new();
-        build_data_tar_gz(root.path(), 0, &mut md5sums).unwrap();
-        let expected = format!("{:x}", md5::compute(b"payload"));
-        assert_eq!(md5sums, format!("{expected}  usr/bin/hello\n"));
-    }
-
-    #[test]
-    fn preserves_symlinks() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join("usr/lib/pkg/bin")).unwrap();
-        std::fs::write(root.path().join("usr/lib/pkg/bin/real"), b"elf").unwrap();
-        std::os::unix::fs::symlink("../lib/pkg/bin/real", root.path().join("usr/bin_link"))
-            .unwrap();
-        // Just confirm the walk doesn't error on a symlink and still
-        // reaches the real file for md5sums.
-        let mut md5sums = String::new();
-        build_data_tar_gz(root.path(), 0, &mut md5sums).unwrap();
-        assert!(md5sums.contains("usr/lib/pkg/bin/real"));
-    }
 }

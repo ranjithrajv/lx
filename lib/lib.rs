@@ -15,19 +15,67 @@
 //! * [`pkgmeta`] — Debian package metadata rendering (epoch/version,
 //!   reproducible-builds-aware timestamps, changelog/copyright bodies)
 //!   shared by both the binary `.deb` and its source package.
+//! * [`constants`] — centralized hosts, timeouts, TTLs, file modes.
+//! * [`sign`] — post-build artifact signing (gpg detach-sign for `.deb`,
+//!   native embedded PGP for `.rpm`).
+//! * [`archarchive`] — build a `.pkg.tar.zst` (Arch pacman) entirely
+//!   in-process, no `makepkg` required.
+//! * [`gitlab`] — GitLab Releases client mirroring `github`'s surface.
+//! * [`gitea`] — Gitea Releases client (codeberg.org, self-hosted).
+//! * [`forgejo`] — Forgejo Releases client (Codeberg, self-hosted, Gitea-compatible).
+//! * [`bitbucket`] — Bitbucket Cloud downloads as pseudo-releases.
+//! * [`gerrit`] — Gerrit Code Review tags as pseudo-releases.
 //! * [`progress`] — cross-process progress tracking with a TTY-friendly bar.
 //! * [`telemetry`] — best-effort metrics/stage/failure logging.
 //!
-//! Each module is standalone (no dependency on the binary crate) so it can be
-//! lifted into other tools as-is.
+//! Everything the `lpt` binary does lives here too (`build`, `cli`, `config`,
+//! `plugins`, …) — `src/main.rs` is a thin wrapper that just calls
+//! [`cli::run`]. Keeping it all in one crate lets `tests/` exercise the CLI's
+//! internals as ordinary integration tests.
 
+#![recursion_limit = "256"]
+
+// Lets code written against the crate's own public API (originally as an
+// external dependency, back when `src/` was a separate binary crate) keep
+// using `lpt_lib::` qualified paths unchanged after the merge.
+extern crate self as lpt_lib;
+
+pub mod archarchive;
+pub mod bitbucket;
+pub mod build;
 pub mod cache;
 pub mod checksum;
+pub mod cli;
+pub mod config;
+pub mod constants;
 pub mod debarchive;
+pub mod debs;
+pub mod discovery;
 pub mod elfdeps;
+pub mod forgejo;
+pub mod gerrit;
+pub mod gitea;
 pub mod github;
+pub mod gitlab;
+pub mod http;
+pub mod install;
 pub mod lintian;
+pub mod list;
+pub mod manifest;
 pub mod optimize;
 pub mod pkgmeta;
+pub mod plugins;
 pub mod progress;
+pub mod remove;
+pub mod rpmarchive;
+pub mod scandeps;
+pub mod schema;
+pub mod sign;
+pub mod source;
+pub mod source_client;
+pub mod summary;
 pub mod telemetry;
+pub mod update;
+pub mod upgrade;
+pub mod validate;
+pub mod wizard;

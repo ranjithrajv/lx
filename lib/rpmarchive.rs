@@ -1,0 +1,336 @@
+//! Build a `.rpm` archive entirely in-process using the `rpm` crate.
+//!
+//! Mirrors `debarchive.rs`'s philosophy: no `rpmbuild`, no Docker, no
+//! subprocess. The output is a genuine RPM that `rpm -qip` / `dnf` accept.
+
+use anyhow::{bail, Context, Result};
+use std::io::Read;
+use std::path::Path;
+
+/// RPM header tag fields shared by [`build`], [`build_with_options`], and
+/// [`build_srpm`].
+#[derive(Debug, Clone, Copy)]
+pub struct PackageMeta<'a> {
+    pub name: &'a str,
+    pub version: &'a str,
+    pub release: &'a str,
+    pub summary: &'a str,
+    pub description: &'a str,
+    pub license: &'a str,
+}
+
+/// Build an `.rpm` from a staged filesystem tree.
+///
+/// `root` is the staged tree; its contents become the RPM payload
+/// (e.g. `root/usr/bin/foo` becomes `/usr/bin/foo` in the installed system).
+/// `meta` fields map directly to RPM header tags. `mtime` is used as
+/// `source_date` for reproducibility.
+pub fn build(
+    root: &Path,
+    meta: &PackageMeta,
+    arch: &str,
+    mtime: i64,
+    rpm_path: &Path,
+) -> Result<()> {
+    build_with_options(root, meta, arch, mtime, rpm_path, &BuildOptions::default())
+}
+
+/// Optional scriptlets and signing for [`build_with_options`].
+#[derive(Debug, Clone, Default)]
+pub struct BuildOptions<'a> {
+    /// `%pre` scriptlet body (`scripts.preinstall`).
+    pub pre_install: Option<&'a str>,
+    /// `%post` scriptlet body (`scripts.postinstall`).
+    pub post_install: Option<&'a str>,
+    /// `%preun` scriptlet body (`scripts.preremove`).
+    pub pre_uninstall: Option<&'a str>,
+    /// `%postun` scriptlet body (`scripts.postremove`).
+    pub post_uninstall: Option<&'a str>,
+    /// When set, an armored secret key is loaded natively and the PGP
+    /// signature is embedded in the RPM header (`rpm -K` verifiable).
+    pub sign_key_file: Option<&'a Path>,
+    /// Passphrase for the signing key, if any.
+    pub sign_passphrase: Option<&'a str>,
+}
+
+/// Like [`build`] plus scriptlets (`%pre`/`%post`/`%preun`/`%postun`) and
+/// optional native embedded PGP signing.
+pub fn build_with_options(
+    root: &Path,
+    meta: &PackageMeta,
+    arch: &str,
+    mtime: i64,
+    rpm_path: &Path,
+    opts: &BuildOptions,
+) -> Result<()> {
+    let rpm_arch = to_rpm_arch(arch);
+
+    let mut builder = rpm::PackageBuilder::new(
+        meta.name,
+        meta.version,
+        meta.license,
+        rpm_arch,
+        meta.summary,
+    )
+    .description(meta.description)
+    .release(meta.release)
+    .source_date(mtime.max(0) as u32);
+
+    if let Some(s) = opts.pre_install.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_install_script(s);
+    }
+    if let Some(s) = opts.post_install.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_install_script(s);
+    }
+    if let Some(s) = opts.pre_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_uninstall_script(s);
+    }
+    if let Some(s) = opts.post_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_uninstall_script(s);
+    }
+
+    // Walk staged tree in sorted order for reproducibility, adding each
+    // regular file and symlink as an RPM file entry.
+    // We need a temp empty file for symlink entries (rpm crate reads a real
+    // file; for symlinks the content is irrelevant and the link target is
+    // stored in the header).
+    let empty_file = tempfile::NamedTempFile::new()?;
+    std::fs::write(empty_file.path(), b"")?;
+
+    add_dir_recursive(root, root, &mut builder, empty_file.path())?;
+
+    // Sign during the same build pass when configured — `build_and_sign`
+    // embeds the PGP signature header before anything is written.
+    let signer;
+    if let Some(key_file) = opts.sign_key_file {
+        let key_bytes = crate::sign::SignRequest {
+            key_file,
+            key_id: "",
+            passphrase: opts.sign_passphrase,
+        }
+        .key_bytes()?;
+        let mut s = rpm::signature::pgp::Signer::load_from_asc_bytes(&key_bytes)
+            .context("failed to load RPM signing key")?;
+        if let Some(pass) = opts.sign_passphrase.filter(|p| !p.is_empty()) {
+            s = s.with_key_passphrase(pass);
+        }
+        signer = Some(s);
+    } else {
+        signer = None;
+    }
+
+    let pkg = match &signer {
+        Some(s) => builder
+            .build_and_sign(s.clone())
+            .context("failed to build+sign rpm package")?,
+        None => builder.build().context("failed to build rpm package")?,
+    };
+
+    let mut out = std::fs::File::create(rpm_path)
+        .with_context(|| format!("failed to create '{}'", rpm_path.display()))?;
+    pkg.write(&mut out).context("failed to write .rpm")?;
+    Ok(())
+}
+
+fn add_dir_recursive(
+    original_root: &Path,
+    dir: &Path,
+    builder: &mut rpm::PackageBuilder,
+    empty_file: &Path,
+) -> Result<()> {
+    let mut entries: Vec<_> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read '{}'", dir.display()))?
+        .collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|e| e.file_name());
+
+    for entry in entries {
+        let fs_path = entry.path();
+        let rel = fs_path
+            .strip_prefix(original_root)
+            .expect("walked path must be under original_root");
+        // RPM payload paths are absolute (e.g. /usr/bin/foo)
+        let rpm_path = format!("/{}", rel.to_string_lossy());
+
+        let ft = entry.file_type()?;
+        if ft.is_symlink() {
+            let target = std::fs::read_link(&fs_path)?;
+            // rpm expects symlink target via FileOptions::symlink and a dummy
+            // source file. Mode includes symlink type bits (0o120777).
+            let opts = rpm::FileOptions::new(rpm_path)
+                .symlink(target.to_string_lossy().to_string())
+                .mode(0o120777i32);
+            // Use empty file as source; content is ignored for symlink.
+            let b = std::mem::replace(builder, rpm::PackageBuilder::new("", "", "", "", ""));
+            let nb = b
+                .with_file(empty_file, opts)
+                .context("failed to add symlink")?;
+            *builder = nb;
+        } else if ft.is_dir() {
+            // RPM implicitly creates directories for files; we recurse but do
+            // not add empty directory entries themselves.
+            add_dir_recursive(original_root, &fs_path, builder, empty_file)?;
+        } else if ft.is_file() {
+            // Inherit mode from source file; rpm crate will read it if we
+            // don't override, but we set explicitly for determinism.
+            #[cfg(unix)]
+            let mode = {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::metadata(&fs_path)?.permissions().mode() & 0o777
+            };
+            #[cfg(not(unix))]
+            let mode = 0o644u32;
+
+            // FileMode expects full mode with type bits; regular file is 0o100000 + perms.
+            let file_mode = 0o100000 | mode;
+            let opts = rpm::FileOptions::new(rpm_path).mode(file_mode as i32);
+            let b = std::mem::replace(builder, rpm::PackageBuilder::new("", "", "", "", ""));
+            let nb = b
+                .with_file(&fs_path, opts)
+                .with_context(|| format!("failed to add file '{}'", fs_path.display()))?;
+            *builder = nb;
+        }
+    }
+    Ok(())
+}
+
+/// Map Debian architecture names to RPM architecture names.
+pub fn to_rpm_arch(debian_arch: &str) -> &'static str {
+    crate::constants::to_rpm_arch(debian_arch)
+}
+
+/// Build a source RPM (`.src.rpm`): a spec file plus one source tarball,
+/// stored flat (no installed paths) with `arch = "src"`. Unlike [`build`],
+/// there is no staged filesystem tree to walk -- the two members are given
+/// directly as bytes.
+pub fn build_srpm(
+    meta: &PackageMeta,
+    spec: (&str, &[u8]),
+    source: (&str, &[u8]),
+    mtime: i64,
+    srpm_path: &Path,
+) -> Result<()> {
+    let (spec_name, spec_bytes) = spec;
+    let (source_name, source_bytes) = source;
+    let builder =
+        rpm::PackageBuilder::new(meta.name, meta.version, meta.license, "src", meta.summary)
+            .description(meta.description)
+            .release(meta.release)
+            .source_date(mtime.max(0) as u32);
+
+    let empty_dir = tempfile::tempdir()?;
+    let spec_path = empty_dir.path().join(spec_name);
+    std::fs::write(&spec_path, spec_bytes)?;
+    let source_path = empty_dir.path().join(source_name);
+    std::fs::write(&source_path, source_bytes)?;
+
+    let builder = builder
+        .with_file(
+            &spec_path,
+            rpm::FileOptions::new(format!("./{spec_name}")).mode(0o100644i32),
+        )
+        .context("failed to add spec file to srpm")?
+        .with_file(
+            &source_path,
+            rpm::FileOptions::new(format!("./{source_name}")).mode(0o100644i32),
+        )
+        .context("failed to add source tarball to srpm")?;
+
+    let pkg = builder.build().context("failed to build srpm")?;
+    let mut out = std::fs::File::create(srpm_path)
+        .with_context(|| format!("failed to create '{}'", srpm_path.display()))?;
+    pkg.write(&mut out).context("failed to write .src.rpm")?;
+    Ok(())
+}
+
+/// Extract an `.rpm`'s cpio payload into `dest` (the inverse of [`build`]).
+/// Reconstructs regular files, directories, and symlinks (whose targets
+/// live in the `RPMTAG_FILELINKTOS` header entry, not the cpio payload --
+/// see `add_dir_recursive`'s symlink handling above).
+pub fn extract(rpm_path: &Path, dest: &Path) -> Result<()> {
+    let pkg = rpm::Package::open(rpm_path)
+        .with_context(|| format!("failed to open '{}'", rpm_path.display()))?;
+
+    let linkto: std::collections::HashMap<String, String> = pkg
+        .metadata
+        .get_file_entries()
+        .context("failed to read rpm file entries")?
+        .into_iter()
+        .map(|e| (e.path.to_string_lossy().to_string(), e.linkto))
+        .collect();
+
+    let compressor = pkg
+        .metadata
+        .get_payload_compressor()
+        .unwrap_or(rpm::CompressionType::None);
+    let payload = decompress_payload(&pkg.content, compressor)?;
+
+    std::fs::create_dir_all(dest)?;
+    let mut cursor: &[u8] = &payload;
+    loop {
+        let reader = cpio::newc::Reader::new(cursor).context("failed to read cpio entry header")?;
+        let entry = reader.entry().clone();
+        if entry.is_trailer() {
+            break;
+        }
+        let name = entry.name().trim_start_matches("./").to_string();
+        let out_path = dest.join(&name);
+        let file_type = entry.mode() & 0o170000;
+
+        if file_type == 0o040000 {
+            std::fs::create_dir_all(&out_path)?;
+            cursor = reader
+                .to_writer(std::io::sink())
+                .context("failed to skip cpio directory entry")?;
+        } else if file_type == 0o120000 {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let abs_name = format!("/{name}");
+            let target = linkto.get(&abs_name).cloned().unwrap_or_default();
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(&target, &out_path)
+                .with_context(|| format!("failed to symlink '{}'", out_path.display()))?;
+            cursor = reader
+                .to_writer(std::io::sink())
+                .context("failed to skip cpio symlink entry")?;
+        } else {
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let mut f = std::fs::File::create(&out_path)
+                .with_context(|| format!("failed to create '{}'", out_path.display()))?;
+            cursor = reader
+                .to_writer(&mut f)
+                .with_context(|| format!("failed to extract '{}'", out_path.display()))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(
+                    &out_path,
+                    std::fs::Permissions::from_mode(entry.mode() & 0o7777),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn decompress_payload(content: &[u8], compressor: rpm::CompressionType) -> Result<Vec<u8>> {
+    match compressor {
+        rpm::CompressionType::None => Ok(content.to_vec()),
+        rpm::CompressionType::Gzip => {
+            let mut out = Vec::new();
+            flate2::read::GzDecoder::new(content).read_to_end(&mut out)?;
+            Ok(out)
+        }
+        rpm::CompressionType::Zstd => {
+            zstd::stream::decode_all(content).context("failed to zstd-decode rpm payload")
+        }
+        rpm::CompressionType::Xz => {
+            let mut out = Vec::new();
+            lzma_rust2::XzReader::new(content, true).read_to_end(&mut out)?;
+            Ok(out)
+        }
+        other => bail!("unsupported rpm payload compressor: {other:?}"),
+    }
+}

@@ -64,6 +64,14 @@ patterns:
 lpt init
 ```
 
+Or start from one of the bundled debian-multiarch-builder templates:
+
+```sh
+lpt init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
+```
+
+(An unknown name lists all of them; see [`templates/README.md`](templates/README.md).)
+
 ## Commands
 
 | Command | Purpose |
@@ -140,7 +148,7 @@ description: "A modern replacement for ls"
 maintainer: "Jane Doe <jane@example.com>"
 license_spdx: MIT           # falls back to the upstream repo's detected license
 
-debian_distributions: [bookworm, trixie, forky, sid]   # default: all four
+debian_distributions: [bookworm, trixie, forky, sid]   # default: all five suites
 
 binary_path: ""              # path to the binary within the extracted archive
 binary_rename: ""            # rename the single installed binary to this name
@@ -157,6 +165,25 @@ version: ""                   # pin a specific upstream version (else: latest)
 build_version: "1"            # Debian revision
 epoch: ""                     # e.g. "1" -- for upstream version-numbering resets
 ```
+
+**Legacy debian-multiarch-builder configs load as-is.** Every key the bash
+action's templates and zero-config wizard emitted is accepted and folded
+into its modern equivalent — `summary:` → `description`, `license:` →
+`license_spdx`, `vendor:` → a `Vendor` control field,
+`dependencies:` (list) → `depends`, and `download_pattern:` +
+`architecture_map:` expanded into per-arch `release_pattern`s when no
+modern `architectures:` block is present (`{version}`/`{arch}`/
+`{package_name}` placeholders supported). Modern keys win whenever both are
+set. The documented-but-unimplemented upstream knobs are real here too:
+`distribution_arch_overrides` replaces the built-in arch/suite matrix for a
+named architecture, and package.yaml-level `max_parallel` /
+`parallel_builds: false` set parallelism defaults that an explicit
+`--max-parallel` always beats.
+
+**Expired suites drop out automatically**, mirroring the action's
+`filter_expired_distributions`: once Debian's LTS support for a suite ends
+(bullseye: 2026-08-31), it stops being built even if listed — by config
+default or explicit `--distributions` alike.
 
 **`architectures:`** — omit entirely for full auto-discovery across every
 supported architecture. Two explicit forms:

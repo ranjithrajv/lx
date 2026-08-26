@@ -50,12 +50,7 @@ impl GitHubClient {
             })
             .map_err(|e: anyhow::Error| e)?;
 
-        let http = reqwest::blocking::Client::builder()
-            .user_agent("lpt/0.1 (latest package tool)")
-            .connect_timeout(std::time::Duration::from_secs(30))
-            .timeout(std::time::Duration::from_secs(300))
-            .build()
-            .context("failed to build HTTP client")?;
+        let http = crate::http::new_client()?;
 
         Ok(Self {
             crab: Arc::new(crab),
@@ -118,47 +113,14 @@ impl GitHubClient {
         }
     }
 
-    /// List all releases (for auto-discovery across recent versions).
-    #[allow(dead_code)] // used by discover --versions
-    pub fn list_releases(&self, owner: &str, repo: &str, per_page: usize) -> Result<Vec<Release>> {
-        let crab = Arc::clone(&self.crab);
-        let (o, r) = (owner.to_string(), repo.to_string());
-        self.api_cache(&format!("list_{o}_{r}_{per_page}"), || {
-            let crab = Arc::clone(&crab);
-            let (o, r) = (o.clone(), r.clone());
-            let page = self.block(async move {
-                crab.repos(&o, &r)
-                    .releases()
-                    .list()
-                    .per_page(per_page.min(100) as u8)
-                    .send()
-                    .await
-            })?;
-            Ok(page.items.into_iter().map(Into::into).collect())
-        })
-    }
-
     /// Raw (non-JSON) GET for streaming a download, returning a readable body.
-    pub fn raw_get(&self, url: &str) -> Result<impl std::io::Read> {
-        let resp = self
-            .http
-            .get(url)
-            .send()
+    pub fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+        let resp = crate::http::send_get_with_retry(&self.http, url, None)
             .with_context(|| format!("GET {url} failed"))?;
         if !resp.status().is_success() {
             return Err(anyhow!("HTTP {} for {url}", resp.status()));
         }
-        Ok(resp)
-    }
-
-    /// Get the git ref of the repository default branch (used for
-    /// zero-config discovery).
-    #[allow(dead_code)] // reserved for zero-config / --ad parity
-    pub fn repo_default_branch(&self, owner: &str, repo: &str) -> Result<String> {
-        let crab = Arc::clone(&self.crab);
-        let repo = self.block(async move { crab.repos(owner, repo).get().await })?;
-        repo.default_branch
-            .ok_or_else(|| anyhow!("repository has no default branch"))
+        Ok(Box::new(resp))
     }
 
     /// Fetch the repo's license metadata (SPDX id + full license text),
@@ -169,7 +131,8 @@ impl GitHubClient {
         let (o, r) = (owner.to_string(), repo.to_string());
         let key = format!("license_{o}_{r}");
         // Cache the Some case only (a 404 is cheap and is the common miss).
-        if let Some(cached) = self.api_cache_get(&key)? {
+        let cache = crate::cache::ApiCache::new(self.api_cache_dir.clone());
+        if let Some(cached) = cache.get::<RepoLicense>(&key)? {
             return Ok(Some(cached));
         }
         let content = match self.block(async move { crab.repos(&o, &r).license().await }) {
@@ -186,7 +149,7 @@ impl GitHubClient {
                 .unwrap_or_else(|| "NOASSERTION".to_string()),
             text: content.decoded_content(),
         };
-        self.api_cache_put(&key, &lic)?;
+        cache.put(&key, &lic)?;
         Ok(Some(lic))
     }
 
@@ -196,58 +159,7 @@ impl GitHubClient {
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Clone,
     {
-        if let Some(hit) = self.api_cache_get(key)? {
-            return Ok(hit);
-        }
-        let value = fetch()?;
-        self.api_cache_put(key, &value)?;
-        Ok(value)
-    }
-
-    /// Read a cached value if present and fresh (<300s), else None.
-    fn api_cache_get<T>(&self, key: &str) -> Result<Option<T>>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let Some(dir) = &self.api_cache_dir else {
-            return Ok(None);
-        };
-        let path = dir.join(format!("{key}.json"));
-        let Ok(meta) = std::fs::metadata(&path) else {
-            return Ok(None);
-        };
-        let Ok(modified) = meta.modified() else {
-            return Ok(None);
-        };
-        let age = std::time::SystemTime::now()
-            .duration_since(modified)
-            .unwrap_or_default();
-        if age > std::time::Duration::from_secs(300) {
-            return Ok(None);
-        }
-        let text = match std::fs::read_to_string(&path) {
-            Ok(t) => t,
-            Err(_) => return Ok(None),
-        };
-        match serde_json::from_str(&text) {
-            Ok(v) => Ok(Some(v)),
-            Err(_) => Ok(None),
-        }
-    }
-
-    /// Write a value to the API cache (best-effort; a full cache dir is not
-    /// fatal).
-    fn api_cache_put<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
-        let Some(dir) = &self.api_cache_dir else {
-            return Ok(());
-        };
-        let _ = std::fs::create_dir_all(dir);
-        let json = serde_json::to_string(value)?;
-        let path = dir.join(format!("{key}.json"));
-        let tmp = dir.join(format!("{key}.json.tmp"));
-        let _ = std::fs::write(&tmp, json);
-        let _ = std::fs::rename(&tmp, &path);
-        Ok(())
+        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
 
     /// List the repository root (for the dual-license detection used to
@@ -302,6 +214,258 @@ impl GitHubClient {
     }
 }
 
+/// GitHub client using plain blocking `reqwest` against the REST API
+/// directly — no octocrab, no tokio runtime. Second option alongside
+/// [`GitHubClient`] for callers that don't want an async runtime pulled in
+/// just to talk to GitHub; mirrors [`crate::gitlab::GitlabClient`]'s shape.
+pub struct GitHubSyncClient {
+    http: reqwest::blocking::Client,
+    base_url: String,
+    token: Option<String>,
+    api_cache_dir: Option<std::path::PathBuf>,
+}
+
+impl GitHubSyncClient {
+    pub fn new(token: Option<String>) -> Result<Self> {
+        Self::with_cache(token, None)
+    }
+
+    pub fn with_cache(
+        token: Option<String>,
+        cache_dir: Option<std::path::PathBuf>,
+    ) -> Result<Self> {
+        let http = crate::http::new_client()?;
+        let base_url = std::env::var("GITHUB_API_URL")
+            .unwrap_or_else(|_| crate::constants::DEFAULT_GITHUB_API_URL.to_string());
+        let token = token.or_else(|| std::env::var("GITHUB_TOKEN").ok());
+
+        Ok(Self {
+            http,
+            base_url: base_url.trim_end_matches('/').to_string(),
+            token,
+            api_cache_dir: cache_dir,
+        })
+    }
+
+    fn auth_header(&self) -> Option<(&'static str, String)> {
+        self.token
+            .as_deref()
+            .map(|t| ("Authorization", format!("Bearer {t}")))
+    }
+
+    fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
+        let mut headers = vec![("Accept", "application/vnd.github+json".to_string())];
+        headers.extend(self.auth_header());
+        let resp = crate::http::send_get_with_retry_headers(&self.http, url, &headers)
+            .with_context(|| format!("GET {url} failed"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().unwrap_or_default();
+            return Err(match status.as_u16() {
+                404 => anyhow!("not found on GitHub: {body}"),
+                403 => {
+                    anyhow!("GitHub API rate limit hit (403). Set GITHUB_TOKEN to raise the limit.")
+                }
+                _ => anyhow!("GitHub API {status} for {url}: {body}"),
+            });
+        }
+        resp.json::<T>()
+            .with_context(|| format!("failed to parse JSON from {url}"))
+    }
+
+    pub fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+        let resp = crate::http::send_get_with_retry(&self.http, url, self.auth_header())
+            .with_context(|| format!("GET {url} failed"))?;
+        if !resp.status().is_success() {
+            return Err(anyhow!("HTTP {} for {url}", resp.status()));
+        }
+        Ok(Box::new(resp))
+    }
+
+    pub fn release_by_tag(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
+        self.api_cache(&format!("release_{owner}_{repo}_{tag}"), || {
+            let url = format!("{}/repos/{owner}/{repo}/releases/tags/{tag}", self.base_url);
+            self.get_json::<GitHubReleaseRaw>(&url).map(Into::into)
+        })
+    }
+
+    pub fn latest_release(&self, owner: &str, repo: &str) -> Result<Release> {
+        self.api_cache(&format!("latest_{owner}_{repo}"), || {
+            let url = format!("{}/repos/{owner}/{repo}/releases/latest", self.base_url);
+            self.get_json::<GitHubReleaseRaw>(&url).map(Into::into)
+        })
+    }
+
+    pub fn release(&self, owner: &str, repo: &str, tag_or_version: &str) -> Result<Release> {
+        match self.release_by_tag(owner, repo, tag_or_version) {
+            Ok(r) => Ok(r),
+            Err(_) => self.latest_release(owner, repo),
+        }
+    }
+
+    pub fn releases(&self, owner: &str, repo: &str, per_page: u8) -> Result<Vec<ReleaseMeta>> {
+        let url = format!(
+            "{}/repos/{owner}/{repo}/releases?per_page={per_page}",
+            self.base_url
+        );
+        let raws: Vec<GitHubReleaseRaw> = self.get_json(&url)?;
+        Ok(raws
+            .into_iter()
+            .map(|r| ReleaseMeta {
+                tag: r.tag_name,
+                published_at: r.published_at,
+            })
+            .collect())
+    }
+
+    pub fn repo_license(&self, owner: &str, repo: &str) -> Result<Option<RepoLicense>> {
+        let key = format!("license_{owner}_{repo}");
+        let cache = crate::cache::ApiCache::new(self.api_cache_dir.clone());
+        if let Some(cached) = cache.get::<RepoLicense>(&key)? {
+            return Ok(Some(cached));
+        }
+        let url = format!("{}/repos/{owner}/{repo}/license", self.base_url);
+        let raw: GitHubLicenseRaw = match self.get_json(&url) {
+            Ok(r) => r,
+            Err(e) if e.to_string().contains("not found") => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let lic = RepoLicense {
+            spdx: raw
+                .license
+                .and_then(|l| l.spdx_id)
+                .filter(|s| !s.is_empty() && s != "NOASSERTION")
+                .unwrap_or_else(|| "NOASSERTION".to_string()),
+            text: decode_content(raw.content.as_deref(), raw.encoding.as_deref()),
+        };
+        cache.put(&key, &lic)?;
+        Ok(Some(lic))
+    }
+
+    pub fn repo_root(&self, owner: &str, repo: &str) -> Result<Vec<String>> {
+        let url = format!("{}/repos/{owner}/{repo}/contents", self.base_url);
+        let items: Vec<GitHubContentRaw> = self.get_json(&url)?;
+        Ok(items.into_iter().map(|c| c.name).collect())
+    }
+
+    pub fn repo_file_text(&self, owner: &str, repo: &str, path: &str) -> Result<Option<String>> {
+        let url = format!("{}/repos/{owner}/{repo}/contents/{path}", self.base_url);
+        match self.get_json::<GitHubContentRaw>(&url) {
+            Ok(c) => Ok(decode_content(c.content.as_deref(), c.encoding.as_deref())),
+            Err(e) if e.to_string().contains("not found") => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
+    {
+        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
+    }
+}
+
+pub fn decode_content(content: Option<&str>, encoding: Option<&str>) -> Option<String> {
+    use base64::Engine as _;
+    if encoding? != "base64" {
+        return None;
+    }
+    let cleaned: String = content?.chars().filter(|c| !c.is_whitespace()).collect();
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(cleaned)
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GitHubReleaseRaw {
+    pub tag_name: String,
+    #[serde(default)]
+    pub prerelease: bool,
+    #[serde(default)]
+    pub draft: bool,
+    pub html_url: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<GitHubAssetRaw>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct GitHubAssetRaw {
+    pub name: String,
+    #[serde(default)]
+    pub size: Option<u64>,
+    pub browser_download_url: String,
+}
+
+impl From<GitHubReleaseRaw> for Release {
+    fn from(r: GitHubReleaseRaw) -> Self {
+        Self {
+            tag_name: r.tag_name,
+            prerelease: r.prerelease,
+            draft: r.draft,
+            html_url: r.html_url,
+            assets: r
+                .assets
+                .into_iter()
+                .map(|a| Asset {
+                    name: a.name,
+                    size: a.size,
+                    browser_download_url: a.browser_download_url,
+                })
+                .collect(),
+            // GitHub reports RFC3339; reuse gitlab.rs's generic ISO8601 parser.
+            published_at: r
+                .published_at
+                .as_deref()
+                .and_then(crate::gitlab::parse_gitlab_time),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct GitHubContentRaw {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct GitHubLicenseRaw {
+    #[serde(default)]
+    license: Option<GitHubLicenseIdRaw>,
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    encoding: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+struct GitHubLicenseIdRaw {
+    #[serde(default)]
+    spdx_id: Option<String>,
+}
+
+/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+impl crate::source_client::ClientNew for GitHubSyncClient {
+    fn with_cache(
+        token: Option<String>,
+        cache_dir: Option<std::path::PathBuf>,
+    ) -> anyhow::Result<Self> {
+        Self::with_cache(token, cache_dir)
+    }
+}
+
+impl crate::checksum::RawGetter for GitHubSyncClient {
+    fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+        GitHubSyncClient::raw_get(self, url)
+    }
+}
+
 /// Minimal release metadata for suggestions.
 #[derive(Debug, Clone)]
 pub struct ReleaseMeta {
@@ -320,8 +484,6 @@ pub struct RepoLicense {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Release {
     pub tag_name: String,
-    #[allow(dead_code)] // surfaced in --full discovery output
-    pub name: Option<String>,
     pub prerelease: bool,
     pub draft: bool,
     pub html_url: String,
@@ -338,7 +500,6 @@ impl From<octocrab::models::repos::Release> for Release {
     fn from(r: octocrab::models::repos::Release) -> Self {
         Self {
             tag_name: r.tag_name,
-            name: r.name,
             prerelease: r.prerelease,
             draft: r.draft,
             html_url: r.html_url.to_string(),
@@ -366,81 +527,18 @@ impl From<octocrab::models::repos::Asset> for Asset {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn converts_octocrab_release() {
-        let json = r#"{
-            "url": "https://api.github.com/repos/eza-community/eza/releases/1",
-            "html_url": "https://github.com/eza-community/eza/releases/tag/v0.24.0",
-            "assets_url": "https://api.github.com/repos/eza-community/eza/releases/1/assets",
-            "upload_url": "https://uploads.github.com/...",
-            "tarball_url": null,
-            "zipball_url": null,
-            "id": 1,
-            "node_id": "RE_1",
-            "tag_name": "v0.24.0",
-            "target_commitish": "main",
-            "name": "eza v0.24.0",
-            "body": null,
-            "draft": false,
-            "prerelease": false,
-            "created_at": "2025-01-01T00:00:00Z",
-            "published_at": "2025-01-01T00:00:00Z",
-            "assets": [
-                {
-                    "url": "https://api.github.com/.../assets/10",
-                    "browser_download_url": "https://github.com/.../eza_x86_64-unknown-linux-gnu.tar.gz",
-                    "id": 10,
-                    "node_id": "RA_10",
-                    "name": "eza_x86_64-unknown-linux-gnu.tar.gz",
-                    "label": null,
-                    "state": "uploaded",
-                    "content_type": "application/gzip",
-                    "size": 123,
-                    "download_count": 5,
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2025-01-01T00:00:00Z"
-                }
-            ]
-        }"#;
-        let octo: octocrab::models::repos::Release = serde_json::from_str(json).unwrap();
-        let r: Release = octo.into();
-        assert_eq!(r.tag_name, "v0.24.0");
-        assert_eq!(r.assets.len(), 1);
-        assert_eq!(r.assets[0].name, "eza_x86_64-unknown-linux-gnu.tar.gz");
-        assert_eq!(r.assets[0].size, Some(123));
-        assert_eq!(r.published_at, Some(1_735_689_600)); // 2025-01-01T00:00:00Z
-        assert!(!r.prerelease);
-        assert!(!r.draft);
+/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+impl crate::source_client::ClientNew for GitHubClient {
+    fn with_cache(
+        token: Option<String>,
+        cache_dir: Option<std::path::PathBuf>,
+    ) -> anyhow::Result<Self> {
+        Self::with_cache(token, cache_dir)
     }
+}
 
-    #[test]
-    fn release_from_octocrab_maps_prerelease_and_draft() {
-        let json = r#"{
-            "url": "https://api.github.com/repos/eza-community/eza/releases/2",
-            "html_url": "https://github.com/eza-community/eza/releases/tag/v0.25.0-rc1",
-            "assets_url": "https://api.github.com/repos/eza-community/eza/releases/2/assets",
-            "upload_url": "https://uploads.github.com/...",
-            "tarball_url": null,
-            "zipball_url": null,
-            "id": 2,
-            "node_id": "RE_2",
-            "tag_name": "v0.25.0-rc1",
-            "target_commitish": "main",
-            "name": "eza v0.25.0-rc1",
-            "body": null,
-            "draft": true,
-            "prerelease": true,
-            "created_at": "2025-01-01T00:00:00Z",
-            "published_at": null,
-            "assets": []
-        }"#;
-        let octo: octocrab::models::repos::Release = serde_json::from_str(json).unwrap();
-        let r: Release = octo.into();
-        assert!(r.prerelease);
-        assert!(r.draft);
+impl crate::checksum::RawGetter for GitHubClient {
+    fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
+        GitHubClient::raw_get(self, url)
     }
 }

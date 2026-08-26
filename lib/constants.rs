@@ -1,0 +1,183 @@
+//! Centralized constants for `lpt` — hosts, timeouts, TTLs, file modes.
+//! Single source of truth for values previously duplicated across `lib/` and `src/`.
+
+/// Default VCS hosts
+pub const DEFAULT_GITHUB_HOST: &str = "github.com";
+pub const DEFAULT_GITLAB_HOST: &str = "gitlab.com";
+pub const DEFAULT_GITEA_HOST: &str = "codeberg.org";
+pub const DEFAULT_FORGEJO_HOST: &str = "codeberg.org";
+pub const DEFAULT_BITBUCKET_HOST: &str = "bitbucket.org";
+pub const DEFAULT_GERRIT_HOST: &str = "review.gerrithub.io";
+
+/// Default API base URLs
+pub const DEFAULT_GITHUB_API_URL: &str = "https://api.github.com";
+pub const DEFAULT_GITLAB_API_URL: &str = "https://gitlab.com/api/v4";
+pub const DEFAULT_GITEA_API_URL: &str = "https://codeberg.org/api/v1";
+pub const DEFAULT_FORGEJO_API_URL: &str = "https://codeberg.org/api/v1";
+pub const DEFAULT_BITBUCKET_API_URL: &str = "https://api.bitbucket.org/2.0";
+pub const DEFAULT_GERRIT_API_URL: &str = "https://review.gerrithub.io/a";
+
+/// Registry org for `lpt install`'s `latest-debs` workflow
+pub const LATEST_DEBS_ORG: &str = "latest-debs";
+
+/// User-Agent for all HTTP clients. Version tracked to the crate version
+/// so bumps don't leave a stale UA string behind.
+pub const USER_AGENT: &str = concat!("lpt/", env!("CARGO_PKG_VERSION"), " (latest package tool)");
+
+/// Default filename for a package definition, used as the clap default on
+/// every subcommand that takes a config path.
+pub const DEFAULT_CONFIG_FILENAME: &str = "package.yaml";
+
+/// Env var overriding [`DEFAULT_MAINTAINER`] when `maintainer:` is unset —
+/// lets downstream users of lpt attribute packages to themselves instead
+/// of the latest-debs org.
+pub const MAINTAINER_ENV_VAR: &str = "LPT_MAINTAINER";
+
+/// Cache TTLs (action parity)
+pub const DOWNLOAD_CACHE_TTL_SECS: u64 = 86_400; // 24h
+pub const API_CACHE_TTL_SECS: u64 = 300; // 5min
+
+/// HTTP timeouts
+pub const CONNECT_TIMEOUT_SECS: u64 = 30;
+pub const READ_TIMEOUT_SECS: u64 = 300;
+
+/// Debian suites known to the tool. Mirrors the action's
+/// `(.debian_distributions // ["bullseye", "bookworm", "trixie", "forky", "sid"])`
+/// default.
+pub const DEFAULT_DEBIAN_DISTRIBUTIONS: &[&str] =
+    &["bullseye", "bookworm", "trixie", "forky", "sid"];
+
+/// Suite -> LTS support end (YYYY-MM-DD), mirroring the action's
+/// system.yaml `distributions.details.<suite>.lts_support_ends` and its
+/// `filter_expired_distributions`: once Debian drops a suite, lpt stops
+/// building for it even if a package.yaml still lists it. Suites absent
+/// here (forky, sid) have no fixed end date and always pass.
+pub const DISTRIBUTION_LTS_ENDS: &[(&str, &str)] = &[
+    ("bullseye", "2026-08-31"),
+    ("bookworm", "2028-06-30"),
+    ("trixie", "2030-06-30"),
+];
+
+/// RPM-based distros
+pub const DEFAULT_RPM_DISTRIBUTIONS: &[&str] = &["fedora", "el9", "el8", "opensuse"];
+
+/// Arch rolling
+pub const DEFAULT_ARCH_DISTRIBUTIONS: &[&str] = &["arch"];
+
+/// All Debian architectures the tool can target
+pub const DEFAULT_ARCHITECTURES: &[&str] = &[
+    "amd64", "arm64", "armel", "armhf", "i386", "ppc64el", "s390x", "riscv64", "loong64",
+];
+
+/// Architectures supported on every Debian suite (system.yaml)
+pub const UNIVERSAL_ARCHS: &[&str] = &[
+    "amd64", "arm64", "armhf", "ppc64el", "s390x", "riscv64", "loong64",
+];
+
+/// File modes (reproducible-build normalization)
+pub const DIR_MODE: u32 = 0o755;
+pub const FILE_MODE: u32 = 0o644;
+pub const SYMLINK_MODE: u32 = 0o777;
+pub const EXEC_MODE_MASK: u32 = 0o111;
+pub const AR_MODE: u32 = 0o100644;
+
+/// Progress / summary artefact paths
+pub const DEFAULT_PROGRESS_PATH: &str = "/tmp/build_progress.json";
+pub const SUMMARY_FILENAME: &str = "build-summary.json";
+
+/// Debian package defaults
+pub const DEFAULT_MAINTAINER: &str = "latest-debs maintainers <maintainers@latest-debs.org>";
+pub const DEFAULT_SECTION: &str = "utils";
+pub const DEFAULT_PRIORITY: &str = "optional";
+pub const DEBHELPER_COMPAT: &str = "debhelper-compat (= 13)";
+pub const STANDARDS_VERSION: &str = "4.6.2";
+
+/// Homepage helper — provider-agnostic
+pub fn homepage_for(host: &str, repo: &str) -> String {
+    format!("https://{host}/{repo}")
+}
+
+pub fn homepage_for_github(repo: &str) -> String {
+    homepage_for(DEFAULT_GITHUB_HOST, repo)
+}
+
+pub fn homepage_for_gitlab(repo: &str, host: &str) -> String {
+    let h = if host.is_empty() {
+        DEFAULT_GITLAB_HOST
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
+pub fn homepage_for_gitea(repo: &str, host: &str) -> String {
+    let h = if host.is_empty() {
+        DEFAULT_GITEA_HOST
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
+pub fn homepage_for_forgejo(repo: &str, host: &str) -> String {
+    let h = if host.is_empty() {
+        DEFAULT_FORGEJO_HOST
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
+pub fn homepage_for_bitbucket(repo: &str) -> String {
+    // Bitbucket owner/repo → https://bitbucket.org/{repo}
+    homepage_for(DEFAULT_BITBUCKET_HOST, repo)
+}
+
+pub fn homepage_for_gerrit(repo: &str, host: &str) -> String {
+    let h = if host.is_empty() {
+        DEFAULT_GERRIT_HOST
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
+/// Map Debian arch to RPM arch (reproducible, static)
+pub fn to_rpm_arch(debian_arch: &str) -> &'static str {
+    match debian_arch {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64",
+        "armhf" => "armhfp",
+        "armel" => "armhfp",
+        "i386" => "i386",
+        "ppc64el" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        "loong64" => "loongarch64",
+        other => Box::leak(other.to_string().into_boxed_str()) as &str,
+    }
+}
+
+/// Map Debian arch to pacman (Arch) arch
+pub fn to_pacman_arch(debian_arch: &str) -> &'static str {
+    match debian_arch {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64",
+        "armhf" => "armv7h",
+        "armel" => "armv6h",
+        "i386" => "i686",
+        "ppc64el" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        "loong64" => "loong64",
+        other => Box::leak(other.to_string().into_boxed_str()) as &str,
+    }
+}
