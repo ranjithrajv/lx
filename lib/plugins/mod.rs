@@ -304,12 +304,25 @@ fn apply_binary_rename(usr_bin: &Path, rename: &str) -> anyhow::Result<()> {
 /// (the build environment); `dst` is an absolute installed path under
 /// `root`.
 ///
+/// `format` is the active package format (`deb` / `rpm` / `arch`). Entries
+/// with a non-empty `packager` field are skipped unless it matches
+/// (case-insensitive), matching nfpm.
+///
 /// Returns the absolute installed paths registered as deb conffiles —
 /// entries whose type is `config`, `config|noreplace`, or
 /// `config|missingok`. Other formats ignore the return value.
-pub fn apply_contents(cfg: &PackageConfig, root: &Path) -> anyhow::Result<Vec<String>> {
+pub fn apply_contents(
+    cfg: &PackageConfig,
+    root: &Path,
+    format: &str,
+) -> anyhow::Result<Vec<String>> {
+    let format = format.trim().to_ascii_lowercase();
     let mut conffiles = Vec::new();
     for entry in &cfg.contents {
+        let packager = entry.packager.trim().to_ascii_lowercase();
+        if !packager.is_empty() && packager != format {
+            continue;
+        }
         let dst_abs = safe_join(root, &entry.dst)?;
         match entry.kind.as_str() {
             "" | "file" => {

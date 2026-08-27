@@ -53,7 +53,7 @@ pub struct ControlMember {
 }
 
 /// Callback that turns the debsign payload (concatenated `debian-binary` +
-/// control.tar.* + data.tar.*) into `_gpgorigin` member bytes.
+/// control.tar.* + data.tar.*) into `_gpg{type}` member bytes.
 pub type OriginSigner<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>> + 'a;
 
 /// Full-fidelity build: like [`build_with_compression`] plus additional
@@ -61,11 +61,8 @@ pub type OriginSigner<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>> + 'a;
 /// the given order after `control` + `md5sums`; callers pass a sorted list
 /// so output stays reproducible.
 ///
-/// When `origin_signer` is `Some`, it is called with the concatenation of
-/// `debian-binary` + control.tar.* + data.tar.* (debsigs / nfpm debsign
-/// payload) and its return value is appended as the `_gpgorigin` ar member
-/// after `data.tar.*`. dpkg ignores trailing members, so unsigned consumers
-/// keep working.
+/// When `origin_signer` is `Some`, appends `_gpgorigin` (see
+/// [`build_full_signed`] for other roles).
 #[allow(clippy::type_complexity)]
 pub fn build_full(
     root: &Path,
@@ -76,6 +73,29 @@ pub fn build_full(
     extras: &[ControlMember],
     origin_signer: Option<&OriginSigner>,
 ) -> Result<()> {
+    build_full_signed(
+        root,
+        control,
+        mtime,
+        deb_path,
+        compression,
+        extras,
+        origin_signer.map(|s| (s, "origin")),
+    )
+}
+
+/// Like [`build_full`] but with an explicit debsign role (`origin` /
+/// `maint` / `archive`) controlling the `_gpg{type}` member name.
+#[allow(clippy::type_complexity)]
+pub fn build_full_signed(
+    root: &Path,
+    control: &[u8],
+    mtime: i64,
+    deb_path: &Path,
+    compression: &str,
+    extras: &[ControlMember],
+    gpg_signer: Option<(&OriginSigner, &str)>,
+) -> Result<()> {
     let comp = normalize_compression(compression)
         .with_context(|| format!("invalid compression '{compression}'"))?;
     let mut md5sums = String::new();
@@ -83,15 +103,8 @@ pub fn build_full(
         .with_context(|| format!("failed to build data.tar.{ext}", ext = comp.ext()))?;
     let control_tar = build_control_tar(control, md5sums.as_bytes(), mtime, &comp, extras)
         .with_context(|| format!("failed to build control.tar.{ext}", ext = comp.ext()))?;
-    write_ar_with_compression(
-        deb_path,
-        mtime,
-        &control_tar,
-        &data_tar,
-        &comp,
-        origin_signer,
-    )
-    .context("failed to write .deb ar container")
+    write_ar_with_compression(deb_path, mtime, &control_tar, &data_tar, &comp, gpg_signer)
+        .context("failed to write .deb ar container")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -487,7 +500,7 @@ fn write_ar_with_compression(
     control_tar: &[u8],
     data_tar: &[u8],
     comp: &Compression,
-    #[allow(clippy::type_complexity)] origin_signer: Option<&OriginSigner>,
+    #[allow(clippy::type_complexity)] gpg_signer: Option<(&OriginSigner, &str)>,
 ) -> Result<()> {
     let file = std::fs::File::create(deb_path)
         .with_context(|| format!("failed to create '{}'", deb_path.display()))?;
@@ -507,14 +520,20 @@ fn write_ar_with_compression(
     for (name, data) in members {
         append_ar_member(&mut builder, name, data, mtime)?;
     }
-    if let Some(sign) = origin_signer {
+    if let Some((sign, sig_type)) = gpg_signer {
         let mut payload =
             Vec::with_capacity(DEBIAN_BINARY.len() + control_tar.len() + data_tar.len());
         payload.extend_from_slice(DEBIAN_BINARY);
         payload.extend_from_slice(control_tar);
         payload.extend_from_slice(data_tar);
-        let sig = sign(&payload).context("origin signer failed")?;
-        append_ar_member(&mut builder, "_gpgorigin", &sig, mtime)?;
+        let sig = sign(&payload).context("debsign signer failed")?;
+        let typ = if sig_type.trim().is_empty() {
+            "origin"
+        } else {
+            sig_type.trim()
+        };
+        let member = format!("_gpg{typ}");
+        append_ar_member(&mut builder, &member, &sig, mtime)?;
     }
     Ok(())
 }

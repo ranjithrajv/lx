@@ -1388,7 +1388,11 @@ fn build_one(
             let sig = lpt_lib::sign::gpg_detach_sign(&final_path, &req)?;
             println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
         } else if format == "deb" && sign_method == "debsign" {
-            println!("    ✓ signed {} (_gpgorigin)", final_path.display());
+            println!(
+                "    ✓ signed {} (_gpg{})",
+                final_path.display(),
+                cfg.effective_sign_type()
+            );
         }
     }
 

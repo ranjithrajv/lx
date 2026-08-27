@@ -243,6 +243,11 @@ pub fn generate_schema() -> serde_json::Value {
                                 "ghost"
                             ],
                             "description": "Entry type (default file); config* also registers a deb conffile; ghost is RPM-only"
+                        },
+                        "packager": {
+                            "type": "string",
+                            "enum": ["deb", "rpm", "arch"],
+                            "description": "If set, only apply this entry when building that format (nfpm parity)"
                         }
                     }
                 }
@@ -287,6 +292,11 @@ pub fn generate_schema() -> serde_json::Value {
                         "type": "string",
                         "enum": ["detach", "debsign"],
                         "description": "Deb signing method (default detach). Ignored for rpm/arch."
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["origin", "maint", "archive"],
+                        "description": "Debsign role → ar member _gpg{type} (default origin). Ignored unless method is debsign."
                     }
                 }
             },

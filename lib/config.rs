@@ -21,6 +21,10 @@ pub struct ContentEntry {
     /// a no-op for other formats, matching nfpm).
     #[serde(default, rename = "type")]
     pub kind: String,
+    /// Optional packager filter (`deb` / `rpm` / `arch`). Empty means the
+    /// entry applies to every format (nfpm's `packager:` field).
+    #[serde(default)]
+    pub packager: String,
 }
 
 /// Per-format relation-field overrides (`overrides: {deb: {depends: ...}}`),
@@ -92,6 +96,11 @@ pub struct SignatureConfig {
     /// Ignored for rpm/arch.
     #[serde(default)]
     pub method: String,
+    /// Debsigner role for `method: debsign`: `"origin"` (default),
+    /// `"maint"`, or `"archive"`. Becomes the ar member `_gpg{type}`
+    /// (nfpm / debsigs parity). Ignored for detach / rpm / arch.
+    #[serde(default, rename = "type")]
+    pub sign_type: String,
 }
 
 /// A single Debian package definition, mirroring package.yaml.
@@ -550,6 +559,14 @@ impl PackageConfig {
                     "unsupported contents type '{other}' (expected file, config, config|noreplace, config|missingok, tree, symlink, dir, or ghost)"
                 ),
             }
+            if !entry.packager.trim().is_empty() {
+                match entry.packager.trim().to_ascii_lowercase().as_str() {
+                    "deb" | "rpm" | "arch" => {}
+                    other => bail!(
+                        "unsupported contents packager '{other}' (expected deb, rpm, or arch)"
+                    ),
+                }
+            }
         }
         for (arch, o) in &self.distribution_arch_overrides {
             if arch.trim().is_empty() {
@@ -567,6 +584,20 @@ impl PackageConfig {
                 other => {
                     bail!("unsupported signature.method '{other}' (expected detach or debsign)")
                 }
+            }
+        }
+        if !self.signature.sign_type.trim().is_empty() {
+            match self
+                .signature
+                .sign_type
+                .trim()
+                .to_ascii_lowercase()
+                .as_str()
+            {
+                "origin" | "maint" | "archive" => {}
+                other => bail!(
+                    "unsupported signature.type '{other}' (expected origin, maint, or archive)"
+                ),
             }
         }
         Ok(())
@@ -763,6 +794,16 @@ impl PackageConfig {
             "detach".to_string()
         } else {
             m.to_ascii_lowercase()
+        }
+    }
+
+    /// Effective debsign role (`signature.type`): empty → `"origin"`.
+    pub fn effective_sign_type(&self) -> String {
+        let t = self.signature.sign_type.trim();
+        if t.is_empty() {
+            "origin".to_string()
+        } else {
+            t.to_ascii_lowercase()
         }
     }
 

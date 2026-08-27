@@ -43,7 +43,7 @@ impl Plugin for RpmPlugin {
         // contents entries is not yet wired into rpmarchive; files are
         // staged as regular payloads.)
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let _conffiles = super::apply_contents(cfg, ctx.staging_root)?;
+        let _conffiles = super::apply_contents(cfg, ctx.staging_root, "rpm")?;
 
         // RPM metadata: name, version, release, arch, summary, description,
         // license. Version is the stripped upstream version; release encodes

@@ -180,7 +180,8 @@ local_payload: ""             # path to an archive or directory
 signature:
   key_file: ""                # ASCII-armored secret key (env-expandable)
   key_id: ""                  # optional gpg --local-user
-  method: detach              # detach (sibling .sig) | debsign (embedded _gpgorigin)
+  method: detach              # detach (sibling .sig) | debsign (embedded _gpg{type})
+  type: origin                # debsign role: origin | maint | archive
 ```
 
 **Legacy debian-multiarch-builder configs load as-is.** Every key the bash
@@ -251,10 +252,14 @@ an extracted directory without hitting GitHub/GitLab. Requires `version:`
 
 **`signature:`** — sign built packages. For `.deb`, `method: detach`
 (default) writes `<pkg>.deb.sig` beside the artifact; `method: debsign`
-embeds an armored detach-signature as the `_gpgorigin` ar member (debsigs /
-nfpm). For `.rpm`, the signature is always embedded in the header when
-`key_file` is set. `${VAR}` / `${VAR:-default}` expand in the YAML at parse
-time (e.g. `key_file: ${SIGNING_KEY_FILE}`).
+embeds an armored detach-signature as `_gpg{type}` (default `_gpgorigin`;
+`type:` may be `origin` / `maint` / `archive`). For `.rpm`, the signature
+is always embedded in the header when `key_file` is set. `${VAR}` /
+`${VAR:-default}` expand in the YAML at parse time (e.g.
+`key_file: ${SIGNING_KEY_FILE}`).
+
+**`contents[].packager`** — restrict an overlay entry to one format
+(`deb` / `rpm` / `arch`). Omit to apply to every format.
 
 Man pages (`*.1`–`*.9`, gzipped) and license files (`LICENSE`/`COPYING`/
 `NOTICE`, any casing) sitting alongside the binary in a flat-mode release

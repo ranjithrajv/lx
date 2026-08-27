@@ -499,16 +499,19 @@ fn deb_contents_scripts_conffiles_end_to_end() {
                     .to_string(),
                 dst: "/usr/share/bash-completion/completions/hello".into(),
                 kind: String::new(),
+                packager: String::new(),
             },
             lpt_lib::config::ContentEntry {
                 src: env.path().join("hello.conf").to_string_lossy().to_string(),
                 dst: "/etc/hello/hello.conf".into(),
                 kind: "config|noreplace".into(),
+                packager: String::new(),
             },
             lpt_lib::config::ContentEntry {
                 src: String::new(),
                 dst: "/var/lib/hello".into(),
                 kind: "dir".into(),
+                packager: String::new(),
             },
         ],
         scripts: lpt_lib::config::Scripts {
@@ -605,4 +608,44 @@ fn safe_join_rejects_traversal() {
     assert!(safe_join(root, "relative/path").is_err());
     assert!(safe_join(root, "/../escape").is_err());
     assert!(safe_join(root, "/a/../../b").is_err());
+}
+
+#[test]
+fn apply_contents_respects_packager_filter() {
+    use lpt_lib::plugins::apply_contents;
+    let env = tempfile::tempdir().unwrap();
+    std::fs::write(env.path().join("deb-only"), b"deb").unwrap();
+    std::fs::write(env.path().join("rpm-only"), b"rpm").unwrap();
+    std::fs::write(env.path().join("all"), b"all").unwrap();
+
+    let cfg = PackageConfig {
+        package_name: "x".into(),
+        github_repo: "o/x".into(),
+        contents: vec![
+            lpt_lib::config::ContentEntry {
+                src: env.path().join("deb-only").to_string_lossy().into(),
+                dst: "/usr/share/deb-only".into(),
+                kind: String::new(),
+                packager: "deb".into(),
+            },
+            lpt_lib::config::ContentEntry {
+                src: env.path().join("rpm-only").to_string_lossy().into(),
+                dst: "/usr/share/rpm-only".into(),
+                kind: String::new(),
+                packager: "rpm".into(),
+            },
+            lpt_lib::config::ContentEntry {
+                src: env.path().join("all").to_string_lossy().into(),
+                dst: "/usr/share/all".into(),
+                kind: String::new(),
+                packager: String::new(),
+            },
+        ],
+        ..Default::default()
+    };
+    let root = tempfile::tempdir().unwrap();
+    apply_contents(&cfg, root.path(), "deb").unwrap();
+    assert!(root.path().join("usr/share/deb-only").is_file());
+    assert!(root.path().join("usr/share/all").is_file());
+    assert!(!root.path().join("usr/share/rpm-only").exists());
 }

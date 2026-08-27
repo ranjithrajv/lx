@@ -59,6 +59,9 @@ we want end-to-end proof against `debsig-verify` / `debsigs --verify`.
    (skip gracefully otherwise), mirroring `debarchive`'s real-`dpkg-deb`
    pattern.
 
+**Done since this note:** `signature.type` (`origin`/`maint`/`archive`) and
+`contents[].packager` format filter (nfpm parity).
+
 **Acceptance:** method enum documents both; a signed package verifies with
 at least one of `debsig-verify` / `debsigs --verify` in CI when available.
 

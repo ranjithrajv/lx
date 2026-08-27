@@ -42,7 +42,7 @@ impl Plugin for DebPlugin {
         // Stage install tree under ctx.staging_root, then layer the
         // `contents:` overlay (completions, units, desktop files, ...).
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let conffiles = super::apply_contents(cfg, ctx.staging_root)?;
+        let conffiles = super::apply_contents(cfg, ctx.staging_root, "deb")?;
 
         // Render control/changelog/copyright.
         let control = render_control(cfg, job, ctx.debian_version, ctx.build_version);
@@ -110,14 +110,15 @@ impl Plugin for DebPlugin {
                 None
             };
         let signer_ref = origin_signer.as_ref().map(|f| f.as_ref());
-        lpt_lib::debarchive::build_full(
+        let sig_type = cfg.effective_sign_type();
+        lpt_lib::debarchive::build_full_signed(
             ctx.staging_root,
             control.as_bytes(),
             ctx.mtime,
             &deb_dest,
             &comp,
             &extras,
-            signer_ref,
+            signer_ref.map(|s| (s, sig_type.as_str())),
         )
         .with_context(|| format!("failed to build {}", deb_dest.display()))?;
 

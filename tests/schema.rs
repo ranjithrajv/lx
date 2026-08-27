@@ -50,4 +50,12 @@ fn schema_documents_new_features() {
     let methods: Vec<&str> = methods.iter().map(|v| v.as_str().unwrap()).collect();
     assert!(methods.contains(&"detach"));
     assert!(methods.contains(&"debsign"));
+    let types = s["properties"]["signature"]["properties"]["type"]["enum"]
+        .as_array()
+        .unwrap();
+    let types: Vec<&str> = types.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(types.contains(&"origin"));
+    assert!(types.contains(&"maint"));
+    assert!(types.contains(&"archive"));
+    assert!(s["properties"]["contents"]["items"]["properties"]["packager"].is_object());
 }

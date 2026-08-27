@@ -366,6 +366,34 @@ fn build_full_with_origin_signer_appends_gpgorigin() {
 }
 
 #[test]
+fn build_full_signed_uses_signature_type_member_name() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+    let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    let signer = |_p: &[u8]| Ok(b"sig".to_vec());
+    build_full_signed(
+        root.path(),
+        b"Package: hello\n",
+        0,
+        &deb_path,
+        "gzip",
+        &[],
+        Some((&signer, "maint")),
+    )
+    .unwrap();
+    let file = std::fs::File::open(&deb_path).unwrap();
+    let mut archive = ar::Archive::new(file);
+    let mut names = Vec::new();
+    while let Some(entry) = archive.next_entry() {
+        let entry = entry.unwrap();
+        names.push(String::from_utf8_lossy(entry.header().identifier()).to_string());
+    }
+    assert!(names.contains(&"_gpgmaint".to_string()), "{names:?}");
+    assert!(!names.iter().any(|n| n == "_gpgorigin"));
+}
+
+#[test]
 fn build_full_without_signer_has_three_members() {
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();

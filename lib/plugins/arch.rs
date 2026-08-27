@@ -39,7 +39,7 @@ impl Plugin for ArchPlugin {
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
         // Layer the `contents:` overlay. (Arch has no conffile registry in
         // .PKGINFO; config-typed entries are staged as regular files.)
-        let _conffiles = super::apply_contents(cfg, ctx.staging_root)?;
+        let _conffiles = super::apply_contents(cfg, ctx.staging_root, "arch")?;
 
         let version = ctx.debian_version.to_string();
         // Arch's pkgver is {version}-{release}; release encodes build_version

@@ -524,9 +524,38 @@ fn signature_method_validation_and_effective() {
     let cfg = PackageConfig::parse_str(yaml).unwrap();
     assert_eq!(cfg.effective_sign_method(None), "debsign");
     assert_eq!(cfg.effective_sign_method(Some("detach")), "detach");
+    assert_eq!(cfg.effective_sign_type(), "origin");
+
+    let yaml = "package_name: f\ngithub_repo: o/f\nsignature:\n  type: maint\n";
+    let cfg = PackageConfig::parse_str(yaml).unwrap();
+    assert_eq!(cfg.effective_sign_type(), "maint");
+
+    let yaml = "package_name: f\ngithub_repo: o/f\nsignature:\n  type: bogus\n";
+    assert!(PackageConfig::parse_str(yaml).is_err());
 
     let bare = PackageConfig::parse_str("package_name: f\ngithub_repo: o/f\n").unwrap();
     assert_eq!(bare.effective_sign_method(None), "detach");
+}
+
+#[test]
+fn contents_packager_filter_parses_and_validates() {
+    let yaml = r#"
+package_name: foo
+github_repo: owner/foo
+contents:
+  - src: a
+    dst: /usr/bin/a
+    packager: deb
+  - src: b
+    dst: /usr/bin/b
+    packager: rpm
+"#;
+    let cfg = PackageConfig::parse_str(yaml).unwrap();
+    assert_eq!(cfg.contents[0].packager, "deb");
+    assert_eq!(cfg.contents[1].packager, "rpm");
+
+    let bad = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: apk\n";
+    assert!(PackageConfig::parse_str(bad).is_err());
 }
 
 #[test]
