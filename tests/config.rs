@@ -480,3 +480,65 @@ fn loong64_aliases() {
     assert!(map["loong64"].contains(&"loongarch64"));
     assert!(map["loong64"].contains(&"loong64"));
 }
+
+#[test]
+fn expand_env_vars_substitutes_and_defaults() {
+    std::env::set_var("LPT_TEST_SIGN_KEY", "/tmp/key.asc");
+    let out = expand_env_vars("key: ${LPT_TEST_SIGN_KEY}").unwrap();
+    assert_eq!(out, "key: /tmp/key.asc");
+    std::env::remove_var("LPT_TEST_MISSING_XYZ");
+    let out = expand_env_vars("x: ${LPT_TEST_MISSING_XYZ:-fallback}").unwrap();
+    assert_eq!(out, "x: fallback");
+    assert!(expand_env_vars("${LPT_TEST_MISSING_XYZ}")
+        .unwrap_err()
+        .to_string()
+        .contains("not set"));
+    assert_eq!(expand_env_vars("cost is $$5").unwrap(), "cost is $5");
+    std::env::remove_var("LPT_TEST_SIGN_KEY");
+}
+
+#[test]
+fn parse_str_expands_env_in_yaml() {
+    std::env::set_var("LPT_TEST_PAYLOAD", "/opt/payload");
+    let yaml = r#"
+package_name: foo
+github_repo: owner/foo
+local_payload: ${LPT_TEST_PAYLOAD}
+signature:
+  key_file: ${LPT_TEST_PAYLOAD}/key.asc
+  method: debsign
+"#;
+    let cfg = PackageConfig::parse_str(yaml).unwrap();
+    assert_eq!(cfg.local_payload, "/opt/payload");
+    assert_eq!(cfg.signature.key_file, "/opt/payload/key.asc");
+    assert_eq!(cfg.signature.method, "debsign");
+    std::env::remove_var("LPT_TEST_PAYLOAD");
+}
+
+#[test]
+fn signature_method_validation_and_effective() {
+    let yaml = "package_name: f\ngithub_repo: o/f\nsignature:\n  method: bogus\n";
+    assert!(PackageConfig::parse_str(yaml).is_err());
+
+    let yaml = "package_name: f\ngithub_repo: o/f\nsignature:\n  method: debsign\n";
+    let cfg = PackageConfig::parse_str(yaml).unwrap();
+    assert_eq!(cfg.effective_sign_method(None), "debsign");
+    assert_eq!(cfg.effective_sign_method(Some("detach")), "detach");
+
+    let bare = PackageConfig::parse_str("package_name: f\ngithub_repo: o/f\n").unwrap();
+    assert_eq!(bare.effective_sign_method(None), "detach");
+}
+
+#[test]
+fn parses_local_payload() {
+    let yaml = r#"
+package_name: foo
+github_repo: owner/foo
+local_payload: ./dist/foo.tar.gz
+version: "1.2.3"
+"#;
+    let cfg = PackageConfig::parse_str(yaml).unwrap();
+    assert_eq!(cfg.local_payload, "./dist/foo.tar.gz");
+    // Existence is not checked at parse time.
+    cfg.validate().unwrap();
+}

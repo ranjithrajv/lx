@@ -141,10 +141,11 @@ pub struct BuildArgs {
     pub keep: bool,
 
     /// Sign built packages: path to an ASCII-armored secret key. Overrides
-    /// package.yaml's `signature.key_file`. For deb, produces a detached
-    /// `<pkg>.deb.sig` via gpg; for rpm, embeds the PGP signature natively
-    /// (`rpm -K` verifiable). Passphrase comes from $LPT_SIGN_PASSPHRASE,
-    /// falling back to $NFPM_PASSPHRASE.
+    /// package.yaml's `signature.key_file`. For deb with method `detach`
+    /// (default), produces a detached `<pkg>.deb.sig` via gpg; with method
+    /// `debsign`, embeds `_gpgorigin` inside the `.deb`. For rpm, embeds
+    /// the PGP signature natively (`rpm -K` verifiable). Passphrase comes
+    /// from $LPT_SIGN_PASSPHRASE, falling back to $NFPM_PASSPHRASE.
     #[arg(long, value_name = "KEY_FILE")]
     pub sign_key: Option<PathBuf>,
 
@@ -152,6 +153,18 @@ pub struct BuildArgs {
     /// rpm). Overrides package.yaml's `signature.key_id`.
     #[arg(long, value_name = "KEY_ID")]
     pub sign_key_id: Option<String>,
+
+    /// Deb signing method: `detach` (sibling `.sig`, default) or `debsign`
+    /// (embedded `_gpgorigin`). Overrides package.yaml's
+    /// `signature.method`. Ignored for rpm/arch.
+    #[arg(long, value_name = "METHOD")]
+    pub sign_method: Option<String>,
+
+    /// Build from a local payload (skip upstream download). Uses
+    /// `local_payload` from package.yaml (archive or directory). Path
+    /// existence is checked at build time.
+    #[arg(long)]
+    pub local: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -244,11 +257,31 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     );
 
     // Resolve source provider plugin (github vs gitlab) for auto-discovery.
+    // Local builds skip the network entirely.
     let effective_source = args
         .provider
         .as_deref()
         .unwrap_or(&cfg.effective_source())
         .to_ascii_lowercase();
+    cfg.source = effective_source.clone();
+
+    let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
+    match sign_method.as_str() {
+        "detach" | "debsign" => {}
+        other => bail!("unsupported --sign-method '{other}' (expected detach or debsign)"),
+    }
+
+    if args.local {
+        println!("source: local (skipping upstream download)");
+        return run_local(
+            args,
+            cfg,
+            &effective_format,
+            plugin_for_matrix.as_ref(),
+            build_start,
+        );
+    }
+
     let source = crate::plugins::source::get_source_plugin(&effective_source).ok_or_else(|| {
         anyhow!(
             "unsupported source '{}' (expected one of: {})",
@@ -257,7 +290,6 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         )
     })?;
     println!("source: {} ({})", effective_source, source.description());
-    cfg.source = effective_source.clone();
     crate::plugins::source::apply_source_host(source.as_ref(), &cfg);
     // Token resolution: prefer provider-specific env, fallback to CLI token.
     let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
@@ -520,6 +552,247 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             license: license.clone(),
         };
         match effective_format.as_str() {
+            "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
+            "arch" => crate::source::generate_arch(&args.output, &pkg)?,
+            _ => crate::source::generate(&args.output, &pkg)?,
+        }
+    }
+    Ok(())
+}
+
+/// `--local` path: package a local archive/directory without hitting the
+/// upstream forge. Requires `local_payload` in package.yaml (and usually
+/// `version:` / `--version`).
+fn run_local(
+    mut args: BuildArgs,
+    mut cfg: PackageConfig,
+    effective_format: &str,
+    plugin_for_matrix: &dyn crate::plugins::Plugin,
+    build_start: std::time::Instant,
+) -> Result<()> {
+    let payload = cfg.local_payload.trim();
+    if payload.is_empty() {
+        bail!("--local requires local_payload in package.yaml (path to an archive or directory)");
+    }
+    let payload_path = PathBuf::from(payload);
+    if !payload_path.exists() {
+        bail!("local_payload '{}' does not exist", payload_path.display());
+    }
+
+    let version = if !cfg.version.is_empty() {
+        cfg.version.clone()
+    } else if let Some(v) = &args.version {
+        v.clone()
+    } else {
+        bail!("--local requires version: in package.yaml or --version");
+    };
+
+    let cli_parallel = args.max_parallel;
+    args.max_parallel = if cli_parallel > 0 {
+        cli_parallel
+    } else if cfg.parallel_builds == Some(false) {
+        1
+    } else if cfg.max_parallel > 0 {
+        cfg.max_parallel
+    } else {
+        lpt_lib::optimize::effective_max_parallel(0)
+    };
+
+    if args.host && args.architectures.is_some() {
+        bail!("--host conflicts with --architectures; pass one or the other");
+    }
+
+    let mut dists = cfg.effective_distributions_for(effective_format);
+    let mut archs = cfg.effective_architectures();
+    if let Some(d) = &args.distributions {
+        dists = d
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    if let Some(a) = &args.architectures {
+        archs = a
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect();
+    }
+    dists = lpt_lib::config::filter_expired_distributions(&dists, None);
+
+    if args.host {
+        let detected = host_arch().ok_or_else(|| {
+            anyhow!("could not detect this machine's architecture from `uname -m`; use --architectures instead")
+        })?;
+        println!("Building for host architecture: {detected} (--host; no QEMU needed)");
+        archs = vec![detected];
+    }
+
+    if cfg.artifact_format.is_empty() {
+        if payload_path.is_dir() {
+            // Directory payload: treat as already-extracted; extract() is
+            // skipped in build_one for dirs.
+            cfg.artifact_format = "raw".to_string();
+        } else {
+            let name = payload_path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            cfg.artifact_format = guess_format(name).to_string();
+        }
+    }
+
+    let asset_name = payload_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("local-payload")
+        .to_string();
+    let fake_asset = Asset {
+        name: asset_name,
+        size: payload_path.metadata().ok().map(|m| m.len()),
+        browser_download_url: String::new(),
+    };
+
+    let mut jobs: Vec<ResolvedJob> = Vec::new();
+    for dist in &dists {
+        for arch in &archs {
+            let supported = match cfg.distribution_arch_overrides.get(arch.as_str()) {
+                Some(o) => o.distributions.iter().any(|d| d.trim() == dist.as_str()),
+                None => plugin_for_matrix.arch_supported_for_dist(arch, dist),
+            };
+            if !supported {
+                println!(
+                    "⚠️  Skipping {dist} for {arch}: architecture not supported in this distribution (format: {effective_format})"
+                );
+                continue;
+            }
+            jobs.push(ResolvedJob {
+                dist: dist.clone(),
+                arch: arch.clone(),
+                asset: fake_asset.clone(),
+                tag: version.clone(),
+                published_at: None,
+            });
+        }
+    }
+
+    if jobs.is_empty() {
+        bail!("no local build jobs matched the requested architecture/distribution matrix");
+    }
+
+    if args.dry_run {
+        println!(
+            "Would build {} local jobs from {}:",
+            jobs.len(),
+            payload_path.display()
+        );
+        for j in &jobs {
+            println!("  {:<8} {:<8}", j.dist, j.arch);
+        }
+        return Ok(());
+    }
+
+    let telemetry = lpt_lib::telemetry::Telemetry::new(args.telemetry);
+    telemetry.init()?;
+    telemetry.record_stage("build_initialization")?;
+
+    let progress = if args.progress && lpt_lib::progress::stdout_is_tty() {
+        Some(lpt_lib::progress::Progress::new(
+            archs.len(),
+            &version,
+            &cfg.package_name,
+            args.progress_path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(lpt_lib::constants::DEFAULT_PROGRESS_PATH)),
+            true,
+        )?)
+    } else {
+        None
+    };
+
+    let provenance = build_jobs(
+        &args,
+        &cfg,
+        &jobs,
+        SourceInputs {
+            license: if cfg.license_spdx.is_empty() {
+                None
+            } else {
+                Some(lpt_lib::github::RepoLicense {
+                    spdx: cfg.license_spdx.clone(),
+                    text: None,
+                })
+            },
+            source_name: String::new(), // unused when args.local
+            token: None,
+        },
+        progress.as_ref(),
+        &telemetry,
+    )?;
+
+    telemetry.record_stage_complete("build_completion", "success")?;
+    telemetry.finalize(build_start.elapsed().as_secs())?;
+
+    if args.summary {
+        crate::summary::write(
+            &args.output,
+            jobs.len(),
+            &crate::summary::SummaryInputs {
+                package: cfg.package_name.clone(),
+                version: version.clone(),
+                build_version: args.build_version.clone(),
+                github_repo: cfg.github_repo.clone(),
+                architectures: archs.clone(),
+                distributions: dists.clone(),
+                max_parallel: args.max_parallel,
+                start: build_start,
+                telemetry: telemetry.summary_json(),
+                provenance,
+                package_format: effective_format.to_string(),
+                source: "local".to_string(),
+            },
+        )?;
+    }
+
+    if args.source {
+        let rel = cfg.effective_relations(effective_format);
+        let pkg = crate::source::Pkg {
+            name: cfg.package_name.clone(),
+            github_repo: cfg.github_repo.clone(),
+            description: cfg.effective_description(),
+            maintainer: cfg.effective_maintainer(),
+            version: version.clone(),
+            build_version: args.build_version.clone(),
+            epoch: cfg.epoch.clone(),
+            license_spdx: if cfg.license_spdx.is_empty() {
+                "NOASSERTION".to_string()
+            } else {
+                cfg.license_spdx.clone()
+            },
+            depends: rel.depends,
+            recommends: rel.recommends,
+            suggests: rel.suggests,
+            conflicts: rel.conflicts,
+            replaces: rel.replaces,
+            provides: rel.provides,
+            breaks: rel.breaks,
+            predepends: rel.predepends,
+            section: cfg.section.clone(),
+            priority: cfg.priority.clone(),
+            fields: cfg.fields.clone(),
+            published_at: None,
+            license: if cfg.license_spdx.is_empty() {
+                None
+            } else {
+                Some(lpt_lib::github::RepoLicense {
+                    spdx: cfg.license_spdx.clone(),
+                    text: None,
+                })
+            },
+        };
+        match effective_format {
             "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
             "arch" => crate::source::generate_arch(&args.output, &pkg)?,
             _ => crate::source::generate(&args.output, &pkg)?,
@@ -802,8 +1075,14 @@ fn build_jobs(
         let telemetry = telemetry.clone();
         let source_name = source_name.clone();
         handles.push(std::thread::spawn(move || {
-            let source = crate::plugins::source::get_source_plugin(&source_name)
-                .expect("unknown source plugin");
+            let source = if args.local {
+                None
+            } else {
+                Some(
+                    crate::plugins::source::get_source_plugin(&source_name)
+                        .expect("unknown source plugin"),
+                )
+            };
             loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let Some(group) = groups.get(i) else { break };
@@ -814,7 +1093,7 @@ fn build_jobs(
                     std::collections::HashMap::new();
                 let mut group_ok = true;
                 let build_inputs = BuildInputs {
-                    source: source.as_ref(),
+                    source: source.as_deref(),
                     token: token.as_deref(),
                     license: license.as_ref(),
                     pin: pin.as_ref(),
@@ -884,7 +1163,7 @@ fn build_jobs(
 /// group and threaded through every [`build_one`] call in that group.
 #[derive(Clone, Copy)]
 struct BuildInputs<'a> {
-    source: &'a dyn crate::plugins::source::SourcePlugin,
+    source: Option<&'a dyn crate::plugins::source::SourcePlugin>,
     token: Option<&'a str>,
     license: Option<&'a lpt_lib::github::RepoLicense>,
     pin: Option<&'a lpt_lib::checksum::PinnedMetadata>,
@@ -905,60 +1184,78 @@ fn build_one(
         license,
         pin,
     } = *inputs;
-    // 1. Download the asset (once per asset name).
-    let asset_path = match downloaded.get(&job.asset.name) {
-        Some(p) => p.clone(),
-        None => {
-            let path = tmp.join(&job.asset.name);
-            println!(
-                "  ↓ {} ({})",
-                job.asset.name,
-                human_size(job.asset.size.unwrap_or(0))
-            );
-            match &args.cache_dir {
-                Some(dir) => {
-                    let expected = pin.and_then(|p| p.sha256_for(&job.tag, &job.asset.name));
-                    let cache = lpt_lib::cache::DownloadCache::new(dir.clone())?;
-                    let source_cloned = source.name().to_string();
-                    let token_cloned = token.map(|s| s.to_string());
-                    cache.fetch(
-                        &job.asset.browser_download_url,
-                        &path,
-                        expected.as_deref(),
-                        &|url, out| {
-                            let src = crate::plugins::source::get_source_plugin(&source_cloned)
-                                .expect("unknown source");
-                            let mut body = src
-                                .raw_get(url, token_cloned.as_deref())
-                                .with_context(|| format!("GET {url} failed"))?;
-                            let mut file = std::fs::File::create(out)?;
-                            std::io::copy(&mut body, &mut file)?;
-                            Ok(())
-                        },
-                    )?;
+
+    // 1. Resolve the payload: local path, or download the asset once per name.
+    let asset_path = if args.local {
+        let p = PathBuf::from(cfg.local_payload.trim());
+        if !p.exists() {
+            bail!("local_payload '{}' does not exist", p.display());
+        }
+        p
+    } else {
+        let source = source.expect("source plugin required for non-local builds");
+        match downloaded.get(&job.asset.name) {
+            Some(p) => p.clone(),
+            None => {
+                let path = tmp.join(&job.asset.name);
+                println!(
+                    "  ↓ {} ({})",
+                    job.asset.name,
+                    human_size(job.asset.size.unwrap_or(0))
+                );
+                match &args.cache_dir {
+                    Some(dir) => {
+                        let expected = pin.and_then(|p| p.sha256_for(&job.tag, &job.asset.name));
+                        let cache = lpt_lib::cache::DownloadCache::new(dir.clone())?;
+                        let source_cloned = source.name().to_string();
+                        let token_cloned = token.map(|s| s.to_string());
+                        cache.fetch(
+                            &job.asset.browser_download_url,
+                            &path,
+                            expected.as_deref(),
+                            &|url, out| {
+                                let src = crate::plugins::source::get_source_plugin(&source_cloned)
+                                    .expect("unknown source");
+                                let mut body = src
+                                    .raw_get(url, token_cloned.as_deref())
+                                    .with_context(|| format!("GET {url} failed"))?;
+                                let mut file = std::fs::File::create(out)?;
+                                std::io::copy(&mut body, &mut file)?;
+                                Ok(())
+                            },
+                        )?;
+                    }
+                    None => {
+                        let mut body = source
+                            .raw_get(&job.asset.browser_download_url, token)
+                            .with_context(|| {
+                                format!("GET {} failed", job.asset.browser_download_url)
+                            })?;
+                        let mut file = std::fs::File::create(&path)?;
+                        std::io::copy(&mut body, &mut file)?;
+                    }
                 }
-                None => {
-                    let mut body = source
-                        .raw_get(&job.asset.browser_download_url, token)
-                        .with_context(|| {
-                            format!("GET {} failed", job.asset.browser_download_url)
-                        })?;
-                    let mut file = std::fs::File::create(&path)?;
-                    std::io::copy(&mut body, &mut file)?;
-                }
-            }
-            let method = if args.no_verify {
-                VerifyMethod::SkippedNoVerify
-            } else if let Some(pin) = pin {
-                if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
-                    lpt_lib::checksum::verify_sha256(&path, &expected)?;
-                    println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
-                    VerifyMethod::Pinned
+                let method = if args.no_verify {
+                    VerifyMethod::SkippedNoVerify
+                } else if let Some(pin) = pin {
+                    if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
+                        lpt_lib::checksum::verify_sha256(&path, &expected)?;
+                        println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
+                        VerifyMethod::Pinned
+                    } else {
+                        eprintln!(
+                            "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
+                            job.asset.name, job.tag
+                        );
+                        verify_sidecar_or_require_flag_source(
+                            source,
+                            token,
+                            &job.asset,
+                            &path,
+                            args.allow_unverified,
+                        )?
+                    }
                 } else {
-                    eprintln!(
-                        "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
-                        job.asset.name, job.tag
-                    );
                     verify_sidecar_or_require_flag_source(
                         source,
                         token,
@@ -966,37 +1263,34 @@ fn build_one(
                         &path,
                         args.allow_unverified,
                     )?
-                }
-            } else {
-                verify_sidecar_or_require_flag_source(
-                    source,
-                    token,
-                    &job.asset,
-                    &path,
-                    args.allow_unverified,
-                )?
-            };
+                };
 
-            // Audit trail: one entry per unique download, regardless of
-            // outcome, so build-summary.json's `provenance` array records
-            // exactly how (or whether) every asset was verified.
-            let sha256 = lpt_lib::checksum::sha256_file(&path).unwrap_or_default();
-            provenance.lock().unwrap().push(serde_json::json!({
-                "asset": job.asset.name,
-                "url": job.asset.browser_download_url,
-                "tag": job.tag,
-                "method": method.as_str(),
-                "sha256": sha256,
-            }));
+                // Audit trail: one entry per unique download, regardless of
+                // outcome, so build-summary.json's `provenance` array records
+                // exactly how (or whether) every asset was verified.
+                let sha256 = lpt_lib::checksum::sha256_file(&path).unwrap_or_default();
+                provenance.lock().unwrap().push(serde_json::json!({
+                    "asset": job.asset.name,
+                    "url": job.asset.browser_download_url,
+                    "tag": job.tag,
+                    "method": method.as_str(),
+                    "sha256": sha256,
+                }));
 
-            downloaded.insert(job.asset.name.clone(), path.clone());
-            path
+                downloaded.insert(job.asset.name.clone(), path.clone());
+                path
+            }
         }
     };
 
-    // 2. Extract.
-    let extract_dir = tmp.join(format!("{}-{}-extract", job.arch, job.dist));
-    extract(&asset_path, &extract_dir, &cfg.artifact_format)?;
+    // 2. Extract (or use directory payload as-is).
+    let extract_dir = if asset_path.is_dir() {
+        asset_path.clone()
+    } else {
+        let extract_dir = tmp.join(format!("{}-{}-extract", job.arch, job.dist));
+        extract(&asset_path, &extract_dir, &cfg.artifact_format)?;
+        extract_dir
+    };
 
     // 3. Locate the binary to package.
     let binary_dir = if cfg.binary_path.is_empty() {
@@ -1033,10 +1327,12 @@ fn build_one(
         plugin.file_extension()
     ));
     std::fs::create_dir_all(&staging_root)?;
-    // Signing for formats that embed signatures natively (rpm) is passed
-    // into the plugin; deb signs post-build (detached .sig).
+    // Signing: rpm embeds natively; deb debsign embeds via the plugin;
+    // deb detach signs post-build (.sig).
     let sign_key = cfg.effective_sign_key(args.sign_key.as_deref());
     let sign_passphrase = resolve_sign_passphrase();
+    let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
+    let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
     let ctx = crate::plugins::BuildContext {
         cfg,
         job,
@@ -1047,7 +1343,9 @@ fn build_one(
         build_version: &args.build_version,
         mtime,
         sign_key: sign_key.as_deref(),
+        sign_key_id: &sign_key_id,
         sign_passphrase: sign_passphrase.as_deref(),
+        sign_method: &sign_method,
     };
     let built = plugin.build(&ctx)?;
     let final_path = args.output.join(built.file_name().unwrap());
@@ -1078,19 +1376,19 @@ fn build_one(
         }
     }
 
-    // 6. Optional signing. deb: detached gpg signature next to the .deb;
-    // rpm/arch: handled inside the plugin (rpm embeds natively, arch has
-    // no signature story in pacman packages).
+    // 6. Optional post-build detach signing for deb (skipped when method is
+    // debsign — that embeds `_gpgorigin` inside the plugin build).
     if let Some(key) = cfg.effective_sign_key(args.sign_key.as_deref()) {
-        if format == "deb" {
-            let key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
+        if format == "deb" && sign_method == "detach" {
             let req = lpt_lib::sign::SignRequest {
                 key_file: &key,
-                key_id: &key_id,
+                key_id: &sign_key_id,
                 passphrase: sign_passphrase.as_deref(),
             };
             let sig = lpt_lib::sign::gpg_detach_sign(&final_path, &req)?;
             println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
+        } else if format == "deb" && sign_method == "debsign" {
+            println!("    ✓ signed {} (_gpgorigin)", final_path.display());
         }
     }
 

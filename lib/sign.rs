@@ -2,16 +2,20 @@
 //!
 //! Two mechanisms, one request type:
 //!
-//! * **`.deb`** — shells out to `gpg --detach-sign`, writing a detached
-//!   binary signature next to the artifact (`<file>.sig`). There is no
-//!   Rust equivalent worth pulling in for OpenPGP signing; `gpg` is on
-//!   every CI runner that matters (same trade-off as `lintian`).
+//! * **`.deb`** — either a detached binary signature next to the artifact
+//!   (`<file>.sig` via `gpg --detach-sign`), or an embedded `_gpgorigin`
+//!   member inside the `.deb` ar (debsign / debsigs) via
+//!   [`clearsign`]. There is no Rust equivalent worth pulling in for
+//!   OpenPGP signing; `gpg` is on every CI runner that matters (same
+//!   trade-off as `lintian`).
 //! * **`.rpm`** — the `rpm` crate embeds the PGP signature in the package
 //!   header natively; [`SignRequest`] just carries the key material there
 //!   (see `lib/rpmarchive.rs`).
 
 use anyhow::{bail, Context, Result};
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 /// Everything needed to sign one artifact.
 #[derive(Debug, Clone)]
@@ -39,30 +43,11 @@ impl<'a> SignRequest<'a> {
 /// configured-but-failed sign must never yield an unsigned release.
 pub fn gpg_detach_sign(artifact: &Path, req: &SignRequest) -> Result<PathBuf> {
     let sig_path = sig_path_for(artifact);
-    let mut cmd = std::process::Command::new("gpg");
-    cmd.arg("--batch")
-        .arg("--yes")
-        .arg("--detach-sign")
+    let mut cmd = base_gpg_cmd(req)?;
+    cmd.arg("--detach-sign")
         .arg("--output")
         .arg(&sig_path)
-        .arg("--local-user");
-    // Prefer an explicit id; else point gpg at the provided secret key file
-    // via a temporary GNUPGHOME so we don't depend on the caller's keyring.
-    let tmp_home;
-    if !req.key_id.trim().is_empty() {
-        cmd.arg(req.key_id.trim());
-    } else {
-        tmp_home = import_key_to_temp_home(req)?;
-        cmd.env("GNUPGHOME", &tmp_home);
-        cmd.arg(key_id_from_home(&tmp_home)?);
-    }
-    if let Some(pass) = req.passphrase.filter(|p| !p.is_empty()) {
-        cmd.arg("--pinentry-mode")
-            .arg("loopback")
-            .arg("--passphrase")
-            .arg(pass);
-    }
-    cmd.arg(artifact);
+        .arg(artifact);
     let out = cmd.output().with_context(|| {
         "failed to run `gpg` (is it installed? apt-get install gnupg / dnf install gnupg2)"
     })?;
@@ -76,11 +61,71 @@ pub fn gpg_detach_sign(artifact: &Path, req: &SignRequest) -> Result<PathBuf> {
     Ok(sig_path)
 }
 
+/// Armored-detach-sign `payload` bytes (stdin → stdout), returning the
+/// signature. Used to produce the `_gpgorigin` ar member for
+/// `signature.method: debsign` (debsigs / nfpm-compatible). Despite the
+/// historical "clearsign" name, this is `gpg --armor --detach-sign`, not
+/// `gpg --clearsign`: debsigs expects a detached signature over the
+/// concatenated `debian-binary` + control + data members.
+pub fn clearsign(payload: &[u8], req: &SignRequest) -> Result<Vec<u8>> {
+    let mut cmd = base_gpg_cmd(req)?;
+    cmd.arg("--armor")
+        .arg("--detach-sign")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| {
+        "failed to run `gpg` (is it installed? apt-get install gnupg / dnf install gnupg2)"
+    })?;
+    {
+        let stdin = child.stdin.as_mut().expect("piped stdin");
+        stdin
+            .write_all(payload)
+            .context("failed to write payload to gpg stdin")?;
+    }
+    let out = child
+        .wait_with_output()
+        .context("gpg armored detach-sign failed")?;
+    if !out.status.success() {
+        bail!(
+            "gpg armored detach-sign failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    if out.stdout.is_empty() {
+        bail!("gpg armored detach-sign produced empty signature");
+    }
+    Ok(out.stdout)
+}
+
 /// `<file>.deb` -> sibling `<file>.sig` (replacing any stale signature).
 pub fn sig_path_for(artifact: &Path) -> PathBuf {
     let mut p = artifact.as_os_str().to_os_string();
     p.push(".sig");
     PathBuf::from(p)
+}
+
+/// Shared gpg invocation setup: `--batch --yes --local-user …`, optional
+/// passphrase, and a hermetic temp GNUPGHOME when no key id is given.
+fn base_gpg_cmd(req: &SignRequest) -> Result<Command> {
+    let mut cmd = Command::new("gpg");
+    cmd.arg("--batch").arg("--yes").arg("--local-user");
+    // Prefer an explicit id; else point gpg at the provided secret key file
+    // via a temporary GNUPGHOME so we don't depend on the caller's keyring.
+    if !req.key_id.trim().is_empty() {
+        cmd.arg(req.key_id.trim());
+    } else {
+        let tmp_home = import_key_to_temp_home(req)?;
+        cmd.env("GNUPGHOME", &tmp_home);
+        cmd.arg(key_id_from_home(&tmp_home)?);
+    }
+    if let Some(pass) = req.passphrase.filter(|p| !p.is_empty()) {
+        cmd.arg("--pinentry-mode")
+            .arg("loopback")
+            .arg("--passphrase")
+            .arg(pass);
+    }
+    Ok(cmd)
 }
 
 /// Import the armored secret key into a throwaway GNUPGHOME so signing is
@@ -96,16 +141,15 @@ fn import_key_to_temp_home(req: &SignRequest) -> Result<PathBuf> {
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))?;
     }
     let key = req.key_bytes()?;
-    let mut child = std::process::Command::new("gpg")
+    let mut child = Command::new("gpg")
         .env("GNUPGHOME", &path)
         .args(["--batch", "--import"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
         .spawn()
         .context("failed to run `gpg --import`")?;
     {
-        use std::io::Write;
         child.stdin.as_mut().expect("piped stdin").write_all(&key)?;
     }
     let status = child.wait().context("gpg --import failed")?;
@@ -120,7 +164,7 @@ fn import_key_to_temp_home(req: &SignRequest) -> Result<PathBuf> {
 
 /// First secret-key fingerprint found in a GNUPGHOME.
 pub fn key_id_from_home(home: &Path) -> Result<String> {
-    let out = std::process::Command::new("gpg")
+    let out = Command::new("gpg")
         .env("GNUPGHOME", home)
         .args(["--batch", "--list-secret-keys", "--with-colons"])
         .output()

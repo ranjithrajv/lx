@@ -270,7 +270,9 @@ fn deb_and_rpm_plugins_build_valid_archives() {
             build_version: "1",
             mtime: 1_735_689_600,
             sign_key: None,
+            sign_key_id: "",
             sign_passphrase: None,
+            sign_method: "detach",
         };
         let out = plugin.build(&ctx).unwrap();
         assert!(out.exists(), "plugin {format} did not produce output");
@@ -363,7 +365,9 @@ fn deb_with_new_control_fields_and_compression_is_valid() {
         build_version: "1",
         mtime: 1_735_689_600,
         sign_key: None,
+        sign_key_id: "",
         sign_passphrase: None,
+        sign_method: "detach",
     };
     let out = plugin.build(&ctx).unwrap();
     assert!(out.exists());
@@ -535,7 +539,9 @@ fn deb_contents_scripts_conffiles_end_to_end() {
         build_version: "1",
         mtime: 1_735_689_600,
         sign_key: None,
+        sign_key_id: "",
         sign_passphrase: None,
+        sign_method: "detach",
     };
     let out = plugin.build(&ctx).unwrap();
     assert!(out.exists());

@@ -93,6 +93,14 @@ out:
 - **`--host`** (`build`): auto-detects this machine's architecture (`uname
   -m`) and builds only that one, skipping QEMU. Conflicts with
   `--architectures`.
+- **`--local`** (`build`): package a local archive or directory from
+  `local_payload:` in package.yaml, skipping the upstream download.
+  Requires `version:` (or `--version`).
+- **`--sign-key` / `--sign-method`** (`build`): sign built packages.
+  Method `detach` (default) writes a sibling `.sig`; `debsign` embeds
+  `_gpgorigin` inside the `.deb` (debsigs / nfpm-compatible). RPM embeds
+  natively either way. Passphrase via `$LPT_SIGN_PASSPHRASE` or
+  `$NFPM_PASSPHRASE`.
 - **A GitHub URL in place of a config file** (`build`): `lpt build
   https://github.com/<owner>/<repo>` needs no `package.yaml` at all — builds
   every architecture the release publishes, with source packages included.
@@ -164,6 +172,15 @@ breaks: ""                     # e.g. "eza-legacy (<< 2.0)"
 version: ""                   # pin a specific upstream version (else: latest)
 build_version: "1"            # Debian revision
 epoch: ""                     # e.g. "1" -- for upstream version-numbering resets
+
+# Local-only packaging (lpt build --local); skips the forge download.
+# Existence is checked at build time. ${VAR} / ${VAR:-default} expand at parse.
+local_payload: ""             # path to an archive or directory
+
+signature:
+  key_file: ""                # ASCII-armored secret key (env-expandable)
+  key_id: ""                  # optional gpg --local-user
+  method: detach              # detach (sibling .sig) | debsign (embedded _gpgorigin)
 ```
 
 **Legacy debian-multiarch-builder configs load as-is.** Every key the bash
@@ -227,6 +244,17 @@ versioning (e.g. `1.0.0` after a `2024.03` calendar-versioned run) such
 that plain string comparison would otherwise sort the new release as
 *older*. Appears in the `Version:` field (`<epoch>:<version>`) but never in
 filenames, per Debian policy.
+
+**`local_payload:` + `--local`** — package an already-downloaded archive or
+an extracted directory without hitting GitHub/GitLab. Requires `version:`
+(or `--version`). Path existence is checked at build time, not parse time.
+
+**`signature:`** — sign built packages. For `.deb`, `method: detach`
+(default) writes `<pkg>.deb.sig` beside the artifact; `method: debsign`
+embeds an armored detach-signature as the `_gpgorigin` ar member (debsigs /
+nfpm). For `.rpm`, the signature is always embedded in the header when
+`key_file` is set. `${VAR}` / `${VAR:-default}` expand in the YAML at parse
+time (e.g. `key_file: ${SIGNING_KEY_FILE}`).
 
 Man pages (`*.1`–`*.9`, gzipped) and license files (`LICENSE`/`COPYING`/
 `NOTICE`, any casing) sitting alongside the binary in a flat-mode release

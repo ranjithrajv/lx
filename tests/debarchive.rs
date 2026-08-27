@@ -310,3 +310,86 @@ fn same_input_compressed_is_deterministic() {
         assert_eq!(build_once(), build_once(), "determinism failed for {comp}");
     }
 }
+
+#[test]
+fn build_full_with_origin_signer_appends_gpgorigin() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+
+    let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    let signer = |payload: &[u8]| -> anyhow::Result<Vec<u8>> {
+        let mut out = b"BEGIN:".to_vec();
+        out.extend_from_slice(payload);
+        out.extend_from_slice(b":END");
+        Ok(out)
+    };
+    build_full(
+        root.path(),
+        b"Package: hello\n",
+        0,
+        &deb_path,
+        "gzip",
+        &[],
+        Some(&signer),
+    )
+    .unwrap();
+
+    let file = std::fs::File::open(&deb_path).unwrap();
+    let mut archive = ar::Archive::new(file);
+    let mut names = Vec::new();
+    let mut gpgorigin = None;
+    while let Some(entry) = archive.next_entry() {
+        let mut entry = entry.unwrap();
+        let name = String::from_utf8_lossy(entry.header().identifier()).to_string();
+        if name == "_gpgorigin" {
+            let mut buf = Vec::new();
+            std::io::copy(&mut entry, &mut buf).unwrap();
+            gpgorigin = Some(buf);
+        }
+        names.push(name);
+    }
+    assert_eq!(
+        names,
+        vec![
+            "debian-binary",
+            "control.tar.gz",
+            "data.tar.gz",
+            "_gpgorigin"
+        ]
+    );
+    let sig = gpgorigin.expect("_gpgorigin missing");
+    assert!(sig.starts_with(b"BEGIN:"));
+    assert!(sig.ends_with(b":END"));
+    // Payload is debian-binary + control + data (at least "2.0\n").
+    assert!(sig.len() > b"BEGIN:2.0\n:END".len());
+}
+
+#[test]
+fn build_full_without_signer_has_three_members() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+    let deb_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    build_full(
+        root.path(),
+        b"Package: hello\n",
+        0,
+        &deb_path,
+        "gzip",
+        &[],
+        None,
+    )
+    .unwrap();
+    let file = std::fs::File::open(&deb_path).unwrap();
+    let mut archive = ar::Archive::new(file);
+    let mut names = Vec::new();
+    while let Some(entry) = archive.next_entry() {
+        let entry = entry.unwrap();
+        names.push(String::from_utf8_lossy(entry.header().identifier()).to_string());
+    }
+    assert_eq!(
+        names,
+        vec!["debian-binary", "control.tar.gz", "data.tar.gz"]
+    );
+}

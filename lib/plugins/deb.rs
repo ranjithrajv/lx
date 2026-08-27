@@ -88,6 +88,28 @@ impl Plugin for DebPlugin {
         let deb_dest = out_dir.join(&deb_name);
 
         let comp = cfg.effective_compression();
+        #[allow(clippy::type_complexity)]
+        let origin_signer: Option<Box<lpt_lib::debarchive::OriginSigner>> =
+            if ctx.sign_method == "debsign" {
+                if let Some(key) = ctx.sign_key {
+                    let key = key.to_path_buf();
+                    let key_id = ctx.sign_key_id.to_string();
+                    let passphrase = ctx.sign_passphrase.map(|s| s.to_string());
+                    Some(Box::new(move |payload: &[u8]| {
+                        let req = lpt_lib::sign::SignRequest {
+                            key_file: &key,
+                            key_id: &key_id,
+                            passphrase: passphrase.as_deref(),
+                        };
+                        lpt_lib::sign::clearsign(payload, &req)
+                    }))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        let signer_ref = origin_signer.as_ref().map(|f| f.as_ref());
         lpt_lib::debarchive::build_full(
             ctx.staging_root,
             control.as_bytes(),
@@ -95,6 +117,7 @@ impl Plugin for DebPlugin {
             &deb_dest,
             &comp,
             &extras,
+            signer_ref,
         )
         .with_context(|| format!("failed to build {}", deb_dest.display()))?;
 

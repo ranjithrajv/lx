@@ -72,3 +72,62 @@ fn gpg_detach_sign_round_trip_with_generated_key() {
     assert!(sig.to_string_lossy().ends_with(".sig"));
     assert!(!std::fs::read(&sig).unwrap().is_empty());
 }
+
+/// Clearsign (armored detach of bytes) round-trip with a throwaway key.
+#[test]
+fn clearsign_round_trip_with_generated_key() {
+    let Ok(_) = std::process::Command::new("gpg").arg("--version").output() else {
+        eprintln!("skipping: gpg not on PATH");
+        return;
+    };
+    let home = match tempfile::tempdir() {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let gen = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home.path())
+        .args([
+            "--batch",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            "",
+            "--quick-gen-key",
+            "lpt-clearsign <lpt@example.invalid>",
+            "default",
+            "default",
+            "never",
+        ])
+        .output();
+    let Ok(gen) = gen else { return };
+    if !gen.status.success() {
+        eprintln!("skipping: quick-gen-key unsupported here");
+        return;
+    }
+    let fpr = match key_id_from_home(home.path()) {
+        Ok(f) => f,
+        Err(e) => {
+            eprintln!("skipping: {e:#}");
+            return;
+        }
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let export = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home.path())
+        .args(["--batch", "--armor", "--export-secret-keys", &fpr])
+        .output()
+        .unwrap();
+    assert!(export.status.success());
+    let key_file = dir.path().join("key.asc");
+    std::fs::write(&key_file, &export.stdout).unwrap();
+
+    let req = SignRequest {
+        key_file: &key_file,
+        key_id: "",
+        passphrase: None,
+    };
+    let sig = clearsign(b"debian-binary+control+data", &req).unwrap();
+    assert!(sig.starts_with(b"-----BEGIN PGP SIGNATURE-----"));
+    assert!(!sig.is_empty());
+}

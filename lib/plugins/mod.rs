@@ -41,11 +41,18 @@ pub struct BuildContext<'a> {
     /// Reproducible mtime (SOURCE_DATE_EPOCH or published_at).
     pub mtime: i64,
     /// Signing key file for formats that embed signatures natively
-    /// (rpm). `None` when signing is disabled. deb signs post-build
-    /// instead (detached `.sig`), so it ignores this.
+    /// (rpm), and for deb when `sign_method` is `"debsign"`. `None` when
+    /// signing is disabled. deb `detach` signs post-build instead
+    /// (detached `.sig`).
     pub sign_key: Option<&'a Path>,
-    /// Passphrase for the embedded-signature key (rpm), resolved from env.
+    /// Optional gpg `--local-user` key id / fingerprint (deb signing).
+    pub sign_key_id: &'a str,
+    /// Passphrase for the embedded-signature key (rpm / debsign),
+    /// resolved from env.
     pub sign_passphrase: Option<&'a str>,
+    /// Deb signing method: `"detach"` (post-build `.sig`) or `"debsign"`
+    /// (embedded `_gpgorigin`). Ignored by rpm/arch.
+    pub sign_method: &'a str,
 }
 
 /// A package-format plugin.

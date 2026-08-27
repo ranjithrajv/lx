@@ -68,12 +68,16 @@ pub struct Scripts {
 ///
 /// - **rpm**: the armored secret key is loaded natively and the signature
 ///   is embedded in the `.rpm` header (verifiable via `rpm -K`).
-/// - **deb**: `gpg --detach-sign` produces a `<file>.sig` next to each
-///   built `.deb` (asset-level verification; apt repository publishing
-///   additionally signs the Release index as usual).
+/// - **deb**:
+///   - `method: detach` (default) — `gpg --detach-sign` produces a
+///     `<file>.sig` next to each built `.deb`.
+///   - `method: debsign` — armored detach-sign of the ar payload is
+///     embedded as `_gpgorigin` inside the `.deb` (debsigs / nfpm).
 ///
 /// Passphrase resolution (both formats): `$LPT_SIGN_PASSPHRASE`, falling
 /// back to `$NFPM_PASSPHRASE` for nfpm parity.
+///
+/// String fields expand `${VAR}` / `${VAR:-default}` at parse time.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SignatureConfig {
@@ -84,6 +88,10 @@ pub struct SignatureConfig {
     /// ignored by the rpm crate, which uses the key file's primary/subkey).
     #[serde(default)]
     pub key_id: String,
+    /// Signing method for `.deb`: `"detach"` (default) or `"debsign"`.
+    /// Ignored for rpm/arch.
+    #[serde(default)]
+    pub method: String,
 }
 
 /// A single Debian package definition, mirroring package.yaml.
@@ -185,6 +193,11 @@ pub struct PackageConfig {
     /// Package signing. See [`SignatureConfig`].
     #[serde(default)]
     pub signature: SignatureConfig,
+    /// Local payload path (archive or directory) for `--local` builds that
+    /// skip the upstream release download. Existence is checked at build
+    /// time, not parse time. Env-expanded at parse (`${VAR}` / `${VAR:-default}`).
+    #[serde(default)]
+    pub local_payload: String,
     /// SPDX license identifier.
     #[serde(default)]
     pub license_spdx: String,
@@ -367,12 +380,14 @@ impl PackageConfig {
         Self::parse_str(&text).with_context(|| "failed to parse package.yaml")
     }
 
-    /// Parse from a string, applying legacy debian-multiarch-builder key
-    /// compatibility, then structural validation. Split out so callers
-    /// holding YAML in memory get the identical pipeline.
+    /// Parse from a string, applying env-var expansion, legacy
+    /// debian-multiarch-builder key compatibility, then structural
+    /// validation. Split out so callers holding YAML in memory get the
+    /// identical pipeline.
     pub fn parse_str(text: &str) -> Result<Self> {
+        let expanded = expand_env_vars(text)?;
         let mut config: PackageConfig =
-            serde_yaml::from_str(text).with_context(|| "failed to parse package.yaml")?;
+            serde_yaml::from_str(&expanded).with_context(|| "failed to parse package.yaml")?;
         config.apply_legacy_compat();
         config.validate()?;
         Ok(config)
@@ -544,6 +559,14 @@ impl PackageConfig {
                 bail!(
                     "distribution_arch_overrides entry '{arch}' must list at least one non-empty distribution"
                 );
+            }
+        }
+        if !self.signature.method.trim().is_empty() {
+            match self.signature.method.trim().to_ascii_lowercase().as_str() {
+                "detach" | "debsign" => {}
+                other => {
+                    bail!("unsupported signature.method '{other}' (expected detach or debsign)")
+                }
             }
         }
         Ok(())
@@ -727,6 +750,22 @@ impl PackageConfig {
         self.signature.key_id.trim().to_string()
     }
 
+    /// Effective deb signing method: CLI flag wins over package.yaml.
+    /// Empty / unset → `"detach"` (post-build `.sig`).
+    pub fn effective_sign_method(&self, cli_method: Option<&str>) -> String {
+        if let Some(m) = cli_method {
+            if !m.trim().is_empty() {
+                return m.trim().to_ascii_lowercase();
+            }
+        }
+        let m = self.signature.method.trim();
+        if m.is_empty() {
+            "detach".to_string()
+        } else {
+            m.to_ascii_lowercase()
+        }
+    }
+
     /// Whether an architecture is supported in a given Debian distribution.
     /// A `distribution_arch_overrides` entry for the architecture replaces
     /// the built-in matrix entirely; otherwise the built-in rules mirror
@@ -747,6 +786,60 @@ impl PackageConfig {
             _ => false,
         }
     }
+}
+
+/// Expand `${VAR}` and `${VAR:-default}` references in `text` using process
+/// environment. Missing `VAR` without a `:-` default is an error. `$$`
+/// becomes a literal `$`. Used by [`PackageConfig::parse_str`] so config
+/// fields like `signature.key_file` / `local_payload` can reference CI
+/// secrets without baking paths into the file.
+pub fn expand_env_vars(text: &str) -> Result<String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(dollar) = rest.find('$') {
+        out.push_str(&rest[..dollar]);
+        rest = &rest[dollar..];
+        if rest.starts_with("$$") {
+            out.push('$');
+            rest = &rest[2..];
+            continue;
+        }
+        if let Some(inner) = rest.strip_prefix("${") {
+            let Some(end) = inner.find('}') else {
+                bail!("unclosed ${{...}} env reference");
+            };
+            let body = &inner[..end];
+            let (name, default) = match body.split_once(":-") {
+                Some((n, d)) => (n, Some(d)),
+                None => (body, None),
+            };
+            if name.is_empty() || !is_env_name(name) {
+                bail!("invalid env var name in '${{{body}}}'");
+            }
+            match std::env::var(name) {
+                Ok(v) => out.push_str(&v),
+                Err(_) => match default {
+                    Some(d) => out.push_str(d),
+                    None => bail!("environment variable '{name}' is not set"),
+                },
+            }
+            rest = &inner[end + 1..];
+            continue;
+        }
+        out.push('$');
+        rest = &rest[1..];
+    }
+    out.push_str(rest);
+    Ok(out)
+}
+
+fn is_env_name(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Drop suites whose LTS support has ended, mirroring the action's

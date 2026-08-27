@@ -37,7 +37,7 @@ pub fn build_with_compression(
     deb_path: &Path,
     compression: &str,
 ) -> Result<()> {
-    build_full(root, control, mtime, deb_path, compression, &[])
+    build_full(root, control, mtime, deb_path, compression, &[], None)
 }
 
 /// An extra control-member file beyond `control` and `md5sums`:
@@ -52,10 +52,21 @@ pub struct ControlMember {
     pub mode: u32,
 }
 
+/// Callback that turns the debsign payload (concatenated `debian-binary` +
+/// control.tar.* + data.tar.*) into `_gpgorigin` member bytes.
+pub type OriginSigner<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>> + 'a;
+
 /// Full-fidelity build: like [`build_with_compression`] plus additional
 /// control members (maintainer scripts, conffiles). Extras are emitted in
 /// the given order after `control` + `md5sums`; callers pass a sorted list
 /// so output stays reproducible.
+///
+/// When `origin_signer` is `Some`, it is called with the concatenation of
+/// `debian-binary` + control.tar.* + data.tar.* (debsigs / nfpm debsign
+/// payload) and its return value is appended as the `_gpgorigin` ar member
+/// after `data.tar.*`. dpkg ignores trailing members, so unsigned consumers
+/// keep working.
+#[allow(clippy::type_complexity)]
 pub fn build_full(
     root: &Path,
     control: &[u8],
@@ -63,6 +74,7 @@ pub fn build_full(
     deb_path: &Path,
     compression: &str,
     extras: &[ControlMember],
+    origin_signer: Option<&OriginSigner>,
 ) -> Result<()> {
     let comp = normalize_compression(compression)
         .with_context(|| format!("invalid compression '{compression}'"))?;
@@ -71,8 +83,15 @@ pub fn build_full(
         .with_context(|| format!("failed to build data.tar.{ext}", ext = comp.ext()))?;
     let control_tar = build_control_tar(control, md5sums.as_bytes(), mtime, &comp, extras)
         .with_context(|| format!("failed to build control.tar.{ext}", ext = comp.ext()))?;
-    write_ar_with_compression(deb_path, mtime, &control_tar, &data_tar, &comp)
-        .context("failed to write .deb ar container")
+    write_ar_with_compression(
+        deb_path,
+        mtime,
+        &control_tar,
+        &data_tar,
+        &comp,
+        origin_signer,
+    )
+    .context("failed to write .deb ar container")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -446,8 +465,7 @@ fn xz(data: &[u8], preset: u32) -> Result<Vec<u8>> {
 /// Write the outer `ar` container: `debian-binary`, `control.tar.*`,
 /// `data.tar.*`, in that order (dpkg requires this exact order and reads
 /// only as much of the archive as it needs, so anything after `data.tar.*`
-/// -- e.g. a detached signature -- is safe to append later if ever
-/// needed).
+/// -- e.g. `_gpgorigin` -- is safe to append).
 #[allow(dead_code)]
 fn write_ar(deb_path: &Path, mtime: i64, control_tar_gz: &[u8], data_tar_gz: &[u8]) -> Result<()> {
     write_ar_with_compression(
@@ -459,6 +477,7 @@ fn write_ar(deb_path: &Path, mtime: i64, control_tar_gz: &[u8], data_tar_gz: &[u
             kind: CompressionKind::Gzip,
             level: None,
         },
+        None,
     )
 }
 
@@ -468,6 +487,7 @@ fn write_ar_with_compression(
     control_tar: &[u8],
     data_tar: &[u8],
     comp: &Compression,
+    #[allow(clippy::type_complexity)] origin_signer: Option<&OriginSigner>,
 ) -> Result<()> {
     let file = std::fs::File::create(deb_path)
         .with_context(|| format!("failed to create '{}'", deb_path.display()))?;
@@ -478,18 +498,38 @@ fn write_ar_with_compression(
         CompressionKind::Zstd => ("control.tar.zst", "data.tar.zst"),
         CompressionKind::None => ("control.tar", "data.tar"),
     };
+    const DEBIAN_BINARY: &[u8] = b"2.0\n";
     let members: [(&str, &[u8]); 3] = [
-        ("debian-binary", b"2.0\n"),
+        ("debian-binary", DEBIAN_BINARY),
         (ctrl_name, control_tar),
         (data_name, data_tar),
     ];
     for (name, data) in members {
-        let mut header = ar::Header::new(name.as_bytes().to_vec(), data.len() as u64);
-        header.set_mtime(mtime.max(0) as u64);
-        header.set_uid(0);
-        header.set_gid(0);
-        header.set_mode(crate::constants::AR_MODE);
-        builder.append(&header, data)?;
+        append_ar_member(&mut builder, name, data, mtime)?;
     }
+    if let Some(sign) = origin_signer {
+        let mut payload =
+            Vec::with_capacity(DEBIAN_BINARY.len() + control_tar.len() + data_tar.len());
+        payload.extend_from_slice(DEBIAN_BINARY);
+        payload.extend_from_slice(control_tar);
+        payload.extend_from_slice(data_tar);
+        let sig = sign(&payload).context("origin signer failed")?;
+        append_ar_member(&mut builder, "_gpgorigin", &sig, mtime)?;
+    }
+    Ok(())
+}
+
+fn append_ar_member<W: Write>(
+    builder: &mut ar::Builder<W>,
+    name: &str,
+    data: &[u8],
+    mtime: i64,
+) -> Result<()> {
+    let mut header = ar::Header::new(name.as_bytes().to_vec(), data.len() as u64);
+    header.set_mtime(mtime.max(0) as u64);
+    header.set_uid(0);
+    header.set_gid(0);
+    header.set_mode(crate::constants::AR_MODE);
+    builder.append(&header, data)?;
     Ok(())
 }

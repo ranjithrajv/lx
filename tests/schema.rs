@@ -27,7 +27,13 @@ fn schema_compression_enum_covers_all() {
 #[test]
 fn schema_documents_new_features() {
     let s = generate_schema();
-    for key in ["contents", "overrides", "scripts", "signature"] {
+    for key in [
+        "contents",
+        "overrides",
+        "scripts",
+        "signature",
+        "local_payload",
+    ] {
         assert!(s["properties"][key].is_object(), "missing {key}");
     }
     let content_types = s["properties"]["contents"]["items"]["properties"]["type"]["enum"]
@@ -38,4 +44,10 @@ fn schema_documents_new_features() {
     assert!(vals.contains(&"tree"));
     assert!(vals.contains(&"symlink"));
     assert!(vals.contains(&"ghost"));
+    let methods = s["properties"]["signature"]["properties"]["method"]["enum"]
+        .as_array()
+        .unwrap();
+    let methods: Vec<&str> = methods.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(methods.contains(&"detach"));
+    assert!(methods.contains(&"debsign"));
 }

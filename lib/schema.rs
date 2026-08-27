@@ -273,17 +273,26 @@ pub fn generate_schema() -> serde_json::Value {
             "signature": {
                 "type": "object",
                 "additionalProperties": false,
-                "description": "Package signing. deb: detached <pkg>.sig via gpg; rpm: PGP signature embedded natively. Passphrase via $LPT_SIGN_PASSPHRASE or $NFPM_PASSPHRASE.",
+                "description": "Package signing. deb detach (default): sibling <pkg>.sig; deb debsign: embedded _gpgorigin; rpm: PGP embedded natively. Passphrase via $LPT_SIGN_PASSPHRASE or $NFPM_PASSPHRASE. String fields expand ${VAR} / ${VAR:-default}.",
                 "properties": {
                     "key_file": {
                         "type": "string",
-                        "description": "Path to an ASCII-armored secret key"
+                        "description": "Path to an ASCII-armored secret key (env-expandable)"
                     },
                     "key_id": {
                         "type": "string",
                         "description": "Optional key id / fingerprint (gpg --local-user)"
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["detach", "debsign"],
+                        "description": "Deb signing method (default detach). Ignored for rpm/arch."
                     }
                 }
+            },
+            "local_payload": {
+                "type": "string",
+                "description": "Local archive or directory for --local builds (skips upstream download; existence checked at build time; env-expandable)"
             },
             "license_spdx": {
                 "type": "string",

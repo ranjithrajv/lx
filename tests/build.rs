@@ -79,3 +79,61 @@ fn version_placeholder_dedupes_literal_v_prefix() {
     // Multiple placeholders, each deduped.
     assert_eq!(x("a_v{version}/b-{version}", "v2"), "a_v2/b-v2");
 }
+
+#[test]
+fn local_dry_run_builds_matrix_from_payload_dir() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("hello"), b"\x7fELFfake").unwrap();
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("package.yaml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            r#"
+package_name: hello
+github_repo: owner/hello
+version: "1.0.0"
+local_payload: {}
+architectures: [amd64]
+debian_distributions: [trixie]
+"#,
+            payload.path().display()
+        ),
+    )
+    .unwrap();
+
+    let args = BuildArgs {
+        config: cfg_path,
+        version: None,
+        build_version: "1".into(),
+        architectures: None,
+        host: false,
+        distributions: None,
+        output: cfg_dir.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: true,
+    };
+    run(args, None).expect("local --dry-run should succeed");
+}
