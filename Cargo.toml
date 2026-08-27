@@ -33,7 +33,15 @@ libc = "0.2"
 jiff = "0.2.35"
 glob = "0.3.4"
 tokio = { version = "1.0", features = ["rt", "macros"] }
-octocrab = { version = "0.54.1", default-features = false, features = ["rustls", "rustls-ring", "retry", "timeout", "default-client", "jwt-rust-crypto"] }
+# jwt-aws-lc-rs over jwt-rust-crypto (foss-mind audit 2026-08-27): both are
+# compile-mandatory for octocrab's JWT machinery, but the rust-crypto backend
+# links the vulnerable Rust `rsa` crate (RUSTSEC-2023-0071, no fixed
+# upgrade). aws-lc-rs' RSA is BoringSSL C — the advisory crate is never
+# linked through this path. Requires cmake on build hosts.
+octocrab = { version = "0.54.1", default-features = false, features = ["rustls", "rustls-ring", "retry", "timeout", "default-client", "jwt-aws-lc-rs"] }
+# Interactive package.yaml generation (lpt init): Input + Confirm + themes
+# are core; default features (fuzzy-select etc.) are unused.
+dialoguer = { version = "0.12", default-features = false }
 ar = "0.9.0"
 md5 = "0.8.1"
 sha1 = "0.10.7"

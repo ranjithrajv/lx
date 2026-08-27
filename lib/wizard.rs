@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use clap::Args;
-use std::io::{self, Write};
+use dialoguer::{theme::ColorfulTheme, Confirm, Input};
 use std::path::PathBuf;
 
 use crate::config::PackageConfig;
@@ -60,23 +60,26 @@ fn list_templates() {
     }
 }
 
+/// Free-text prompt via dialoguer (foss-mind audit 2026-08-27: replaces the
+/// hand-rolled print/read_line pair for real TTY handling — Ctrl-C, echo,
+/// history). Falls back to `default` on EOF/Ctrl-C/non-TTY stdin so a piped
+/// or closed stdin still produces a config, matching the previous
+/// read_line-into-empty behaviour.
 fn prompt(prompt: &str, default: &str) -> String {
-    print!("{prompt} [{default}]: ");
-    io::stdout().flush().ok();
-    let mut line = String::new();
-    io::stdin().read_line(&mut line).ok();
-    let line = line.trim().to_string();
-    if line.is_empty() {
-        default.to_string()
-    } else {
-        line
-    }
+    Input::with_theme(&ColorfulTheme::default())
+        .with_prompt(prompt)
+        .default(default.to_string())
+        .interact_text()
+        .unwrap_or_else(|_| default.to_string())
 }
 
+/// Yes/no prompt; same error policy as [`prompt`] (EOF/Ctrl-C -> default).
 fn prompt_yes(question: &str, default: bool) -> bool {
-    let d = if default { "y" } else { "n" };
-    let answer = prompt(question, d).to_ascii_lowercase();
-    answer.starts_with('y')
+    Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt(question)
+        .default(default)
+        .interact()
+        .unwrap_or(default)
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
