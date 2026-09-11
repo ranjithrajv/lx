@@ -201,8 +201,8 @@ overrides:
 | post-install | `--after-install` | ✅ `scripts.postinstall` | ✅ `scripts.postinstall` |
 | pre-remove | `--before-remove` | ✅ `scripts.preremove` | ✅ `scripts.preremove` |
 | post-remove | `--after-remove` | ✅ `scripts.postremove` | ✅ `scripts.postremove` |
-| pre-upgrade | `--before-upgrade` | ❌ | ❌ |
-| post-upgrade | `--after-upgrade` | ❌ | ❌ |
+| pre-upgrade | `--before-upgrade` | ❌ | ✅ `scripts.preupgrade_script` |
+| post-upgrade | `--after-upgrade` | ❌ | ✅ `scripts.postupgrade_script` |
 | pre-transaction (rpm) | `--rpm-pretrans` | ❌ | ✅ `scripts.pretrans` |
 | post-transaction (rpm) | `--rpm-posttrans` | ❌ | ✅ `scripts.posttrans` |
 | verify (rpm) | `--rpm-verifyscript` | ❌ | ✅ `scripts.verify` |
@@ -234,7 +234,7 @@ overrides:
 
 | Feature | fpm | nfpm | lx |
 |---|---|---|---|
-| RPM triggers (4 types) | `--rpm-trigger-*` | ❌ | ❌ |
+| RPM triggers (4 types) | `--rpm-trigger-*` | ❌ | ✅ `rpm.trigger_*` (deps + best-effort script) |
 | digest algorithm | `--rpm-digest sha256` | ❌ | ❌ |
 | compression | `--rpm-compression xz` | ✅ `rpm.compression` | ❌ |
 | AutoProv/AutoReq | `--rpm-autoprov` | ❌ | ❌ |
@@ -305,6 +305,40 @@ overrides:
 | Overlay config merge | ❌ | ❌ | ✅ `apply_overlay()` |
 | Expanded paths | ❌ | ✅ `expand: true` | ❌ |
 | Options file | ✅ `--fpm-options-file` | ❌ | ❌ |
+| Musl-static builds | ❌ | ❌ | ✅ `musl: true` |
+| `from-dir`/`from-file` mode | ❌ | ❌ | ✅ `--from-dir`/`--from-file` |
+| `--prefix` custom install path | ✅ `--prefix` | ❌ | ✅ `prefix:` / `--prefix` |
+
+---
+
+## 7a. Musl-static builds (old-distro portability)
+
+A common Linux packaging problem: a binary built on a newer distro won't
+run on older ones because glibc uses symbol versioning — a binary linked
+against glibc 2.28 can't load on a system with glibc 2.17. Neither fpm nor
+nfpm addresses this; the packager must handle it upstream (e.g. build in
+an old-distro container, which inherits unpatched packages).
+
+**lx** solves this with `musl: true` in package.yaml, producing a
+musl-static binary with **no glibc dependency** — it runs on any Linux
+regardless of distro age.
+
+| Capability | fpm | nfpm | lx |
+|---|---|---|---|
+| Musl-static source builds | ❌ | ❌ | ✅ `musl: true` (cargo, go, cmake, custom) |
+| Prefer musl release assets | ❌ | ❌ | ✅ auto-discovery prefers `*-musl*` assets |
+| Omit `libc6` from Depends | ❌ | ❌ | ✅ `compute_depends()` skips libc6 fallback |
+| Consumer musl fallback | ❌ | ❌ | ✅ `lx-get install` falls back to `+musl_{arch}.deb` |
+| `scan-deps --prefer-musl` | ❌ | ❌ | ✅ inspect what a musl binary's deps would be |
+
+How it works per build system:
+
+| `build_system` | Musl mechanism |
+|---|---|
+| `cargo` | `--target x86_64-unknown-linux-musl` (auto-installed via rustup) |
+| `go` | `CGO_ENABLED=0` (fully static, no glibc) |
+| `cmake` | `musl-gcc`/`musl-g++` + `-static` (requires `musl-tools`) |
+| `custom` | user's responsibility via `build_commands` |
 
 ---
 
@@ -354,6 +388,7 @@ overrides:
 | Consumer install/upgrade/rollback workflow | **lx** | Only tool with consumer CLI + repo serving |
 | Source packages (`.dsc`, `.src.rpm`) | **lx** | Only tool producing source packages |
 | Zero-config packaging from a URL | **lx** | `lx build https://github.com/owner/repo` |
+| Binary that runs on old distros | **lx** | `musl: true` — no glibc dependency |
 | No runtime dependencies | **nfpm** or **lx** | Both are single static binaries |
 | Maximum format coverage | **fpm** | 15+ formats |
 
@@ -371,6 +406,7 @@ overrides:
 
 - **lx** is the opinionated pipeline: "point me at a forge repo, I'll
   handle everything." It optimizes for automation — auto-fetch, verify,
-  auto-install ancillaries, serve a repo, manage upgrades. The cost is
-  it only handles forge releases (not arbitrary files) and has fewer
-  output formats.
+  auto-install ancillaries, serve a repo, manage upgrades, and produce
+  musl-static binaries that run on any Linux. The cost is it primarily
+  handles forge releases (though `--from-dir`/`--from-file` covers
+  arbitrary files) and has fewer output formats than fpm.
