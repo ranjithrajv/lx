@@ -4,21 +4,25 @@
 [default]
 # Words that look like typos but are intentional.
 extend-ignore-identifiers-re = [
-    # hex strings, hashes
-    "^[0-9a-f]+$",
+  # hex strings, hashes
+  "^[0-9a-f]+$",
 ]
 
 [default.extend-words]
 # Domain-specific terms that typos flags but are correct.
-"crate" = "crate"       # Rust terminology (often caught as 'crate')
+"crate" = "crate"             # Rust terminology (often caught as 'crate')
 "crates" = "crates"
-"odec" = "odec"         # abbreviation in crypto contexts
-"indic" = "indic"       # short for indicator
+"odec" = "odec"               # abbreviation in crypto contexts
+"indic" = "indic"             # short for indicator
+"flate" = "flate"             # flate2 crate name (compression)
+"fpr" = "fpr"                 # GPG sec:fpr field abbreviation
+"mis" = "mis"                 # prefix in misplacing/mis-placing
+"unparseable" = "unparseable" # valid alternative spelling
 
 [files]
 extend-exclude = [
-    # Generated file — do not lint.
-    "Cargo.lock",
-    # Test fixtures may contain intentional misspellings.
-    "tests/fixtures/",
+  # Generated file — do not lint.
+  "Cargo.lock",
+  # Test fixtures may contain intentional misspellings.
+  "tests/fixtures/",
 ]

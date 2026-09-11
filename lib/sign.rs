@@ -178,7 +178,7 @@ pub fn key_id_from_home(home: &Path) -> Result<String> {
         );
     }
     for line in String::from_utf8_lossy(&out.stdout).lines() {
-        // sec:fpr lines carry the primary secret key fingerprint.
+        // sec:fingerprint lines carry the primary secret key fingerprint.
         let fields: Vec<&str> = line.split(':').collect();
         if fields.len() > 4 && fields[0] == "sec" && !fields[4].trim().is_empty() {
             return Ok(fields[4].trim().to_string());

@@ -14,7 +14,7 @@ Flat-mode builds (a release tarball with no internal FHS layout) previously kept
 `stage_install_tree` (`src/build.rs`) now takes an added `mtime: i64` and, for each non-ELF top-level file, calls a new `stage_ancillary_file`, which:
 - recognizes `*.1`–`*.9` (optionally `.gz`) as man pages via `man_section`, gzips them (`gzip_file_to`, `mtime`-normalized for reproducibility) into `/usr/share/man/man<N>/`;
 - recognizes `LICENSE*`/`COPYING*`/`NOTICE*` case-insensitively via `is_license_like`, copying into `/usr/share/doc/<pkg>/`;
-- otherwise does nothing — no attempt at shell-completion detection (the excluded 4th recommendation), since guessing at `bash`/`zsh`/`fish` completion file conventions without an explicit signal risks silently mis-placing files.
+- otherwise does nothing — no attempt at shell-completion detection (the excluded 4th recommendation), since guessing at `bash`/`zsh`/`fish` completion file conventions without an explicit signal risks silently misplacing files.
 
 Verified via `stage_install_tree_flat_mode_installs_man_pages_and_license` (synthetic binary dir with a `.1` man page and a `LICENSE` file, asserting both land at the correct FHS paths) plus `man_section_recognizes_plain_and_gzipped_pages` and `is_license_like_matches_common_names_case_insensitively`. Not re-verified against a real GitHub release in this original pass — `eza-community/eza`'s release tarball only ships `./eza` at the top level, so it couldn't exercise this path.
 

@@ -18,7 +18,11 @@ clap_complete = "4.5"
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
-reqwest = { version = "0.12", features = ["json", "blocking", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = [
+  "json",
+  "blocking",
+  "rustls-tls",
+], default-features = false }
 thiserror = "1.0"
 regex = "1.10"
 flate2 = "1.0"
@@ -38,15 +42,30 @@ tokio = { version = "1.0", features = ["rt", "macros"] }
 # links the vulnerable Rust `rsa` crate (RUSTSEC-2023-0071, no fixed
 # upgrade). aws-lc-rs' RSA is BoringSSL C — the advisory crate is never
 # linked through this path. Requires cmake on build hosts.
-octocrab = { version = "0.54.1", default-features = false, features = ["rustls", "rustls-ring", "retry", "timeout", "default-client", "jwt-aws-lc-rs"] }
+octocrab = { version = "0.54.1", default-features = false, features = [
+  "rustls",
+  "rustls-ring",
+  "retry",
+  "timeout",
+  "default-client",
+  "jwt-aws-lc-rs",
+] }
 # Interactive package.yaml generation (lx init): Input + Confirm + themes
 # are core; default features (fuzzy-select etc.) are unused.
 dialoguer = { version = "0.12", default-features = false }
 ar = "0.9.0"
 md5 = "0.8.1"
 sha1 = "0.10.7"
-lzma-rust2 = { version = "0.19", default-features = false, features = ["encoder", "xz", "std"] }
-object = { version = "0.40.0", default-features = false, features = ["read", "elf", "std"] }
+lzma-rust2 = { version = "0.19", default-features = false, features = [
+  "encoder",
+  "xz",
+  "std",
+] }
+object = { version = "0.40.0", default-features = false, features = [
+  "read",
+  "elf",
+  "std",
+] }
 rpm = "0.16"
 zstd = "0.13"
 base64 = "0.22"
