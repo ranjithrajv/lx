@@ -16,10 +16,10 @@ core + four-dimensional pluggable system**.
 This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at
 repo root, but adds three more dimensions:
 
-* **Package plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
-* **Source plugins** (`lib/plugins/source/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover **what** is available (releases, assets, versions)
+* **Packager plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
+* **ForgeSource plugins** (`lib/plugins/forge/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover **what** is available (releases, assets, versions)
 * **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,custom}.rs`) → compile source tree into install tree
-* **RegistrySource plugins** (`lib/plugins/input/{npm,python,gem}.rs`) → fetch **specific files** from language package registries
+* **RegistrySource plugins** (`lib/plugins/registry/{npm,python,gem,cargo,nuget,maven,composer,cpan}.rs`) → fetch **specific files** from language package registries
 
 All are stateless, registered statically, and share the same
 explicit-registry pattern.
@@ -55,10 +55,10 @@ explicit-registry pattern.
 Both answer "where does the package come from?" but they operate at
 different levels of abstraction and return different things:
 
-| | Source | RegistrySource |
+| | ForgeSource | RegistrySource |
 |---|---|---|
 | **Question it answers** | "What releases/assets exist?" | "Give me these files." |
-| **Returns** | `Release` — metadata + asset list (per-architecture) | `InputPayload` — a local directory of files |
+| **Returns** | `Release` — metadata + asset list (per-architecture) | `RegistryPayload` — a local directory of files |
 | **Trait surface** | 11 methods (discovery: `parse_url`, `latest_release`, `repo_license`, `releases`, …) | 4 methods (fetch: `name`, `required_tools`, `fetch`) |
 | **Selection** | `--source` flag / zero-config URL sniffing | `registry_source:` field (explicit) |
 | **Package identity** | `github_repo` = "owner/repo" | `github_repo` = bare package name |
@@ -86,14 +86,14 @@ files are already on disk). Both feed into the same `Package` plugins.
 
 ---
 
-## 1. Packager Types
+## 1. Plugin Types
 
-`lib/plugins/mod.rs`, `lib/plugins/source/mod.rs`, `lib/plugins/build_system/mod.rs`
+`lib/plugins/mod.rs`, `lib/plugins/forge/mod.rs`, `lib/plugins/build_system/mod.rs`, `lib/plugins/registry/mod.rs`
 
 Four independent plugin dimensions, each with its own trait and registry:
 
 ```rust
-// Package — lib/plugins/mod.rs
+// Packager — lib/plugins/mod.rs
 pub trait Packager: Send + Sync {
     fn name(&self) -> &'static str;              // "deb" | "rpm" | "arch"
     fn file_extension(&self) -> &'static str;    // "deb" | "rpm" | "pkg.tar.zst"
@@ -103,7 +103,7 @@ pub trait Packager: Send + Sync {
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf>;
 }
 
-// Source — lib/plugins/source/mod.rs
+// ForgeSource — lib/plugins/forge/mod.rs
 pub trait ForgeSource: Send + Sync {
     fn name(&self) -> &'static str; // "github" | "gitlab" | …
     fn description(&self) -> &'static str;
@@ -126,15 +126,15 @@ pub trait BuildSystem: Send + Sync {
     fn required_tools(&self) -> Vec<&'static str>; // checked before build
 }
 
-// RegistrySource — lib/plugins/input/mod.rs
+// RegistrySource — lib/plugins/registry/mod.rs
 pub trait RegistrySource: Send + Sync {
-    fn name(&self) -> &'static str;              // "npm" | "python" | "gem"
+    fn name(&self) -> &'static str;              // "npm" | "python" | "gem" | "cargo" | …
     fn description(&self) -> &'static str;
     fn required_tools(&self) -> Vec<&'static str>; // checked before fetch (e.g. ["npm"])
-    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload>;
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload>;
 }
 
-pub struct InputPayload {
+pub struct RegistryPayload {
     pub files_dir: PathBuf,          // extracted files ready for packaging
     pub resolved_version: String,    // actual version fetched
     pub description: String,         // detected from package metadata
@@ -177,7 +177,7 @@ Plugins are **stateless** – one instance per format, shared across threads.
 
 ## 3. Source Trait (Auto-Discovery)
 
-`lib/plugins/source/mod.rs`
+`lib/plugins/forge/mod.rs`
 
 ```rust
 pub trait ForgeSource: Send + Sync {
@@ -200,7 +200,7 @@ Auto-discovery (`src/discovery.rs:36` `match_assets`, `src/discovery::config_fro
 
 ## 4. Registry
 
-`lib/plugins/mod.rs` (package), `lib/plugins/source/mod.rs` (source), `lib/plugins/build_system/mod.rs` (build system):
+`lib/plugins/mod.rs` (package), `lib/plugins/forge/mod.rs` (source), `lib/plugins/build_system/mod.rs` (build system):
 
 ```rust
 // Package
@@ -334,7 +334,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 
 6 total: `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`.
 
-### github — `lib/plugins/source/github.rs` + `lib/github.rs`
+### github — `lib/plugins/forge/github.rs` + `lib/github.rs`
 
 *Name* `github`, *description* `GitHub Releases (api.github.com / octocrab)`.
 
@@ -344,7 +344,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * `raw_get`/`releases`/`repo_license`/`repo_root`/`repo_file_text` map 1:1 to `GitHubClient` methods (dual-license `LICENSE-APACHE`+`LICENSE-MIT` detection uses `repo_root` + `repo_file_text`).
 * Token: `resolve_source_token("github", cli_token)` prefers `cli --token` then `GITHUB_TOKEN` env.
 
-### gitlab — `lib/plugins/source/gitlab.rs` + `lib/gitlab.rs`
+### gitlab — `lib/plugins/forge/gitlab.rs` + `lib/gitlab.rs`
 
 *Name* `gitlab`, *description* `GitLab Releases (gitlab.com / self-hosted, API v4)`.
 
@@ -354,7 +354,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * Mapping: `GitlabReleaseRaw {tag_name, assets:{links[]}}` → `Release {assets: links→Asset}`. `published_at: released_at||created_at → jiff`.
 * Token: `GITLAB_TOKEN` env > `cli --token`.
 
-### gitea — `lib/plugins/source/gitea.rs` + `lib/gitea.rs`
+### gitea — `lib/plugins/forge/gitea.rs` + `lib/gitea.rs`
 
 *Name* `gitea`, `Gitea Releases (codeberg.org / self-hosted, API v1)`, default `https://codeberg.org/api/v1` (`DEFAULT_GITEA_API_URL`).
 
@@ -363,7 +363,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * `latest_release` → `GET /repos/{owner}/{repo}/releases?limit=1`, `release_by_tag` → `GET /repos/{owner}/{repo}/releases/tags/{tag}`.
 * Assets: `GiteaReleaseRaw {tag_name, assets[]}` → `Release`.
 
-### forgejo — `lib/plugins/source/forgejo.rs` + `lib/forgejo.rs`
+### forgejo — `lib/plugins/forge/forgejo.rs` + `lib/forgejo.rs`
 
 *Name* `forgejo`, `Forgejo Releases (codeberg.org / self-hosted, Gitea-compatible)`, default `https://codeberg.org/api/v1` (`DEFAULT_FORGEJO_API_URL`).
 
@@ -371,7 +371,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * `parse_url` → `parse_forgejo_url` (`https://codeberg.org/owner/repo`, also `forgejo`-containing hosts).
 * Same release mapping as Gitea.
 
-### bitbucket — `lib/plugins/source/bitbucket.rs` + `lib/bitbucket.rs`
+### bitbucket — `lib/plugins/forge/bitbucket.rs` + `lib/bitbucket.rs`
 
 *Name* `bitbucket`, `Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)`, default `https://api.bitbucket.org/2.0`.
 
@@ -424,10 +424,10 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 1. `lib/<provider>.rs` – `struct Client { http, base_url, token, cache_dir }` with `latest_release/release_by_tag/releases/repo_license/repo_root/repo_file_text/raw_get` (see `lib/gitlab.rs` for REST mapping and `lib/gitea.rs` for Gitea/Forgejo, `lib/bitbucket.rs` for downloads-as-release).
 2. Add `DEFAULT_<PROVIDER>_HOST/API_URL` to `lib/constants.rs` and `homepage_for_<provider>()` helper.
 3. Implement `lx_lib::checksum::RawGetter for Client`.
-4. `lib/plugins/source/<provider>.rs` – `impl ForgeSource` delegating to `lib::<provider>::Client` (see `lib/plugins/source/gitlab.rs`/`gitea.rs`).
-5. Register in `lib/plugins/source/mod.rs` + `parse_url` for `https://{host}/owner/repo`.
+4. `lib/plugins/forge/<provider>.rs` – `impl ForgeSource` delegating to `lib::<provider>::Client` (see `lib/plugins/forge/gitlab.rs`/`gitea.rs`).
+5. Register in `lib/plugins/forge/mod.rs` + `parse_url` for `https://{host}/owner/repo`.
 6. Add `source = "<provider>"` to `lib/config.rs` + `*_host: Option<String>` + `resolve_source_token` in `lib/build.rs` + `host` env handling.
-7. Tests: `lib/<provider>::tests` (release mapping, `parse_*_url`), `lib/plugins/source/tests` (`parse_any_url` dispatch, registry gains the new name).
+7. Tests: `lib/<provider>::tests` (release mapping, `parse_*_url`), `lib/plugins/forge/tests` (`parse_any_url` dispatch, registry gains the new name).
 
 **BuildSystem (e.g. `meson`):**
 
@@ -440,10 +440,10 @@ No core pipeline changes – `sourcebuild.rs` is build-system-agnostic; it only 
 
 **RegistrySource (e.g. `cpan`):**
 
-1. `lib/plugins/input/<name>.rs` – `impl RegistrySource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
-2. Register in `lib/plugins/input/mod.rs` `all_registry_sources()`.
+1. `lib/plugins/registry/<name>.rs` – `impl RegistrySource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
+2. Register in `lib/plugins/registry/mod.rs` `all_registry_sources()`.
 3. Add `registry_source = "<name>"` to `lib/config.rs` validation.
-4. Tests: `lib/plugins/input/tests` (registry gains the new name, `fetch` produces expected payload).
+4. Tests: `lib/plugins/registry/tests` (registry gains the new name, `fetch` produces expected payload).
 
 No core pipeline changes – `build.rs` routes any non-empty `registry_source` through `run_local()` after `fetch()`.
 

@@ -25,7 +25,7 @@ editing the core pipeline:
 | Dimension | Purpose | Count | Selection |
 |---|---|---|---|
 | **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
-| **Source** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
+| **ForgeSource** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
 | **BuildSystem** | Compile source tree | 4 (cmake, cargo, go, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 8 (npm, python, gem, cargo, nuget, maven, composer, cpan) | `registry_source:` |
 
@@ -131,23 +131,24 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | Command | Purpose |
 |---|---|
 | `lx build [config]` | Build `.deb`s (and optionally source packages) from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`) |
+| `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
 | `lx scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery |
 | `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org |
 | `lx update [package]` | Check installed packages against their latest release, no install |
-| `lx upgrade [package]` | Upgrade installed packages to their latest release |
+| `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
 | `lx list` | List packages `lx` has installed |
 | `lx show <package>` | Show everything known about one package (manifest + dpkg) |
 | `lx reinstall <package>` | Reinstall the recorded version of an `lx`-managed package |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
-| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`) |
+| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`) |
 | `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
 | `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
-| `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply) |
+| `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
 
 `lx get` is the consumer subcommand group —
 `install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`list`/`search`,
@@ -160,9 +161,10 @@ lx get upgrade --owned-only   # skip entries removed outside lx
 
 ### `lx go-native`
 
-Migrate snap, flatpak, nix, and `curl … | sh` installs to **native** packages (`.deb` on dpkg hosts, with
-`--format rpm|arch` planning elsewhere). Plan by default — nothing is
-installed or removed until you pass `--yes`:
+Migrate snap, flatpak, nix, and `curl … | sh` installs to **native**
+packages (`.deb` on dpkg hosts, `.rpm` on rpm hosts, `.pkg.tar.zst` on Arch
+hosts). Plan by default — nothing is installed or removed until you pass
+`--yes`:
 
 ```sh
 lx go-native                  # plan: detect + map, print only
@@ -170,6 +172,7 @@ lx go-native firefox          # plan, filtered to matching ids
 lx go-native --yes            # apply: install natives, remove sources
 lx go-native --yes --keep-source      # install natives, keep both
 lx go-native --from flatpak,nix --skip-sh   # managed sources only
+lx go-native --yes --cleanup-sh   # auto-delete curl|sh orphans after install
 ```
 
 How it works: `snap list` / `flatpak list --app` / `nix profile list` are
@@ -181,11 +184,28 @@ attributed from shell history. Each finding is mapped through a built-in
 table to an `lx` package name; anything unmapped lands in a
 `missingnative` report instead of being silently dropped.
 
-Safety rules: `curl | sh` orphans are **never auto-deleted** — the plan
-prints manual `rm` cleanup for you to review. Applying is currently
-deb-host-only (the `lx install` backend); elsewhere the plan doubles as a
-shopping list. `--remove-manager` offers to drop `snapd` itself once
-everything from it migrated (always confirms).
+Safety rules: `curl | sh` orphans are cleaned up with `--cleanup-sh`
+(recorded in `~/.local/share/lx/sh_orphans.json`); without it the plan
+prints manual `rm` commands for you to review. Applying works on all
+hosts — deb via `lx install`, rpm via `rpm -Uvh`, arch via `pacman -U`.
+`--remove-manager` offers to drop `snapd` itself once everything from it
+migrated (always confirms).
+
+### `lx convert`
+
+Convert a built package from one format to another — not byte conversion
+(which loses metadata), but a native rebuild: reads control fields from the
+source, extracts the install tree, and rebuilds via the target format
+plugin. Maintainer scripts (pre/post-install) are carried over.
+
+```sh
+lx convert foo_1.0_amd64.deb --to rpm        # deb → rpm
+lx convert foo-1.0.x86_64.rpm --to deb        # rpm → deb
+lx convert foo-1.0-arch-x86_64.pkg.tar.zst --to deb  # arch → deb
+```
+
+Overrides: `--package-name`, `--version`, `--arch`, `--distribution`,
+`--build-version`. Use `--dry-run` to preview metadata without building.
 
 Run `lx <command> --help` for the full flag reference. A few worth calling
 out:

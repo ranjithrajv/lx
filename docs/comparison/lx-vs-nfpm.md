@@ -176,9 +176,10 @@ story.
 | **Consumer CLI** | ❌ | ✅ (`lx get`: install/upgrade/remove/search/list/show) |
 | **Local manifest / state** | ❌ | ✅ (`installed.json`, cross-checked with dpkg) |
 | **Rollback** | ❌ | ✅ (`lx rollback`) |
-| **Repo generation** | ❌ | ✅ (`lx repo` — Packages/Release/InRelease) |
+| **Repo generation** | ❌ | ✅ (`lx repo` — Packages/Release/InRelease; `--multi-suite` for multi-suite layout) |
 | **`apt search`-like search** | ❌ | ✅ (`lx search`, full-text + local + installed) |
-| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx go-native`) |
+| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx go-native`, works on deb/rpm/arch hosts) |
+| **Format conversion** | ❌ | ✅ (`lx convert` — deb↔rpm↔arch native rebuild with scriptlet carry-over) |
 | **AUR import** | ❌ | ✅ (`lx init --from-aur`) |
 | **Lintian** | ❌ | ✅ (`--lintian`, shelled out) |
 | **GitHub Action** | ❌ (goreleaser has separate CI) | ✅ (`action.yml`, drop-in for debian-multiarch-builder) |

@@ -36,7 +36,9 @@ Linux packagers, with specific flags, fields, and behaviors documented.
   `archlinux:`, `ipk:`, `msix:`).
 - **lx** focuses on deb/rpm/arch and uniquely produces *source*
   packages (`.dsc` + `.orig.tar.xz` + `.debian.tar.xz`, `.src.rpm`,
-  PKGBUILD).
+  PKGBUILD). Format conversion is via `lx convert` (deb↔rpm↔arch) —
+  reads source metadata + install tree, rebuilds natively in target
+  format with scriptlet carry-over.
 
 ---
 
@@ -258,10 +260,10 @@ overrides:
 |---|---|---|---|
 | RPM triggers (4 types) | `--rpm-trigger-*` | ❌ | ✅ `rpm.trigger_*` (deps + best-effort script) |
 | digest algorithm | `--rpm-digest sha256` | ❌ | ❌ |
-| compression | `--rpm-compression xz` | ✅ `rpm.compression` | ❌ |
-| AutoProv/AutoReq | `--rpm-autoprov` | ❌ | ❌ |
-| macro expansion | `--rpm-macro-expansion` | ❌ | ❌ |
-| rpmbuild define | `--rpm-rpmbuild-define` | ❌ | ❌ |
+| compression | `--rpm-compression xz` | ✅ `rpm.compression` | ✅ `rpm.compression` (gzip/xz/lzma/zstd/none) |
+| AutoProv/AutoReq | `--rpm-autoprov` | ❌ | ✅ `rpm.auto_provides` / `rpm.auto_requires` |
+| macro expansion | `--rpm-macro-expansion` | ❌ | ✅ `rpm.defines` |
+| rpmbuild define | `--rpm-rpmbuild-define` | ❌ | ✅ `rpm.defines` |
 | custom tag | `--rpm-tag` | ❌ | ❌ |
 
 ### Build-time hooks (lx only)
@@ -381,7 +383,7 @@ How it works per build system:
 | Lintian | ❌ | ❌ | ✅ `--lintian` |
 | GitHub Action | ❌ | ❌ | ✅ `action.yml` |
 | Sandboxed builds | ❌ | ❌ | ✅ `--sandbox` |
-| Repo format conversion | ✅ (`-s rpm -t deb`) | ❌ | ❌ |
+| Repo format conversion | ✅ (`-s rpm -t deb`) | ❌ | ✅ `lx convert` (deb↔rpm↔arch, native rebuild with scriptlet carry-over) |
 
 ---
 
@@ -416,9 +418,11 @@ How it works per build system:
 | Binary that runs on old distros | **lx** | `musl: true` — no glibc dependency |
 | No runtime dependencies | **nfpm** or **lx** | Both are single static binaries |
 | Maximum format coverage | **fpm** | 15+ formats |
-| RPM trigger scripts | **fpm** | Only tool with full %triggerin/%triggerun support |
+| RPM compression control | **nfpm** or **lx** | Both support `rpm.compression` (gzip/xz/lzma/zstd/none) |
+| RPM AutoProv/AutoReq/macros | **fpm** or **lx** | fpm via flags; lx via `rpm.auto_provides`/`auto_requires`/`defines` |
 | Upgrade-time scripts (pre/post-upgrade) | **fpm** or **lx** | fpm for rpm/deb/pacman; lx for deb/rpm/arch |
 | Script templating in packaging scripts | **fpm** or **lx** | fpm uses ERB; lx uses `<%= key %>` expressions |
+| Format conversion | **fpm** or **lx** | fpm: byte conversion (`-s rpm -t deb`); lx: native rebuild with scriptlet carry-over |
 
 ### Philosophical differences
 
