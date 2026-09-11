@@ -26,7 +26,7 @@ impl Plugin for DebPlugin {
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {
-        lpt_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS
+        lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS
     }
 
     fn arch_supported_for_dist(&self, arch: &str, dist: &str) -> bool {
@@ -37,93 +37,104 @@ impl Plugin for DebPlugin {
 
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
         let cfg = ctx.cfg;
-        let job = ctx.job;
 
         // Stage install tree under ctx.staging_root, then layer the
         // `contents:` overlay (completions, units, desktop files, ...).
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let conffiles = super::apply_contents(cfg, ctx.staging_root, "deb")?;
+        archive_staged_tree(ctx)
+    }
+}
 
-        // Render control/changelog/copyright.
-        let control = render_control(cfg, job, ctx.debian_version, ctx.build_version);
-        let changelog = render_changelog(cfg, job, ctx.debian_version, ctx.build_version);
-        let doc_dir = ctx
-            .staging_root
-            .join("usr")
-            .join("share")
-            .join("doc")
-            .join(&cfg.package_name);
-        std::fs::create_dir_all(&doc_dir)?;
-        write_changelog_gz(&doc_dir, &changelog, ctx.mtime)?;
-        write_copyright(&doc_dir, cfg, ctx.license, job.published_at)?;
+/// Archive an already-populated `staging_root` into a `.deb`.
+///
+/// Shared tail of [`DebPlugin::build`]: layers `contents:`, renders
+/// control/changelog/copyright, and writes the ar container. Source-mode
+/// builds populate the staging root from a `DESTDIR` install tree instead
+/// of `stage_install_tree` and reuse this directly.
+pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
+    let cfg = ctx.cfg;
+    let job = ctx.job;
+    let conffiles = super::apply_contents(cfg, ctx.staging_root, "deb")?;
 
-        // Archive via debarchive. Maintainer scripts and the conffiles
-        // list ride along as extra control members.
-        let full_version = format!(
-            "{}-{}+{dist}_{arch}",
-            ctx.debian_version,
-            ctx.build_version,
-            dist = job.dist,
-            arch = job.arch
-        );
-        let full_version_epoch = lpt_lib::pkgmeta::with_epoch(&cfg.epoch, &full_version);
-        // Filename never includes epoch (':' not filename-safe).
-        let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
+    // Render control/changelog/copyright.
+    let control = render_control(cfg, job, ctx.debian_version, ctx.build_version);
+    let changelog = render_changelog(cfg, job, ctx.debian_version, ctx.build_version);
+    let doc_dir = ctx
+        .staging_root
+        .join("usr")
+        .join("share")
+        .join("doc")
+        .join(&cfg.package_name);
+    std::fs::create_dir_all(&doc_dir)?;
+    write_changelog_gz(&doc_dir, &changelog, ctx.mtime)?;
+    write_copyright(&doc_dir, cfg, ctx.license, job.published_at)?;
 
-        let _ = full_version_epoch; // already in control
+    // Archive via debarchive. Maintainer scripts and the conffiles
+    // list ride along as extra control members.
+    let full_version = format!(
+        "{}-{}+{dist}_{arch}",
+        ctx.debian_version,
+        ctx.build_version,
+        dist = job.dist,
+        arch = job.arch
+    );
+    let full_version_epoch = lx_lib::pkgmeta::with_epoch(&cfg.epoch, &full_version);
+    // Filename never includes epoch (':' not filename-safe).
+    let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
 
-        let mut extras = super::maintainer_script_members(cfg)?;
-        if !conffiles.is_empty() {
-            extras.push(lpt_lib::debarchive::ControlMember {
-                name: "conffiles".to_string(),
-                content: format!("{}\n", conffiles.join("\n")).into_bytes(),
-                mode: 0o644,
-            });
-        }
+    let _ = full_version_epoch; // already in control
 
-        // We need a temp out dir for the .deb file; create under staging_root's
-        // parent temp.
-        let out_dir = ctx.staging_root.join("__out");
-        std::fs::create_dir_all(&out_dir)?;
-        let deb_dest = out_dir.join(&deb_name);
+    let mut extras = super::maintainer_script_members(cfg)?;
+    if !conffiles.is_empty() {
+        extras.push(lx_lib::debarchive::ControlMember {
+            name: "conffiles".to_string(),
+            content: format!("{}\n", conffiles.join("\n")).into_bytes(),
+            mode: 0o644,
+        });
+    }
 
-        let comp = cfg.effective_compression();
-        #[allow(clippy::type_complexity)]
-        let origin_signer: Option<Box<lpt_lib::debarchive::OriginSigner>> =
-            if ctx.sign_method == "debsign" {
-                if let Some(key) = ctx.sign_key {
-                    let key = key.to_path_buf();
-                    let key_id = ctx.sign_key_id.to_string();
-                    let passphrase = ctx.sign_passphrase.map(|s| s.to_string());
-                    Some(Box::new(move |payload: &[u8]| {
-                        let req = lpt_lib::sign::SignRequest {
-                            key_file: &key,
-                            key_id: &key_id,
-                            passphrase: passphrase.as_deref(),
-                        };
-                        lpt_lib::sign::clearsign(payload, &req)
-                    }))
-                } else {
-                    None
-                }
+    // We need a temp out dir for the .deb file; create under staging_root's
+    // parent temp.
+    let out_dir = ctx.staging_root.join("__out");
+    std::fs::create_dir_all(&out_dir)?;
+    let deb_dest = out_dir.join(&deb_name);
+
+    let comp = cfg.effective_compression();
+    #[allow(clippy::type_complexity)]
+    let origin_signer: Option<Box<lx_lib::debarchive::OriginSigner>> =
+        if ctx.sign_method == "debsign" {
+            if let Some(key) = ctx.sign_key {
+                let key = key.to_path_buf();
+                let key_id = ctx.sign_key_id.to_string();
+                let passphrase = ctx.sign_passphrase.map(|s| s.to_string());
+                Some(Box::new(move |payload: &[u8]| {
+                    let req = lx_lib::sign::SignRequest {
+                        key_file: &key,
+                        key_id: &key_id,
+                        passphrase: passphrase.as_deref(),
+                    };
+                    lx_lib::sign::clearsign(payload, &req)
+                }))
             } else {
                 None
-            };
-        let signer_ref = origin_signer.as_ref().map(|f| f.as_ref());
-        let sig_type = cfg.effective_sign_type();
-        lpt_lib::debarchive::build_full_signed(
-            ctx.staging_root,
-            control.as_bytes(),
-            ctx.mtime,
-            &deb_dest,
-            &comp,
-            &extras,
-            signer_ref.map(|s| (s, sig_type.as_str())),
-        )
-        .with_context(|| format!("failed to build {}", deb_dest.display()))?;
+            }
+        } else {
+            None
+        };
+    let signer_ref = origin_signer.as_ref().map(|f| f.as_ref());
+    let sig_type = cfg.effective_sign_type();
+    lx_lib::debarchive::build_full_signed(
+        ctx.staging_root,
+        control.as_bytes(),
+        ctx.mtime,
+        &deb_dest,
+        &comp,
+        &extras,
+        signer_ref.map(|s| (s, sig_type.as_str())),
+    )
+    .with_context(|| format!("failed to build {}", deb_dest.display()))?;
 
-        Ok(deb_dest)
-    }
+    Ok(deb_dest)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,19 +147,19 @@ pub fn render_control(
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = lpt_lib::pkgmeta::with_epoch(
+    let full_version = lx_lib::pkgmeta::with_epoch(
         &cfg.epoch,
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
     // Per-format overrides applied for "deb".
     let relations = cfg.effective_relations("deb").render();
     let homepage = if cfg.effective_source() == "gitlab" {
-        lpt_lib::constants::homepage_for_gitlab(
+        lx_lib::constants::homepage_for_gitlab(
             &cfg.github_repo,
             cfg.gitlab_host.as_deref().unwrap_or(""),
         )
     } else {
-        lpt_lib::constants::homepage_for_github(&cfg.github_repo)
+        lx_lib::constants::homepage_for_github(&cfg.github_repo)
     };
     let extra_fields = super::render_extra_fields(&cfg.fields);
     format!(
@@ -168,11 +179,11 @@ pub fn render_changelog(
     version: &str,
     build_version: &str,
 ) -> String {
-    let full_version = lpt_lib::pkgmeta::with_epoch(
+    let full_version = lx_lib::pkgmeta::with_epoch(
         &cfg.epoch,
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
-    lpt_lib::pkgmeta::render_changelog_entry(
+    lx_lib::pkgmeta::render_changelog_entry(
         &cfg.package_name,
         &full_version,
         &job.dist,
@@ -187,7 +198,7 @@ fn write_changelog_gz(doc_dir: &Path, changelog: &str, mtime: i64) -> Result<()>
     let out = std::fs::File::create(doc_dir.join("changelog.Debian.gz"))?;
     // Same deterministic treatment as the tar members (fixed mtime header)
     // via debarchive's shared helper.
-    let gz = lpt_lib::debarchive::deterministic_gzip_bytes(changelog.as_bytes(), mtime, 9)?;
+    let gz = lx_lib::debarchive::deterministic_gzip_bytes(changelog.as_bytes(), mtime, 9)?;
     let mut out = out;
     out.write_all(&gz)?;
     Ok(())
@@ -196,11 +207,11 @@ fn write_changelog_gz(doc_dir: &Path, changelog: &str, mtime: i64) -> Result<()>
 pub fn write_copyright(
     output_dir: &Path,
     cfg: &PackageConfig,
-    license: Option<&lpt_lib::github::RepoLicense>,
+    license: Option<&lx_lib::github::RepoLicense>,
     published_at: Option<i64>,
 ) -> Result<()> {
     use std::io::Write;
-    let text = lpt_lib::pkgmeta::render_copyright(
+    let text = lx_lib::pkgmeta::render_copyright(
         &cfg.package_name,
         &cfg.github_repo,
         license,

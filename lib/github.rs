@@ -389,6 +389,8 @@ pub struct GitHubReleaseRaw {
     pub published_at: Option<String>,
     #[serde(default)]
     pub assets: Vec<GitHubAssetRaw>,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -420,6 +422,7 @@ impl From<GitHubReleaseRaw> for Release {
                 .published_at
                 .as_deref()
                 .and_then(crate::gitlab::parse_gitlab_time),
+            body: r.body,
         }
     }
 }
@@ -494,6 +497,11 @@ pub struct Release {
     /// wall-clock build time, so the same release always produces the same
     /// bytes regardless of when it's built.
     pub published_at: Option<i64>,
+    /// The release's own markdown notes, when GitHub reports any. Used as
+    /// a ready-made "changelog" for `lx update --diff` instead of
+    /// deriving one from commits/tags.
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 impl From<octocrab::models::repos::Release> for Release {
@@ -505,6 +513,7 @@ impl From<octocrab::models::repos::Release> for Release {
             html_url: r.html_url.to_string(),
             assets: r.assets.into_iter().map(Into::into).collect(),
             published_at: r.published_at.map(|t| t.timestamp()),
+            body: r.body,
         }
     }
 }

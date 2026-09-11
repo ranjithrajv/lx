@@ -147,6 +147,7 @@ impl BitbucketClient {
             html_url: format!("https://bitbucket.org/{repo}/downloads"),
             assets,
             published_at: None,
+            body: None,
         }
     }
 

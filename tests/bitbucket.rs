@@ -1,4 +1,4 @@
-use lpt_lib::bitbucket::*;
+use lx_lib::bitbucket::*;
 
 #[test]
 fn maps_downloads_to_release() {

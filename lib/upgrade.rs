@@ -3,11 +3,11 @@ use clap::Args;
 
 use crate::debs;
 use crate::manifest::{Manifest, PackageEntry};
-use lpt_lib::github::GitHubClient;
+use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct UpgradeArgs {
-    /// Package to upgrade (omit to upgrade every lpt-managed package).
+    /// Package to upgrade (omit to upgrade every lx-managed package).
     pub package: Option<String>,
 
     /// Skip checksum verification against the release's sidecar file (not
@@ -29,6 +29,11 @@ pub struct UpgradeArgs {
     /// Skip the install confirmation prompt.
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Only upgrade packages currently installed per dpkg (deb-get
+    /// `--dg-only` spirit: skip manifest entries removed outside lx).
+    #[arg(long)]
+    pub owned_only: bool,
 }
 
 pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
@@ -37,7 +42,7 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
     let targets: Vec<String> = match &args.package {
         Some(p) => {
             if !manifest.packages.contains_key(p) {
-                bail!("'{p}' is not managed by lpt (run `lpt install {p}` first)");
+                bail!("'{p}' is not managed by lx (run `lx install {p}` first)");
             }
             vec![p.clone()]
         }
@@ -45,16 +50,36 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
     };
 
     if targets.is_empty() {
-        println!("no lpt-managed packages installed");
+        println!("no lx-managed packages installed");
         return Ok(());
     }
+
+    let targets: Vec<String> = if args.owned_only {
+        let kept: Vec<String> = targets
+            .into_iter()
+            .filter(|p| {
+                let keep = debs::dpkg_installed_version(p).is_some();
+                if !keep {
+                    println!("skipping '{p}': not currently installed (--owned-only)");
+                }
+                keep
+            })
+            .collect();
+        if kept.is_empty() {
+            println!("nothing currently installed to upgrade");
+            return Ok(());
+        }
+        kept
+    } else {
+        targets
+    };
 
     let client = GitHubClient::new(token.map(|s| s.to_string()))?;
     let mut upgraded = 0;
     let mut failed = 0;
 
     for package in &targets {
-        let entry = manifest.packages.get(package).unwrap().clone();
+        let entry = manifest.current(package).unwrap().clone();
         match upgrade_one(&client, package, &entry, &args) {
             Ok(true) => upgraded += 1,
             Ok(false) => {}

@@ -1,4 +1,4 @@
-use lpt_lib::rpmarchive::*;
+use lx_lib::rpmarchive::*;
 
 use std::os::unix::fs::PermissionsExt;
 
@@ -126,7 +126,7 @@ fn native_signing_round_trip_with_generated_key() {
             "--passphrase",
             "",
             "--quick-gen-key",
-            "lpt-rpm-test <lpt@example.invalid>",
+            "lx-rpm-test <lx@example.invalid>",
             "default",
             "default",
             "never",

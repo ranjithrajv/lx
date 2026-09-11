@@ -25,9 +25,9 @@ pub fn run(args: SchemaArgs) -> Result<()> {
 pub fn generate_schema() -> serde_json::Value {
     json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$id": "https://lpt.goreleaser.com/schema.json",
-        "title": "lpt package.yaml",
-        "description": "Configuration for lpt — Latest Package Tool",
+        "$id": "https://lx.goreleaser.com/schema.json",
+        "title": "lx package.yaml",
+        "description": "Configuration for lx — Latest Package Tool",
         "type": "object",
         "required": ["package_name", "github_repo"],
         "additionalProperties": false,
@@ -123,10 +123,68 @@ pub fn generate_schema() -> serde_json::Value {
                 "type": "boolean",
                 "description": "false pins the build to a single worker"
             },
+            "build_mode": {
+                "type": "string",
+                "enum": ["binary", "source"],
+                "description": "binary (default) repacks release assets; source compiles upstream on the host (cmake/custom)"
+            },
+            "build_system": {
+                "type": "string",
+                "enum": ["cmake", "custom"],
+                "description": "Source-mode build system (cmake default; custom uses build_commands/install_commands)"
+            },
+            "upstream_url": {
+                "type": "string",
+                "description": "Source tarball URL root for build_mode: source (default: github archive)"
+            },
+            "upstream_ref": {
+                "type": "string",
+                "description": "Source-mode tag to fetch (default: resolved version)"
+            },
+            "build_depends": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Host packages the source compile needs (caller/CI installs them; lx never apt-gets)"
+            },
+            "cmake_flags": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Extra flags for the cmake configure step"
+            },
+            "prebuild_steps": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Shell steps run in the source dir after unpack, before configure"
+            },
+            "build_commands": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Custom build commands replacing cmake (build_system: custom)"
+            },
+            "install_commands": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Custom install commands into $DESTDIR (build_system: custom, required)"
+            },
+            "build_suites": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Source-mode suites to build (default: configured distributions)"
+            },
+            "skip_suites": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Source-mode suites to skip"
+            },
             "debian_distributions": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Debian suites to target (default: bullseye, bookworm, trixie, forky, sid; expired-LTS suites are dropped automatically)"
+            },
+            "ubuntu_distributions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Ubuntu suites to target natively (opt-in, e.g. jammy, noble)"
             },
             "architectures": {
                 "description": "Per-arch release asset patterns or list restricting auto-discovery",
@@ -278,7 +336,7 @@ pub fn generate_schema() -> serde_json::Value {
             "signature": {
                 "type": "object",
                 "additionalProperties": false,
-                "description": "Package signing. deb detach (default): sibling <pkg>.sig; deb debsign: embedded _gpgorigin; rpm: PGP embedded natively. Passphrase via $LPT_SIGN_PASSPHRASE or $NFPM_PASSPHRASE. String fields expand ${VAR} / ${VAR:-default}.",
+                "description": "Package signing. deb detach (default): sibling <pkg>.sig; deb debsign: embedded _gpgorigin; rpm: PGP embedded natively. Passphrase via $LX_SIGN_PASSPHRASE or $NFPM_PASSPHRASE. String fields expand ${VAR} / ${VAR:-default}.",
                 "properties": {
                     "key_file": {
                         "type": "string",
@@ -331,7 +389,7 @@ pub fn generate_schema() -> serde_json::Value {
             },
             "source": {
                 "type": "string",
-                "enum": ["github", "github-sync", "gitlab", "gitea", "forgejo", "bitbucket", "gerrit"],
+                "enum": ["github", "github-sync", "gitlab", "gitea", "forgejo", "bitbucket", "gerrit", "custom"],
                 "description": "Source provider for auto-discovery (default: github)"
             },
             "source_provider": {

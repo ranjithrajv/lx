@@ -1,5 +1,5 @@
-name: 'lpt: Latest Package Tool'
-description: 'Build Debian packages for multiple architectures from upstream GitHub releases. Drop-in replacement for ranjithrajv/debian-multiarch-builder: same inputs/outputs, backed by the lpt Rust CLI instead of the bash implementation.'
+name: 'lx: Latest Package Tool'
+description: 'Build Debian packages for multiple architectures from upstream forge releases (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit). Drop-in replacement for ranjithrajv/debian-multiarch-builder: same inputs/outputs, backed by the lx Rust CLI instead of the bash implementation.'
 author: 'ranjithrajv'
 
 branding:
@@ -33,7 +33,7 @@ inputs:
     required: false
     default: 'true'
   save-baseline:
-    description: 'Accepted for compatibility with debian-multiarch-builder; not implemented (this input crashed the build there too - save_as_baseline was called but never defined). Setting it here is a safe no-op.'
+    description: 'Save current build metrics as performance baseline (.telemetry/baseline.json) for regression detection'
     required: false
     default: 'false'
   pinned-metadata:
@@ -75,7 +75,7 @@ runs:
       if: inputs.lintian-check == 'true'
       shell: bash
       run: |
-        # lpt's --lintian has no Docker fallback (see
+        # lx's --lintian has no Docker fallback (see
         # docs/decisions/2026-08-20-docker-free-lintian-source.md) -- it
         # requires a real `lintian` binary on PATH, which GitHub-hosted
         # runners don't ship by default.
@@ -85,7 +85,7 @@ runs:
     - name: Install Rust toolchain
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache lpt build
+    - name: Cache lx build
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ${{ github.action_path }}
@@ -96,23 +96,38 @@ runs:
       shell: bash
       run: echo "date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
-    - name: Cache lpt download/API cache
+    - name: Cache lx download/API cache
       uses: actions/cache@v4
       with:
         path: |
-          ~/.cache/lpt/downloads
-          ~/.cache/lpt/api
-        key: lpt-cache-${{ github.repository }}-${{ steps.cache-date.outputs.date }}
+          ~/.cache/lx/downloads
+          ~/.cache/lx/api
+        key: lx-cache-${{ github.repository }}-${{ steps.cache-date.outputs.date }}
         restore-keys: |
-          lpt-cache-${{ github.repository }}-
+          lx-cache-${{ github.repository }}-
 
-    - name: Build lpt
+    - name: Build lx
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
       run: |
         cargo build --release --manifest-path "$ACTION_PATH/Cargo.toml"
         echo "$ACTION_PATH/target/release" >> "$GITHUB_PATH"
+
+    - name: Validate version availability
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token || github.token }}
+      run: |
+        # Fail fast on a bad `version` with recent-release suggestions
+        # (bash action's pre-check parity), before the full build runs.
+        # `lx validate` resolves the config against the live release and
+        # lists recent tags when the requested one is missing.
+        validate_flag=()
+        if [ -n "${{ inputs.version }}" ]; then
+          validate_flag=(--version "${{ inputs.version }}")
+        fi
+        lx validate "${{ inputs.config-file }}" "${validate_flag[@]}"
 
     - name: Build packages
       id: build
@@ -136,20 +151,24 @@ runs:
         if [ -n "${{ inputs.pinned-metadata }}" ]; then
           pin_flag=(--pinned-metadata "${{ inputs.pinned-metadata }}")
         fi
+        baseline_flag=()
+        if [ "${{ inputs.save-baseline }}" = "true" ]; then
+          baseline_flag=(--save-baseline)
+        fi
 
         # --source: debian-multiarch-builder always generated source
         # packages alongside binary ones (no opt-in flag existed there
         # either), so this stays unconditional for drop-in parity.
-        lpt build "${{ inputs.config-file }}" \
+        lx build "${{ inputs.config-file }}" \
           --version "${{ inputs.version }}" \
           --build-version "${{ inputs.build-version }}" \
           --max-parallel "${{ inputs.max-parallel }}" \
           --output "${{ inputs.output-dir }}" \
           --source \
           --summary \
-          --cache-dir "$HOME/.cache/lpt/downloads" \
-          --api-cache-dir "$HOME/.cache/lpt/api" \
-          "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}"
+          --cache-dir "$HOME/.cache/lx/downloads" \
+          --api-cache-dir "$HOME/.cache/lx/api" \
+          "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}" "${baseline_flag[@]}"
 
         cd "${{ inputs.output-dir }}"
         packages=$(ls -- *.deb 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
@@ -161,3 +180,11 @@ runs:
         echo "Generated source packages: $source_packages"
 
         echo "summary-path=${{ inputs.output-dir }}/build-summary.json" >> "$GITHUB_OUTPUT"
+
+    - name: Upload failed build logs
+      if: failure() || cancelled()
+      uses: actions/upload-artifact@v4
+      with:
+        name: failed-build-logs
+        path: failed-build-logs/
+        if-no-files-found: ignore

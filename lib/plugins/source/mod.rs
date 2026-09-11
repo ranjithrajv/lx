@@ -6,6 +6,7 @@
 //! checksum / download logic regardless of provider.
 
 pub mod bitbucket;
+pub mod custom;
 pub mod forgejo;
 pub mod gerrit;
 pub mod gitea;
@@ -16,7 +17,7 @@ pub mod gitlab;
 use anyhow::Result;
 use std::path::Path;
 
-use lpt_lib::github::{Release, ReleaseMeta, RepoLicense};
+use lx_lib::github::{Release, ReleaseMeta, RepoLicense};
 
 /// A source/provider plugin (auto-discovery).
 ///
@@ -39,7 +40,7 @@ pub trait SourcePlugin: Send + Sync {
         None
     }
 
-    /// Parse a provider URL into `owner/repo` (for zero-config `lpt build https://…`).
+    /// Parse a provider URL into `owner/repo` (for zero-config `lx build https://…`).
     /// Returns `None` if the URL does not belong to this provider.
     fn parse_url(&self, url: &str) -> Option<String>;
 
@@ -120,6 +121,7 @@ pub fn all_source_plugins() -> Vec<Box<dyn SourcePlugin>> {
         Box::new(gitea::GiteaSourcePlugin),
         Box::new(forgejo::ForgejoSourcePlugin),
         Box::new(bitbucket::BitbucketSourcePlugin),
+        Box::new(custom::CustomSourcePlugin),
         Box::new(gerrit::GerritSourcePlugin),
     ]
 }

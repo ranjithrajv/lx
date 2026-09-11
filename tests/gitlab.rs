@@ -1,4 +1,4 @@
-use lpt_lib::gitlab::*;
+use lx_lib::gitlab::*;
 
 #[test]
 fn maps_gitlab_release_to_common() {

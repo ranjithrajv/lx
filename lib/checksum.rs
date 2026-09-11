@@ -88,8 +88,8 @@ pub enum SidecarCheck {
 
 /// Try every known sidecar-checksum suffix (`.sha256`, `.sha256sum`) next
 /// to `asset_url`, verifying `path` against whichever one lists
-/// `asset_filename`. Shared by `lpt build` (`src/build.rs`) and `lpt
-/// install`/`lpt upgrade` (`src/debs.rs`), which independently reimplemented
+/// `asset_filename`. Shared by `lx build` (`src/build.rs`) and `lx
+/// install`/`lx upgrade` (`src/debs.rs`), which independently reimplemented
 /// this same probe-and-verify loop before with subtly different bug
 /// surfaces -- see `docs/decisions/2026-08-21-dry-solid-cleanup.md`.
 ///

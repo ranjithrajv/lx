@@ -1,5 +1,5 @@
-use lpt_lib::debs::*;
-use lpt_lib::github::{Asset, Release};
+use lx_lib::debs::*;
+use lx_lib::github::{Asset, Release};
 
 fn asset(name: &str) -> Asset {
     Asset {
@@ -17,6 +17,7 @@ fn release(assets: Vec<Asset>) -> Release {
         html_url: "https://github.com/x/y/releases".into(),
         assets,
         published_at: None,
+        body: None,
     }
 }
 
@@ -58,4 +59,15 @@ fn extracts_control_version() {
 #[test]
 fn control_version_none_on_mismatch() {
     assert!(control_version("eza_0.24.0-1+trixie_amd64.deb", "eza", "arm64").is_none());
+}
+
+#[test]
+fn parse_depends_strips_versions_and_takes_first_alternative() {
+    let deps = parse_depends_field("libc6 (>= 2.34), libssl3 | libssl1.1, adduser");
+    assert_eq!(deps, vec!["libc6", "libssl3", "adduser"]);
+}
+
+#[test]
+fn parse_depends_empty_field_is_empty() {
+    assert!(parse_depends_field("").is_empty());
 }

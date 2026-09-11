@@ -108,7 +108,7 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
     let unverified_assets = inputs
         .provenance
         .iter()
-        .filter(|p| p["method"] != "pinned" && p["method"] != "sidecar")
+        .filter(|p| p["method"] != "pinned" && p["method"] != "sidecar" && p["method"] != "locked")
         .count();
 
     let duration = inputs.start.elapsed().as_secs();
@@ -145,7 +145,7 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
         "success_rate": success_rate,
     });
 
-    let path = out_dir.join(lpt_lib::constants::SUMMARY_FILENAME);
+    let path = out_dir.join(lx_lib::constants::SUMMARY_FILENAME);
     let json = serde_json::to_string_pretty(&summary)?;
     std::fs::write(&path, json)?;
     println!("  ✓ build summary saved to {}", path.display());
@@ -163,7 +163,7 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
 
 /// Print a markdown badge block for pasting into the packaging repo's own
 /// README, mirroring the (now-superseded) action's `generate_viral_badge`
-/// in src/lib/summary.sh but pointed at `lpt` itself rather than its bash
+/// in src/lib/summary.sh but pointed at `lx` itself rather than its bash
 /// predecessor. Printed after every summary.
 fn viral_badge(
     success_rate: u64,
@@ -208,8 +208,8 @@ fn viral_badge(
     println!(
         r#"
 ---
-🚀 Built with **lpt**
-[![Built with lpt](https://img.shields.io/badge/built%20with-lpt-blue?logo=github)](https://github.com/ranjithrajv/lpt)
+🚀 Built with **lx**
+[![Built with lx](https://img.shields.io/badge/built%20with-lx-blue?logo=github)](https://github.com/ranjithrajv/lx)
 {release_badges}{coverage_badges}
 
 **Build Stats:**
@@ -218,7 +218,7 @@ fn viral_badge(
 - 📦 Packages: {packages}
 - 🏗️  Architectures: {arch_count}
 
-→ Try it: `lpt build https://github.com/<owner>/<repo>`"#
+→ Try it: `lx build https://github.com/<owner>/<repo>`"#
     );
 }
 

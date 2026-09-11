@@ -1,4 +1,4 @@
-//! Reusable building blocks extracted from the `lpt` binary so they can be
+//! Reusable building blocks extracted from the `lx` binary so they can be
 //! shared across other projects:
 //!
 //! * [`cache`] — flock-guarded persistent download cache with TTL + checksum.
@@ -27,8 +27,10 @@
 //! * [`gerrit`] — Gerrit Code Review tags as pseudo-releases.
 //! * [`progress`] — cross-process progress tracking with a TTY-friendly bar.
 //! * [`telemetry`] — best-effort metrics/stage/failure logging.
+//! * [`lock`] — `package.lock`: pins each arch's resolved (tag, asset,
+//!   checksum) so a build fails closed on upstream drift.
 //!
-//! Everything the `lpt` binary does lives here too (`build`, `cli`, `config`,
+//! Everything the `lx` binary does lives here too (`build`, `cli`, `config`,
 //! `plugins`, …) — `src/main.rs` is a thin wrapper that just calls
 //! [`cli::run`]. Keeping it all in one crate lets `tests/` exercise the CLI's
 //! internals as ordinary integration tests.
@@ -37,8 +39,8 @@
 
 // Lets code written against the crate's own public API (originally as an
 // external dependency, back when `src/` was a separate binary crate) keep
-// using `lpt_lib::` qualified paths unchanged after the merge.
-extern crate self as lpt_lib;
+// using `lx_lib::` qualified paths unchanged after the merge.
+extern crate self as lx_lib;
 
 pub mod archarchive;
 pub mod bitbucket;
@@ -57,22 +59,32 @@ pub mod gerrit;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;
+pub mod go_native;
 pub mod http;
 pub mod install;
 pub mod lintian;
 pub mod list;
+pub mod lock;
 pub mod manifest;
+pub mod migrate;
 pub mod optimize;
 pub mod pkgmeta;
 pub mod plugins;
 pub mod progress;
+pub mod reinstall;
 pub mod remove;
+pub mod repo;
+pub mod rollback;
 pub mod rpmarchive;
+pub mod sbom;
 pub mod scandeps;
 pub mod schema;
+pub mod search;
+pub mod show;
 pub mod sign;
 pub mod source;
 pub mod source_client;
+pub mod sourcebuild;
 pub mod summary;
 pub mod telemetry;
 pub mod update;

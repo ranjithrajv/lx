@@ -1,4 +1,4 @@
-use lpt_lib::pkgmeta::*;
+use lx_lib::pkgmeta::*;
 
 #[test]
 fn with_epoch_prefixes_only_when_set() {
@@ -105,7 +105,7 @@ fn render_copyright_falls_back_to_config_spdx_without_a_detected_license() {
 
 #[test]
 fn render_copyright_prefers_detected_license_over_config_fallback() {
-    let license = lpt_lib::github::RepoLicense {
+    let license = lx_lib::github::RepoLicense {
         spdx: "Apache-2.0".into(),
         text: Some("full license text".into()),
     };

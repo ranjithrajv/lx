@@ -1,4 +1,4 @@
-use lpt_lib::elfdeps::*;
+use lx_lib::elfdeps::*;
 
 #[test]
 fn rejects_non_elf_input() {

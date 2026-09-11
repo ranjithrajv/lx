@@ -1,10 +1,10 @@
-use lpt_lib::plugins::deb::*;
+use lx_lib::plugins::deb::*;
 
-use lpt_lib::config::PackageConfig;
-use lpt_lib::github::Asset;
+use lx_lib::config::PackageConfig;
+use lx_lib::github::Asset;
 
-fn job() -> lpt_lib::build::ResolvedJob {
-    lpt_lib::build::ResolvedJob {
+fn job() -> lx_lib::build::ResolvedJob {
+    lx_lib::build::ResolvedJob {
         dist: "trixie".into(),
         arch: "amd64".into(),
         asset: Asset {

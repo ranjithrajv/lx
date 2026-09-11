@@ -1,4 +1,4 @@
-use lpt_lib::schema::*;
+use lx_lib::schema::*;
 
 #[test]
 fn schema_is_valid_json_and_has_required_fields() {

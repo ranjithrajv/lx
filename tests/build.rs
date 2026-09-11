@@ -1,4 +1,4 @@
-use lpt_lib::build::*;
+use lx_lib::build::*;
 
 #[test]
 fn verify_method_as_str_names_every_variant() {
@@ -53,14 +53,14 @@ fn host_arch_returns_a_known_debian_arch() {
     // matrix actually knows about.
     let arch = host_arch().expect("uname -m should resolve on Linux");
     assert!(
-        lpt_lib::config::DEFAULT_ARCHITECTURES.contains(&arch.as_str()),
+        lx_lib::config::DEFAULT_ARCHITECTURES.contains(&arch.as_str()),
         "unexpected arch: {arch}"
     );
 }
 
 #[test]
 fn version_placeholder_dedupes_literal_v_prefix() {
-    use lpt_lib::build::expand_version_placeholder as x;
+    use lx_lib::build::expand_version_placeholder as x;
     // Legacy pattern with literal v + v-prefixed tag -> single v.
     assert_eq!(
         x("eza_v{version}_x86_64-unknown-linux-gnu.tar.gz", "v0.23.5"),
@@ -105,6 +105,7 @@ debian_distributions: [trixie]
 
     let args = BuildArgs {
         config: cfg_path,
+        all: None,
         version: None,
         build_version: "1".into(),
         architectures: None,
@@ -127,6 +128,9 @@ debian_distributions: [trixie]
         source: false,
         summary: false,
         telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
         progress: false,
         progress_path: None,
         keep: false,
@@ -134,6 +138,165 @@ debian_distributions: [trixie]
         sign_key_id: None,
         sign_method: Some("debsign".into()),
         local: true,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
     };
     run(args, None).expect("local --dry-run should succeed");
+}
+
+/// `--all` fans a fleet manifest out into one dry-run build per listed
+/// package.yaml, all sharing the payload directory's binary.
+#[test]
+fn all_builds_every_package_in_fleet_manifest() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("hello"), b"\x7fELFfake").unwrap();
+
+    let fleet_dir = tempfile::tempdir().unwrap();
+    let write_pkg = |name: &str| {
+        let path = fleet_dir.path().join(format!("{name}.yaml"));
+        std::fs::write(
+            &path,
+            format!(
+                r#"
+package_name: {name}
+github_repo: owner/{name}
+version: "1.0.0"
+local_payload: {}
+architectures: [amd64]
+debian_distributions: [trixie]
+"#,
+                payload.path().display()
+            ),
+        )
+        .unwrap();
+        format!("{name}.yaml")
+    };
+    write_pkg("hello");
+    write_pkg("world");
+
+    let fleet_path = fleet_dir.path().join("packages.yaml");
+    std::fs::write(&fleet_path, "packages: [hello.yaml, world.yaml]\n").unwrap();
+
+    let args = BuildArgs {
+        config: fleet_path.clone(),
+        all: Some(fleet_path),
+        version: None,
+        build_version: "1".into(),
+        architectures: None,
+        host: false,
+        distributions: None,
+        output: fleet_dir.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: true,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("fleet dry-run should succeed for every listed package");
+}
+
+/// `--verify` (nix build --check parity): a baseline build with
+/// --artifact-cache-dir populates the cache; a second build with --verify
+/// against the same recipe forces a real rebuild and must find it
+/// byte-identical to the cached one (the pipeline is deterministic given
+/// the same mtime-from-release-timestamp inputs).
+#[test]
+fn verify_confirms_a_deterministic_rebuild() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("hello"), b"\x7fELFfake").unwrap();
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("package.yaml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            r#"
+package_name: hello
+github_repo: owner/hello
+version: "1.0.0"
+local_payload: {}
+architectures: [amd64]
+debian_distributions: [trixie]
+"#,
+            payload.path().display()
+        ),
+    )
+    .unwrap();
+
+    let cache_dir = cfg_dir.path().join("artifact-cache");
+    let base_args = BuildArgs {
+        config: cfg_path,
+        all: None,
+        version: None,
+        build_version: "1".into(),
+        architectures: None,
+        host: false,
+        distributions: None,
+        output: cfg_dir.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: false,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: true,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: Some(cache_dir),
+        verify: false,
+    };
+
+    run(base_args.clone(), None).expect("baseline build should populate the artifact cache");
+
+    let verify_args = BuildArgs {
+        verify: true,
+        ..base_args
+    };
+    run(verify_args, None).expect("rebuild should verify as reproducible against the cache");
 }

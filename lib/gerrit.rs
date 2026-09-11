@@ -8,7 +8,7 @@ use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
 /// Gerrit does not have GitHub-style releases, so we map tags → pseudo-releases.
 /// Assets are synthesized as `https://{host}/{project}/-/archive/{tag}.tar.gz`
 /// (common for Gerrit via plugins, e.g. `download-commands`). This is sufficient
-/// for `lpt`'s `match_assets` which only needs a filename containing the arch.
+/// for `lx`'s `match_assets` which only needs a filename containing the arch.
 pub struct GerritClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -224,6 +224,7 @@ impl GerritClient {
                 .as_deref()
                 .and_then(parse_gerrit_time)
                 .or_else(|| tag.tagger_date.as_deref().and_then(parse_gerrit_time)),
+            body: None,
         }
     }
 

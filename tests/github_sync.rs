@@ -1,4 +1,4 @@
-use lpt_lib::github::*;
+use lx_lib::github::*;
 
 #[test]
 fn maps_raw_release_to_common() {
@@ -14,6 +14,7 @@ fn maps_raw_release_to_common() {
             browser_download_url: "https://github.com/.../eza_x86_64-unknown-linux-gnu.tar.gz"
                 .into(),
         }],
+        body: None,
     };
     let r: Release = raw.into();
     assert_eq!(r.tag_name, "v0.24.0");

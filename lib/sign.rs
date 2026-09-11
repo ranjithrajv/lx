@@ -26,7 +26,7 @@ pub struct SignRequest<'a> {
     /// rpm crate).
     pub key_id: &'a str,
     /// Passphrase, if the key needs one. Resolved by callers from
-    /// `$LPT_SIGN_PASSPHRASE` (falling back to `$NFPM_PASSPHRASE`).
+    /// `$LX_SIGN_PASSPHRASE` (falling back to `$NFPM_PASSPHRASE`).
     pub passphrase: Option<&'a str>,
 }
 

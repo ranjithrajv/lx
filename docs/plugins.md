@@ -3,7 +3,7 @@
 **Date:** 2026-08-24 (updated 2026-08-26: plugin types + 5 Source)  
 **Status:** Implemented (3× Package: `deb` + `rpm` + `arch`; 6× Source: `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`)
 
-`lpt` builds Linux packages by repackaging release binaries. The original implementation only produced Debian `.deb`s from GitHub. To support RPM/Arch **and** GitLab without forking the core pipeline, the build was refactored into a **format-agnostic core + two-dimensional pluggable system**.
+`lx` builds Linux packages by repackaging release binaries. The original implementation only produced Debian `.deb`s from GitHub. To support RPM/Arch **and** GitLab without forking the core pipeline, the build was refactored into a **format-agnostic core + two-dimensional pluggable system**.
 
 This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at repo root, but adds a second dimension for source providers:
 
@@ -39,7 +39,7 @@ pub trait SourcePlugin: Send + Sync {
 }
 ```
 
-`PluginType` lets callers list/filter by dimension (`all_plugins()` vs `all_source_plugins()`) and keeps `docs/` and `lpt --help` organized. Adding a new dimension (e.g. `Publisher`) would be a new enum variant, not a new registry.
+`PluginType` lets callers list/filter by dimension (`all_plugins()` vs `all_source_plugins()`) and keeps `docs/` and `lx --help` organized. Adding a new dimension (e.g. `Publisher`) would be a new enum variant, not a new registry.
 
 ## 2. Package Trait
 
@@ -147,15 +147,15 @@ This preserves the nfpm-inspired ancillary handling (`docs/decisions/2026-08-20-
 
 *Extension* `deb`, *defaults* `bookworm/trixie/forky/sid`, *matrix* → `PackageConfig::arch_supported_for_dist()` (universal + distro-gated `i386/armel/riscv64/loong64`).
 
-Stages via `stage_install_tree`, renders `DEBIAN/control` (`Section/Priority/Package/Version/Architecture/Maintainer/Homepage/Description` + `Relations` `lib/pkgmeta.rs:55`), `changelog.Debian.gz`/`copyright` via `lib/pkgmeta::render_*`, then `lpt_lib::debarchive::build()` (`ar` with `debian-binary`+`control.tar.gz`+`data.tar.gz`, sorted walk, normalized `mtime/uid/gid`, deterministic `gzip`).
+Stages via `stage_install_tree`, renders `DEBIAN/control` (`Section/Priority/Package/Version/Architecture/Maintainer/Homepage/Description` + `Relations` `lib/pkgmeta.rs:55`), `changelog.Debian.gz`/`copyright` via `lib/pkgmeta::render_*`, then `lx_lib::debarchive::build()` (`ar` with `debian-binary`+`control.tar.gz`+`data.tar.gz`, sorted walk, normalized `mtime/uid/gid`, deterministic `gzip`).
 
-Lint via `lpt_lib::lintian::run()`.
+Lint via `lx_lib::lintian::run()`.
 
 ### rpm — `src/plugins/rpm.rs:7` + `lib/rpmarchive.rs:1`
 
 *Extension* `rpm`, *defaults* `fedora/el9/el8/opensuse`, permissive matrix.
 
-Stages same tree, then `lpt_lib::rpmarchive::build()` (`rpm = "0.16"` `PackageBuilder`): `name/version (stripped)/license/arch (mapped `amd64→x86_64`)` + `release = "{build_version}.{dist}"` (dot-normalised), `summary/description` from `effective_description`, `source_date(mtime)` for reproducibility, `with_file()` for each payload file (sorted) + dummy file for symlinks (`FileOptions::symlink`).
+Stages same tree, then `lx_lib::rpmarchive::build()` (`rpm = "0.16"` `PackageBuilder`): `name/version (stripped)/license/arch (mapped `amd64→x86_64`)` + `release = "{build_version}.{dist}"` (dot-normalised), `summary/description` from `effective_description`, `source_date(mtime)` for reproducibility, `with_file()` for each payload file (sorted) + dummy file for symlinks (`FileOptions::symlink`).
 
 Valid RPM magic `ED AB EE DB`, tested with `rpm -qip` equivalent.
 
@@ -171,7 +171,7 @@ Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/pack
 
 *Name* `github`, *description* `GitHub Releases (api.github.com / octocrab)`.
 
-* Wraps `lpt_lib::github::GitHubClient` (`octocrab` + `tokio` + 5-min JSON cache `api_cache_dir`).
+* Wraps `lx_lib::github::GitHubClient` (`octocrab` + `tokio` + 5-min JSON cache `api_cache_dir`).
 * `parse_url` → `crate::build::parse_github_url` (`https://github.com/owner/repo(.git)?(/releases/…)?`).
 * `latest_release` → `GET /repos/{owner}/{repo}/releases/latest`, `release_by_tag` → `GET /repos/{owner}/{repo}/releases/tags/{tag}`.
 * `raw_get`/`releases`/`repo_license`/`repo_root`/`repo_file_text` map 1:1 to `GitHubClient` methods (dual-license `LICENSE-APACHE`+`LICENSE-MIT` detection uses `repo_root` + `repo_file_text`).
@@ -181,7 +181,7 @@ Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/pack
 
 *Name* `gitlab`, *description* `GitLab Releases (gitlab.com / self-hosted, API v4)`.
 
-* Wraps `lpt_lib::gitlab::GitlabClient` (blocking `reqwest`, same 5-min cache, `GITLAB_API_URL`/`GITLAB_HOST` env, default `https://gitlab.com/api/v4`).
+* Wraps `lx_lib::gitlab::GitlabClient` (blocking `reqwest`, same 5-min cache, `GITLAB_API_URL`/`GITLAB_HOST` env, default `https://gitlab.com/api/v4`).
 * `parse_url` → `parse_gitlab_url` (`https://gitlab.com/owner/repo`, custom host via `GITLAB_HOST`).
 * `latest_release` → `GET /projects/{%2F-encoded}/releases?per_page=1`, `release_by_tag` → `GET /projects/{id}/releases/{tag}`.
 * Mapping: `GitlabReleaseRaw {tag_name, assets:{links[]}}` → `Release {assets: links→Asset}`. `published_at: released_at||created_at → jiff`.
@@ -213,7 +213,7 @@ Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/pack
 * `release_by_tag` → same as `latest_release` (tag ignored, `match_assets` filters by asset name).
 * `parse_url` → `parse_bitbucket_url` (`https://bitbucket.org/{workspace}/{repo}` or `https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}`).
 
-Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lpt_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`SourcePlugin::raw_get` → `RawGetter`).
+Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lx_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`SourcePlugin::raw_get` → `RawGetter`).
 
 Config `src/config.rs:83`:
 
@@ -228,23 +228,23 @@ package_format: deb     # deb | rpm | arch
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
 ```
 
-Zero-config `lpt build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url` (`src/plugins/source/mod.rs:152`, `src/build.rs:161`, `src/scandeps.rs:36`, `src/discovery.rs:132`).
+Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url` (`src/plugins/source/mod.rs:152`, `src/build.rs:161`, `src/scandeps.rs:36`, `src/discovery.rs:132`).
 
 ## 8. Wiring
 
 * `src/config.rs:83` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|gitlab|gitea|forgejo|bitbucket`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host: Option<String>`.
 * `src/build.rs:229` resolves `effective_source` → `get_source_plugin`, prints `source: …`, sets `cfg.source` + `GITLAB_HOST/GITEA_HOST/FORGEJO_HOST/BITBUCKET_HOST` env, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. `build_jobs` (`src/build.rs:747`) now takes `source_name: String` + `token: Option<String>` and each thread re-looks-up the plugin; `build_one` (`src/build.rs:881`) takes `&dyn SourcePlugin` + `token`.
-* `src/discovery.rs:132` (`lpt discover --source github|gitlab|gitea|forgejo|bitbucket|gerrit`), `src/validate.rs:42`, `src/scandeps.rs:35`, `src/wizard.rs:35` all go through `get_source_plugin` (`wizard` prompts `Source provider (github/gitlab/gitea/forgejo/bitbucket/gerrit)` and optional host; `validate`/`scandeps` set `GERRIT_HOST` from `cfg.gerrit_host` same as the other providers).
+* `src/discovery.rs:132` (`lx discover --source github|gitlab|gitea|forgejo|bitbucket|gerrit`), `src/validate.rs:42`, `src/scandeps.rs:35`, `src/wizard.rs:35` all go through `get_source_plugin` (`wizard` prompts `Source provider (github/gitlab/gitea/forgejo/bitbucket/gerrit)` and optional host; `validate`/`scandeps` set `GERRIT_HOST` from `cfg.gerrit_host` same as the other providers).
 * `src/summary.rs:51` glob switches `*_*.deb` / `-*.rpm` / `-*.pkg.tar.*` and JSON includes `package_format`; `source` is not yet in summary (provider-agnostic).
-* `src/source.rs` generates deb source packages (`generate`), RPM source packages (`generate_rpm` -- `.src.rpm` via `lpt_lib::rpmarchive::build_srpm`), and Arch `PKGBUILD`s (`generate_arch` -- no compiled archive; a real Arch source package *is* a `PKGBUILD` text file). All three re-extract the upstream payload from an already-built binary artifact (`lpt_lib::rpmarchive::extract` / `lpt_lib::archarchive::extract` for rpm/arch) rather than reusing the live build's staging dir, matching the deb path's existing approach.
-* `lib/checksum.rs:108` generic over `RawGetter`; `src/debs.rs:137` `download`/`verify_sidecar_or_require_flag` also generic (`&dyn RawGetter`) – `lpt install`'s `latest-debs` org stays GitHub-specific but now benefits from the same checksum abstraction.
+* `src/source.rs` generates deb source packages (`generate`), RPM source packages (`generate_rpm` -- `.src.rpm` via `lx_lib::rpmarchive::build_srpm`), and Arch `PKGBUILD`s (`generate_arch` -- no compiled archive; a real Arch source package *is* a `PKGBUILD` text file). All three re-extract the upstream payload from an already-built binary artifact (`lx_lib::rpmarchive::extract` / `lx_lib::archarchive::extract` for rpm/arch) rather than reusing the live build's staging dir, matching the deb path's existing approach.
+* `lib/checksum.rs:108` generic over `RawGetter`; `src/debs.rs:137` `download`/`verify_sidecar_or_require_flag` also generic (`&dyn RawGetter`) – `lx install`'s `latest-debs` org stays GitHub-specific but now benefits from the same checksum abstraction.
 
 ## 9. Adding a New Plugin
 
 **Package (e.g. `apk`):**
 
 1. `lib/<format>archive.rs` – `pub fn build(root, name, version, …) -> Result<()>` doing deterministic archive (see `archarchive.rs` for pattern).
-2. `src/plugins/<format>.rs` – `impl Plugin` (name, extension, defaults, `build` calls `stage_install_tree` + `lpt_lib::<format>archive::build`).
+2. `src/plugins/<format>.rs` – `impl Plugin` (name, extension, defaults, `build` calls `stage_install_tree` + `lx_lib::<format>archive::build`).
 3. Register in `src/plugins/mod.rs:82` and `src/config.rs:193` match arm + `effective_distributions_for`.
 4. `src/summary.rs:55` pattern arm + `src/build.rs:384` source skip if needed.
 5. Add tests in `src/plugins/mod.rs:282` (registry + `build_valid_archives` magic check).
@@ -253,7 +253,7 @@ Zero-config `lpt build https://gitlab.com/owner/repo` auto-sets `source=gitlab` 
 
 1. `lib/<provider>.rs` – `struct Client { http, base_url, token, cache_dir }` with `latest_release/release_by_tag/releases/repo_license/repo_root/repo_file_text/raw_get` (see `lib/gitlab.rs` for REST mapping and `lib/gitea.rs` for Gitea/Forgejo, `lib/bitbucket.rs` for downloads-as-release).
 2. Add `DEFAULT_<PROVIDER>_HOST/API_URL` to `lib/constants.rs:5` and `homepage_for_<provider>()` helper.
-3. Implement `lpt_lib::checksum::RawGetter for Client`.
+3. Implement `lx_lib::checksum::RawGetter for Client`.
 4. `src/plugins/source/<provider>.rs` – `impl SourcePlugin` delegating to `lib::<provider>::Client` (see `src/plugins/source/gitlab.rs`/`gitea.rs`).
 5. Register in `src/plugins/source/mod.rs:129` + `parse_url` for `https://{host}/owner/repo`.
 6. Add `source = "<provider>"` to `src/config.rs:193` + `*_host: Option<String>` + `resolve_source_token` in `src/build.rs:520` + `host` env handling in `src/build.rs:251`/`src/validate.rs`/`src/scandeps.rs`/`src/wizard.rs`.
@@ -263,7 +263,7 @@ No core pipeline changes – parallel `build_jobs()` grouping by `arch` remains 
 
 ## 10. Relation to nfpm
 
-| nfpm | lpt |
+| nfpm | lx |
 |---|---|
 | Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `SourcePlugin` (Source) traits, 3 Package + 5 Source impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider (`--provider`/`package.yaml:source`), `package_format` selects packager |

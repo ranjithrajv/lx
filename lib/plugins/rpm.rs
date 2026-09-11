@@ -1,6 +1,6 @@
 //! RPM `.rpm` plugin.
 //!
-//! Implements the `Plugin` trait for RPM packages using `lpt_lib::rpmarchive`.
+//! Implements the `Plugin` trait for RPM packages using `lx_lib::rpmarchive`.
 //! Shares the same staging logic as the deb plugin but emits a genuine RPM
 //! (ED AB EE DB magic) instead of an ar+control+data archive.
 
@@ -21,11 +21,11 @@ impl Plugin for RpmPlugin {
     }
 
     fn description(&self) -> &'static str {
-        "RPM package (.rpm) — genuine RPM via lpt_lib::rpmarchive"
+        "RPM package (.rpm) — genuine RPM via lx_lib::rpmarchive"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {
-        lpt_lib::constants::DEFAULT_RPM_DISTRIBUTIONS
+        lx_lib::constants::DEFAULT_RPM_DISTRIBUTIONS
     }
 
     fn arch_supported_for_dist(&self, _arch: &str, _dist: &str) -> bool {
@@ -54,12 +54,12 @@ impl Plugin for RpmPlugin {
         let release = format!("{}+{}", ctx.build_version, job.dist).replace('+', ".");
         let summary = cfg.effective_description();
         let homepage = if cfg.effective_source() == "gitlab" {
-            lpt_lib::constants::homepage_for_gitlab(
+            lx_lib::constants::homepage_for_gitlab(
                 &cfg.github_repo,
                 cfg.gitlab_host.as_deref().unwrap_or(""),
             )
         } else {
-            lpt_lib::constants::homepage_for_github(&cfg.github_repo)
+            lx_lib::constants::homepage_for_github(&cfg.github_repo)
         };
         let description = format!(
             "{summary}\nPackaged from the upstream release ({homepage}) for RPM-based distributions.",
@@ -85,7 +85,7 @@ impl Plugin for RpmPlugin {
         std::fs::create_dir_all(&out_dir)?;
         let rpm_dest = out_dir.join(&rpm_name);
 
-        let opts = lpt_lib::rpmarchive::BuildOptions {
+        let opts = lx_lib::rpmarchive::BuildOptions {
             pre_install: Some(cfg.scripts.preinstall.trim()),
             post_install: Some(cfg.scripts.postinstall.trim()),
             pre_uninstall: Some(cfg.scripts.preremove.trim()),
@@ -93,7 +93,7 @@ impl Plugin for RpmPlugin {
             sign_key_file: ctx.sign_key,
             sign_passphrase: ctx.sign_passphrase,
         };
-        let meta = lpt_lib::rpmarchive::PackageMeta {
+        let meta = lx_lib::rpmarchive::PackageMeta {
             name: &cfg.package_name,
             version: &version,
             release: &release,
@@ -101,7 +101,7 @@ impl Plugin for RpmPlugin {
             description: &description,
             license,
         };
-        lpt_lib::rpmarchive::build_with_options(
+        lx_lib::rpmarchive::build_with_options(
             ctx.staging_root,
             &meta,
             &job.arch,
@@ -116,5 +116,5 @@ impl Plugin for RpmPlugin {
 }
 
 fn to_rpm_arch(debian_arch: &str) -> &'static str {
-    lpt_lib::constants::to_rpm_arch(debian_arch)
+    lx_lib::constants::to_rpm_arch(debian_arch)
 }

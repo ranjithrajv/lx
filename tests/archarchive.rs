@@ -1,4 +1,4 @@
-use lpt_lib::archarchive::*;
+use lx_lib::archarchive::*;
 
 use std::os::unix::fs::PermissionsExt;
 

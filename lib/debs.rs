@@ -6,9 +6,9 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 use std::process::Command;
 
-use lpt_lib::github::{Asset, Release};
+use lx_lib::github::{Asset, Release};
 
-pub use lpt_lib::constants::LATEST_DEBS_ORG;
+pub use lx_lib::constants::LATEST_DEBS_ORG;
 
 /// The `latest-debs` org repo name for a package: `<package>-debian`. The
 /// user-facing `package` argument to `install`/`upgrade` is always the bare
@@ -51,7 +51,7 @@ pub fn control_version(asset_name: &str, package: &str, arch: &str) -> Option<St
 /// was not found, mirroring `build.rs`'s `suggest_versions`. `package` is
 /// the bare upstream name; resolved to the org's actual repo via
 /// `repo_name` for both the API call and the printed URL.
-pub fn suggest_versions(client: &lpt_lib::github::GitHubClient, package: &str, wanted: &str) {
+pub fn suggest_versions(client: &lx_lib::github::GitHubClient, package: &str, wanted: &str) {
     let repo = repo_name(package);
     eprintln!("Version '{wanted}' not found for {LATEST_DEBS_ORG}/{repo}.");
     match client.releases(LATEST_DEBS_ORG, &repo, 5) {
@@ -118,6 +118,62 @@ pub fn dpkg_installed_version(package: &str) -> Option<String> {
     }
 }
 
+/// Full dpkg Description (short + long) for an installed `package`, or
+/// None if it isn't installed. Powers full-text search like `apt search`.
+pub fn dpkg_description(package: &str) -> Option<String> {
+    let out = Command::new("dpkg-query")
+        .args(["-W", "-f=${Description}", package])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// Direct runtime dependency names for an installed package, per dpkg
+/// (`Depends:` field), with version constraints and alternatives stripped
+/// down to the first alternative's bare name. Empty if the package isn't
+/// installed, has no Depends, or dpkg-query isn't available.
+pub fn dpkg_depends(package: &str) -> Vec<String> {
+    let Ok(out) = Command::new("dpkg-query")
+        .args(["-W", "-f=${Depends}", package])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let Ok(field) = String::from_utf8(out.stdout) else {
+        return Vec::new();
+    };
+    parse_depends_field(&field)
+}
+
+/// Pure parser for a dpkg `Depends:` field, factored out of
+/// [`dpkg_depends`] so it's testable without a live dpkg database.
+pub fn parse_depends_field(field: &str) -> Vec<String> {
+    field
+        .split(',')
+        .filter_map(|dep| {
+            // "foo (>= 1.2) | bar" -> "foo"
+            let first_alt = dep.split('|').next().unwrap_or("").trim();
+            let name = first_alt.split_whitespace().next()?;
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
+}
+
 /// True if `candidate` is a newer Debian version than `installed`, per
 /// dpkg's own version-comparison rules.
 pub fn is_newer(installed: &str, candidate: &str) -> Result<bool> {
@@ -129,7 +185,7 @@ pub fn is_newer(installed: &str, candidate: &str) -> Result<bool> {
 }
 
 pub fn download(
-    client: &dyn lpt_lib::checksum::RawGetter,
+    client: &dyn lx_lib::checksum::RawGetter,
     asset: &Asset,
     dest: &Path,
 ) -> Result<()> {
@@ -146,7 +202,7 @@ pub fn download(
 
 /// Verify against a `.sha256`/`.sha256sum` sidecar file if one exists next
 /// to the asset (probe-and-verify logic shared with `build.rs` via
-/// `lpt_lib::checksum::check_sidecar`). A checksum that doesn't match is
+/// `lx_lib::checksum::check_sidecar`). A checksum that doesn't match is
 /// always a hard error, since this asset is about to be installed as root.
 /// A missing sidecar also fails the install unless `allow_unverified` is
 /// set (`--allow-unverified`) -- matching `build.rs`'s fail-closed default:
@@ -154,14 +210,13 @@ pub fn download(
 /// proceeding here would mean the *default* install path had zero
 /// integrity verification with only a console line as evidence.
 pub fn verify_sidecar_or_require_flag(
-    client: &dyn lpt_lib::checksum::RawGetter,
+    client: &dyn lx_lib::checksum::RawGetter,
     asset: &Asset,
     path: &Path,
     allow_unverified: bool,
 ) -> Result<()> {
-    use lpt_lib::checksum::SidecarCheck;
-    match lpt_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)?
-    {
+    use lx_lib::checksum::SidecarCheck;
+    match lx_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)? {
         SidecarCheck::Verified => {
             println!("    ✓ checksum verified");
             Ok(())

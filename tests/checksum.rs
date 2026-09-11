@@ -1,4 +1,4 @@
-use lpt_lib::checksum::*;
+use lx_lib::checksum::*;
 
 #[test]
 fn parses_coreutils_format() {
@@ -129,7 +129,7 @@ fn pinned_metadata_modern_layout_invalid_hash_falls_through() {
 #[test]
 #[ignore]
 fn real_mismatch_is_never_reported_as_not_found() {
-    let client = lpt_lib::github::GitHubClient::new(None).unwrap();
+    let client = lx_lib::github::GitHubClient::new(None).unwrap();
     let asset_url = "https://github.com/BurntSushi/ripgrep/releases/download/15.2.0/ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz";
     let asset_name = "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz";
 

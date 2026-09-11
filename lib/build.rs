@@ -6,13 +6,19 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::discovery::{config_from_release, guess_format, match_assets};
-use lpt_lib::github::Asset;
+use lx_lib::github::Asset;
 
 #[derive(Debug, Clone, Args)]
 pub struct BuildArgs {
     /// Path to package.yaml
-    #[arg(default_value = lpt_lib::constants::DEFAULT_CONFIG_FILENAME)]
+    #[arg(default_value = lx_lib::constants::DEFAULT_CONFIG_FILENAME)]
     pub config: PathBuf,
+
+    /// Build every package.yaml listed in a fleet manifest instead of a
+    /// single config (YAML: `packages: [path, ...]`, paths relative to the
+    /// manifest's own directory). Every other flag applies to each build.
+    #[arg(long, value_name = "PACKAGES_YAML", conflicts_with = "config")]
+    pub all: Option<PathBuf>,
 
     /// Version of the software to build (overrides any version in config).
     #[arg(short = 'v', long)]
@@ -127,6 +133,12 @@ pub struct BuildArgs {
     #[arg(long)]
     pub telemetry: bool,
 
+    /// Save the current build metrics as performance baseline
+    /// (.telemetry/baseline.json) for regression detection on future
+    /// builds (action's save-baseline / save_as_baseline parity).
+    #[arg(long)]
+    pub save_baseline: bool,
+
     /// Show a live inline progress bar while building (action's
     /// progress.sh). Only rendered on an interactive terminal.
     #[arg(long)]
@@ -145,7 +157,7 @@ pub struct BuildArgs {
     /// (default), produces a detached `<pkg>.deb.sig` via gpg; with method
     /// `debsign`, embeds `_gpgorigin` inside the `.deb`. For rpm, embeds
     /// the PGP signature natively (`rpm -K` verifiable). Passphrase comes
-    /// from $LPT_SIGN_PASSPHRASE, falling back to $NFPM_PASSPHRASE.
+    /// from $LX_SIGN_PASSPHRASE, falling back to $NFPM_PASSPHRASE.
     #[arg(long, value_name = "KEY_FILE")]
     pub sign_key: Option<PathBuf>,
 
@@ -165,6 +177,51 @@ pub struct BuildArgs {
     /// existence is checked at build time.
     #[arg(long)]
     pub local: bool,
+
+    /// Apply a delta package.yaml over the base config before building: its
+    /// top-level keys replace the base's. Lets an org share one base
+    /// package.yaml and fork only what differs per target instead of
+    /// duplicating the whole template.
+    #[arg(long)]
+    pub overlay: Option<PathBuf>,
+
+    /// Write/refresh `package.lock` next to the config after a successful
+    /// build, pinning each architecture's resolved tag/asset/checksum. When
+    /// a `package.lock` already exists and this flag is absent, every
+    /// resolved asset is instead verified against it and the build fails on
+    /// drift (a different tag or asset than what's pinned).
+    #[arg(long)]
+    pub update_lock: bool,
+
+    /// Cache built package artifacts, keyed by config + build flags + asset
+    /// checksum + format + distribution + architecture. An identical
+    /// rebuild copies the cached file instead of re-running the packaging
+    /// pipeline. Skipped for jobs that produce a detached signature (the
+    /// cache doesn't track the sibling `.sig` file).
+    #[arg(long)]
+    pub artifact_cache_dir: Option<PathBuf>,
+
+    /// build_mode: source only — run compile steps under `unshare -n`
+    /// (no network, private mounts) when the kernel permits, else run
+    /// unsandboxed with a warning. Binary repacks never execute anything
+    /// and ignore this flag.
+    #[arg(long)]
+    pub sandbox: bool,
+
+    /// Emit supply-chain attestations into the output dir:
+    /// `<pkg>_<ver>.spdx.json` (SPDX 2.3 SBOM) and `<pkg>_<ver>.slsa.json`
+    /// (SLSA v1-style provenance over built artifacts + upstream materials).
+    #[arg(long)]
+    pub sbom: bool,
+
+    /// Reproducibility check (nix build --check parity): force a real
+    /// rebuild even when the artifact cache already has this recipe's key,
+    /// then byte-compare the fresh output against the cached one and fail
+    /// if they differ. Requires --artifact-cache-dir. The first build for
+    /// a given recipe has nothing to compare against yet and just
+    /// populates the cache as a baseline.
+    #[arg(long, requires = "artifact_cache_dir")]
+    pub verify: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -178,7 +235,58 @@ pub struct ResolvedJob {
     pub published_at: Option<i64>,
 }
 
+/// Fleet manifest for `lx build --all`: a flat list of package.yaml paths,
+/// relative to the manifest's own directory.
+#[derive(Debug, serde::Deserialize)]
+struct FleetManifest {
+    packages: Vec<PathBuf>,
+}
+
+fn run_all(fleet_path: &Path, args: &BuildArgs, token: Option<&str>) -> Result<()> {
+    let text = std::fs::read_to_string(fleet_path)
+        .with_context(|| format!("failed to read fleet manifest '{}'", fleet_path.display()))?;
+    let fleet: FleetManifest = serde_yaml::from_str(&text)
+        .with_context(|| format!("failed to parse fleet manifest '{}'", fleet_path.display()))?;
+    let base_dir = fleet_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut failed = Vec::new();
+    for rel in &fleet.packages {
+        let config = base_dir.join(rel);
+        println!("=== {} ===", config.display());
+        let mut job_args = args.clone();
+        job_args.all = None;
+        job_args.config = config.clone();
+        if let Err(e) = run(job_args, token) {
+            eprintln!("✗ {}: {e:#}", config.display());
+            failed.push(config);
+        }
+    }
+
+    if failed.is_empty() {
+        println!(
+            "\n✓ built {} package(s) from {}",
+            fleet.packages.len(),
+            fleet_path.display()
+        );
+        Ok(())
+    } else {
+        bail!(
+            "{} of {} package(s) failed to build: {}",
+            failed.len(),
+            fleet.packages.len(),
+            failed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+}
+
 pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
+    if let Some(fleet_path) = args.all.clone() {
+        return run_all(&fleet_path, &args, token);
+    }
     let build_start = std::time::Instant::now();
     // Parallelism precedence (debian-multiarch-builder parity): an explicit
     // CLI --max-parallel wins over package.yaml's max_parallel; when neither
@@ -228,8 +336,17 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             }
         }
     };
+    if let Some(overlay) = &args.overlay {
+        cfg.apply_overlay(overlay)
+            .with_context(|| format!("applying overlay '{}'", overlay.display()))?;
+    }
     if let Some(v) = &args.version {
         cfg.version = v.clone();
+    }
+    // Source-mode builds compile upstream on the host instead of repacking
+    // release assets (bash `build_mode: source` parity, minus Docker).
+    if cfg.is_source_mode() {
+        return crate::sourcebuild::run(args, &cfg, token);
     }
     // Resolve effective package format: --format overrides package.yaml.
     let effective_format = args
@@ -295,7 +412,33 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
 
     // Resolve the release: pinned version in config, else a tag/version, else latest.
-    let release = if !cfg.version.is_empty() {
+    // `source: custom` has no forge API: the version (config or --version)
+    // is expanded into the upstream_url template, one URL per architecture.
+    let release = if effective_source == "custom" {
+        let version = cfg.version.clone();
+        if version.is_empty() {
+            bail!("source 'custom' requires version: in package.yaml or --version (upstream_url template is expanded with it)");
+        }
+        let template = cfg.upstream_url.trim().to_string();
+        let mut custom_archs = cfg.effective_architectures();
+        if let Some(a) = &args.architectures {
+            custom_archs = a
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+        if custom_archs.is_empty() {
+            bail!("source 'custom' requires a non-empty architectures: list in package.yaml (or --architectures)");
+        }
+        crate::plugins::source::custom::synthetic_release(
+            &template,
+            &version,
+            &cfg.package_name,
+            &custom_archs,
+        )
+    } else if !cfg.version.is_empty() {
         match source.release_by_tag(
             &cfg.github_repo,
             &cfg.version,
@@ -340,7 +483,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     } else if cfg.max_parallel > 0 {
         cfg.max_parallel
     } else {
-        lpt_lib::optimize::effective_max_parallel(0)
+        lx_lib::optimize::effective_max_parallel(0)
     };
 
     // Fetch the upstream license once (not per-architecture), mirroring the
@@ -381,7 +524,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // Drop suites whose Debian LTS support has ended (the action's
     // filter_expired_distributions; e.g. bullseye ends 2026-08-31). Applies
     // to the config default and an explicit --distributions alike.
-    dists = lpt_lib::config::filter_expired_distributions(&dists, None);
+    dists = lx_lib::config::filter_expired_distributions(&dists, None);
 
     if args.host {
         let detected = host_arch().ok_or_else(|| {
@@ -391,8 +534,35 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         archs = vec![detected];
     }
 
-    // Resolve one asset per architecture.
-    let arch_assets = if cfg.has_manual_patterns() {
+    // Resolve one asset per architecture. `source: custom` assets are already
+    // per-arch (one expanded URL each), keyed by position — no pattern
+    // matching, since there is no release listing to match against.
+    let arch_assets = if effective_source == "custom" {
+        // Re-expand the template against the final arch list (post --host /
+        // --architectures reshaping) so the URLs always match the archs
+        // actually being built, regardless of what the synthetic release
+        // was first built with.
+        let version = release.tag_name.clone();
+        let template = cfg.upstream_url.trim();
+        let mut map = std::collections::HashMap::new();
+        for arch in &archs {
+            let (name, url) = crate::plugins::source::custom::expand_for_arch(
+                template,
+                &version,
+                arch,
+                &cfg.package_name,
+            );
+            map.insert(
+                arch.clone(),
+                lx_lib::github::Asset {
+                    name,
+                    size: None,
+                    browser_download_url: url,
+                },
+            );
+        }
+        map
+    } else if cfg.has_manual_patterns() {
         resolve_manual(&cfg, &release)?
     } else {
         let auto = config_from_release(&cfg.github_repo, &release)?;
@@ -468,18 +638,18 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
 
     // Telemetry (action's TELEMETRY_ENABLED, default false) + live progress
     // (action's progress.sh). Both best-effort.
-    let telemetry = lpt_lib::telemetry::Telemetry::new(args.telemetry);
+    let telemetry = lx_lib::telemetry::Telemetry::new(args.telemetry);
     telemetry.init()?;
     telemetry.record_stage("build_initialization")?;
 
-    let progress = if args.progress && lpt_lib::progress::stdout_is_tty() {
-        Some(lpt_lib::progress::Progress::new(
+    let progress = if args.progress && lx_lib::progress::stdout_is_tty() {
+        Some(lx_lib::progress::Progress::new(
             arch_assets.len(),
             &release.tag_name,
             &cfg.package_name,
             args.progress_path
                 .clone()
-                .unwrap_or_else(|| PathBuf::from(lpt_lib::constants::DEFAULT_PROGRESS_PATH)),
+                .unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_PROGRESS_PATH)),
             true,
         )?)
     } else {
@@ -501,6 +671,15 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
 
     telemetry.record_stage_complete("build_completion", "success")?;
     telemetry.finalize(build_start.elapsed().as_secs())?;
+    if args.save_baseline {
+        telemetry.save_as_baseline()?;
+    } else if let Some(w) = telemetry.check_regression() {
+        eprintln!("⚠️  Performance regression detected: {w}");
+    }
+
+    if args.update_lock {
+        write_lock_file(&args.config, &effective_source, &jobs, &provenance)?;
+    }
 
     if args.summary {
         crate::summary::write(
@@ -516,10 +695,40 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 max_parallel: args.max_parallel,
                 start: build_start,
                 telemetry: telemetry.summary_json(),
-                provenance,
+                provenance: provenance.clone(),
                 package_format: effective_format.clone(),
                 source: effective_source.clone(),
             },
+        )?;
+    }
+
+    if args.sbom {
+        let artifacts = lx_lib::sbom::collect_artifacts(&args.output)?;
+        let mut seen = std::collections::BTreeSet::new();
+        let materials: Vec<lx_lib::sbom::Material> = provenance
+            .iter()
+            .filter_map(|p| {
+                let url = p["url"].as_str().unwrap_or_default();
+                if url.is_empty() || !seen.insert(url.to_string()) {
+                    return None;
+                }
+                let digest = p["sha256"]
+                    .as_str()
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+                Some(lx_lib::sbom::Material {
+                    uri: url.to_string(),
+                    digest,
+                })
+            })
+            .collect();
+        lx_lib::sbom::emit(
+            &args.output,
+            &cfg.package_name,
+            &release.tag_name,
+            &args.build_version,
+            &artifacts,
+            &materials,
         )?;
     }
 
@@ -560,6 +769,43 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// Rebuilds `package.lock` from this build's provenance (one entry per
+/// architecture -- distributions sharing an arch share its asset) and
+/// writes it beside the config. Called only for `--update-lock`.
+fn write_lock_file(
+    config: &Path,
+    source_name: &str,
+    jobs: &[ResolvedJob],
+    provenance: &[serde_json::Value],
+) -> Result<()> {
+    let mut lock = lx_lib::lock::LockFile::default();
+    for p in provenance {
+        let arch = p["arch"].as_str().unwrap_or_default().to_string();
+        if arch.is_empty() {
+            continue;
+        }
+        let published_at = jobs
+            .iter()
+            .find(|j| j.arch == arch)
+            .and_then(|j| j.published_at);
+        lock.packages.insert(
+            arch,
+            lx_lib::lock::LockEntry {
+                tag: p["tag"].as_str().unwrap_or_default().to_string(),
+                asset: p["asset"].as_str().unwrap_or_default().to_string(),
+                url: p["url"].as_str().unwrap_or_default().to_string(),
+                sha256: p["sha256"].as_str().unwrap_or_default().to_string(),
+                source: source_name.to_string(),
+                published_at,
+            },
+        );
+    }
+    let lock_path = lx_lib::lock::LockFile::path_for(config);
+    lock.save(&lock_path)?;
+    println!("  ✓ package.lock updated at {}", lock_path.display());
+    Ok(())
+}
+
 /// `--local` path: package a local archive/directory without hitting the
 /// upstream forge. Requires `local_payload` in package.yaml (and usually
 /// `version:` / `--version`).
@@ -595,7 +841,7 @@ fn run_local(
     } else if cfg.max_parallel > 0 {
         cfg.max_parallel
     } else {
-        lpt_lib::optimize::effective_max_parallel(0)
+        lx_lib::optimize::effective_max_parallel(0)
     };
 
     if args.host && args.architectures.is_some() {
@@ -620,7 +866,7 @@ fn run_local(
             .map(str::to_string)
             .collect();
     }
-    dists = lpt_lib::config::filter_expired_distributions(&dists, None);
+    dists = lx_lib::config::filter_expired_distributions(&dists, None);
 
     if args.host {
         let detected = host_arch().ok_or_else(|| {
@@ -694,18 +940,18 @@ fn run_local(
         return Ok(());
     }
 
-    let telemetry = lpt_lib::telemetry::Telemetry::new(args.telemetry);
+    let telemetry = lx_lib::telemetry::Telemetry::new(args.telemetry);
     telemetry.init()?;
     telemetry.record_stage("build_initialization")?;
 
-    let progress = if args.progress && lpt_lib::progress::stdout_is_tty() {
-        Some(lpt_lib::progress::Progress::new(
+    let progress = if args.progress && lx_lib::progress::stdout_is_tty() {
+        Some(lx_lib::progress::Progress::new(
             archs.len(),
             &version,
             &cfg.package_name,
             args.progress_path
                 .clone()
-                .unwrap_or_else(|| PathBuf::from(lpt_lib::constants::DEFAULT_PROGRESS_PATH)),
+                .unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_PROGRESS_PATH)),
             true,
         )?)
     } else {
@@ -720,7 +966,7 @@ fn run_local(
             license: if cfg.license_spdx.is_empty() {
                 None
             } else {
-                Some(lpt_lib::github::RepoLicense {
+                Some(lx_lib::github::RepoLicense {
                     spdx: cfg.license_spdx.clone(),
                     text: None,
                 })
@@ -734,6 +980,11 @@ fn run_local(
 
     telemetry.record_stage_complete("build_completion", "success")?;
     telemetry.finalize(build_start.elapsed().as_secs())?;
+    if args.save_baseline {
+        telemetry.save_as_baseline()?;
+    } else if let Some(w) = telemetry.check_regression() {
+        eprintln!("⚠️  Performance regression detected: {w}");
+    }
 
     if args.summary {
         crate::summary::write(
@@ -786,7 +1037,7 @@ fn run_local(
             license: if cfg.license_spdx.is_empty() {
                 None
             } else {
-                Some(lpt_lib::github::RepoLicense {
+                Some(lx_lib::github::RepoLicense {
                     spdx: cfg.license_spdx.clone(),
                     text: None,
                 })
@@ -836,7 +1087,7 @@ fn fetch_upstream_license_source(
     cfg: &PackageConfig,
     token: Option<&str>,
     cache_dir: Option<&Path>,
-) -> Result<Option<lpt_lib::github::RepoLicense>> {
+) -> Result<Option<lx_lib::github::RepoLicense>> {
     let mut license = source.repo_license(&cfg.github_repo, token, cache_dir)?;
 
     // Dual-license detection (only meaningful for GitHub where LICENSE-* files exist;
@@ -852,7 +1103,7 @@ fn fetch_upstream_license_source(
                 .repo_file_text(&cfg.github_repo, "LICENSE-MIT", token, cache_dir)?
                 .unwrap_or_default();
             if !apache.is_empty() && !mit.is_empty() {
-                license = Some(lpt_lib::github::RepoLicense {
+                license = Some(lx_lib::github::RepoLicense {
                     spdx: "Apache-2.0 or MIT".to_string(),
                     text: Some(format!(
                         "Dual-licensed under either of:\n\n=== Apache License 2.0 ===\n\n{apache}\n\n=== MIT License ===\n\n{mit}"
@@ -863,7 +1114,7 @@ fn fetch_upstream_license_source(
     }
 
     if license.is_none() && !cfg.license_spdx.is_empty() {
-        license = Some(lpt_lib::github::RepoLicense {
+        license = Some(lx_lib::github::RepoLicense {
             spdx: cfg.license_spdx.clone(),
             text: None,
         });
@@ -888,7 +1139,7 @@ fn fetch_upstream_license_source(
 
 /// `{version}` placeholder substitution with `v`-prefix dedup. The bash
 /// action's convention was bare versions (`./build.sh cfg 0.18.0 1`), so
-/// its legacy patterns carry a literal `v` (`pkg_v{version}_...`). lpt
+/// its legacy patterns carry a literal `v` (`pkg_v{version}_...`). lx
 /// always substitutes the full tag (`v0.23.5`), which would produce
 /// `pkg_vv0.23.5`. When a literal `v`/`V` directly precedes the
 /// placeholder, the tag's own prefix is donated so both styles resolve to
@@ -924,7 +1175,7 @@ pub fn expand_version_placeholder(pattern: &str, tag: &str) -> String {
 /// the config's pinned release_pattern.
 pub(crate) fn resolve_manual(
     cfg: &PackageConfig,
-    release: &lpt_lib::github::Release,
+    release: &lx_lib::github::Release,
 ) -> Result<std::collections::HashMap<String, Asset>> {
     let mut out = std::collections::HashMap::new();
     for (arch, acfg) in cfg.architectures.patterns() {
@@ -961,7 +1212,7 @@ pub(crate) fn resolve_manual(
 /// Returns `None` for anything that isn't a github.com URL, so callers can
 /// fall through to treating the argument as a package.yaml path.
 pub fn parse_github_url(s: &str) -> Option<String> {
-    let host = lpt_lib::constants::DEFAULT_GITHUB_HOST;
+    let host = lx_lib::constants::DEFAULT_GITHUB_HOST;
     let rest = s
         .strip_prefix(&format!("https://{host}/"))
         .or_else(|| s.strip_prefix(&format!("http://{host}/")))?;
@@ -978,7 +1229,7 @@ pub fn parse_github_url(s: &str) -> Option<String> {
 /// already parsed off the GitHub API response but never consulted anywhere
 /// -- someone pinning an explicit tag that happens to be an RC/beta got no
 /// signal that they were about to package pre-stable software.
-pub(crate) fn warn_if_prerelease_or_draft(release: &lpt_lib::github::Release) {
+pub(crate) fn warn_if_prerelease_or_draft(release: &lx_lib::github::Release) {
     if release.draft {
         println!(
             "  ⚠️  '{}' is a draft release -- not yet publicly published",
@@ -993,7 +1244,7 @@ pub(crate) fn warn_if_prerelease_or_draft(release: &lpt_lib::github::Release) {
     }
 }
 
-fn asset_from_name(release: &lpt_lib::github::Release, name: &str) -> Asset {
+fn asset_from_name(release: &lx_lib::github::Release, name: &str) -> Asset {
     release
         .assets
         .iter()
@@ -1009,7 +1260,7 @@ fn asset_from_name(release: &lpt_lib::github::Release, name: &str) -> Asset {
 /// Source-provider inputs resolved once in `run` and threaded through every
 /// worker thread `build_jobs` spawns.
 struct SourceInputs {
-    license: Option<lpt_lib::github::RepoLicense>,
+    license: Option<lx_lib::github::RepoLicense>,
     source_name: String,
     token: Option<String>,
 }
@@ -1019,8 +1270,8 @@ fn build_jobs(
     cfg: &PackageConfig,
     jobs: &[ResolvedJob],
     source: SourceInputs,
-    progress: Option<&lpt_lib::progress::Progress>,
-    telemetry: &lpt_lib::telemetry::Telemetry,
+    progress: Option<&lx_lib::progress::Progress>,
+    telemetry: &lx_lib::telemetry::Telemetry,
 ) -> Result<Vec<serde_json::Value>> {
     let SourceInputs {
         license,
@@ -1030,8 +1281,18 @@ fn build_jobs(
     std::fs::create_dir_all(&args.output)?;
 
     let pin = match &args.pinned_metadata {
-        Some(p) => Some(lpt_lib::checksum::PinnedMetadata::load(p)?),
+        Some(p) => Some(lx_lib::checksum::PinnedMetadata::load(p)?),
         None => None,
+    };
+
+    // `--update-lock` means "regenerate the lock", not "verify against it" --
+    // treat this run as unpinned so it falls back to live checksum
+    // verification like a first-ever build would.
+    let lock_path = lx_lib::lock::LockFile::path_for(&args.config);
+    let lock = if args.update_lock {
+        None
+    } else {
+        lx_lib::lock::LockFile::load(&lock_path)?
     };
 
     // Group jobs by architecture: each worker builds one architecture's
@@ -1071,6 +1332,7 @@ fn build_jobs(
         let license = license.clone();
         let token = token.clone();
         let pin = pin.clone();
+        let lock = lock.clone();
         let progress = progress.clone();
         let telemetry = telemetry.clone();
         let source_name = source_name.clone();
@@ -1097,6 +1359,7 @@ fn build_jobs(
                     token: token.as_deref(),
                     license: license.as_ref(),
                     pin: pin.as_ref(),
+                    lock: lock.as_ref(),
                 };
                 for job in group {
                     let result = build_one(
@@ -1123,9 +1386,9 @@ fn build_jobs(
                     }
                 }
                 let outcome = if group_ok {
-                    lpt_lib::progress::Outcome::Completed
+                    lx_lib::progress::Outcome::Completed
                 } else {
-                    lpt_lib::progress::Outcome::Failed
+                    lx_lib::progress::Outcome::Failed
                 };
                 let _ = progress.as_ref().map(|p| p.finish_arch(arch, outcome));
                 let _ = telemetry.record_stage_complete(
@@ -1165,8 +1428,9 @@ fn build_jobs(
 struct BuildInputs<'a> {
     source: Option<&'a dyn crate::plugins::source::SourcePlugin>,
     token: Option<&'a str>,
-    license: Option<&'a lpt_lib::github::RepoLicense>,
-    pin: Option<&'a lpt_lib::checksum::PinnedMetadata>,
+    license: Option<&'a lx_lib::github::RepoLicense>,
+    pin: Option<&'a lx_lib::checksum::PinnedMetadata>,
+    lock: Option<&'a lx_lib::lock::LockFile>,
 }
 
 fn build_one(
@@ -1183,6 +1447,7 @@ fn build_one(
         token,
         license,
         pin,
+        lock,
     } = *inputs;
 
     // 1. Resolve the payload: local path, or download the asset once per name.
@@ -1206,7 +1471,7 @@ fn build_one(
                 match &args.cache_dir {
                     Some(dir) => {
                         let expected = pin.and_then(|p| p.sha256_for(&job.tag, &job.asset.name));
-                        let cache = lpt_lib::cache::DownloadCache::new(dir.clone())?;
+                        let cache = lx_lib::cache::DownloadCache::new(dir.clone())?;
                         let source_cloned = source.name().to_string();
                         let token_cloned = token.map(|s| s.to_string());
                         cache.fetch(
@@ -1239,7 +1504,7 @@ fn build_one(
                     VerifyMethod::SkippedNoVerify
                 } else if let Some(pin) = pin {
                     if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
-                        lpt_lib::checksum::verify_sha256(&path, &expected)?;
+                        lx_lib::checksum::verify_sha256(&path, &expected)?;
                         println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
                         VerifyMethod::Pinned
                     } else {
@@ -1255,6 +1520,39 @@ fn build_one(
                             args.allow_unverified,
                         )?
                     }
+                } else if let Some(lock) = lock {
+                    match lock.entry_for(&job.arch) {
+                        Some(entry) if entry.tag == job.tag && entry.asset == job.asset.name => {
+                            lx_lib::checksum::verify_sha256(&path, &entry.sha256)?;
+                            println!(
+                                "    ✓ verified against package.lock sha256:{}",
+                                &entry.sha256[..entry.sha256.len().min(12)]
+                            );
+                            VerifyMethod::Locked
+                        }
+                        Some(entry) => bail!(
+                            "package.lock drift for arch '{}': locked {}/{}, resolved {}/{} -- \
+                             pass --update-lock to accept the new asset",
+                            job.arch,
+                            entry.tag,
+                            entry.asset,
+                            job.tag,
+                            job.asset.name
+                        ),
+                        None => {
+                            eprintln!(
+                                "    (no package.lock entry for arch '{}'; falling back to live checksum)",
+                                job.arch
+                            );
+                            verify_sidecar_or_require_flag_source(
+                                source,
+                                token,
+                                &job.asset,
+                                &path,
+                                args.allow_unverified,
+                            )?
+                        }
+                    }
                 } else {
                     verify_sidecar_or_require_flag_source(
                         source,
@@ -1268,11 +1566,12 @@ fn build_one(
                 // Audit trail: one entry per unique download, regardless of
                 // outcome, so build-summary.json's `provenance` array records
                 // exactly how (or whether) every asset was verified.
-                let sha256 = lpt_lib::checksum::sha256_file(&path).unwrap_or_default();
+                let sha256 = lx_lib::checksum::sha256_file(&path).unwrap_or_default();
                 provenance.lock().unwrap().push(serde_json::json!({
                     "asset": job.asset.name,
                     "url": job.asset.browser_download_url,
                     "tag": job.tag,
+                    "arch": job.arch,
                     "method": method.as_str(),
                     "sha256": sha256,
                 }));
@@ -1282,6 +1581,70 @@ fn build_one(
             }
         }
     };
+
+    // Resolved once here (rather than at step 4) so the artifact-cache key
+    // below can include everything that affects the output bytes.
+    let format = cfg.effective_package_format();
+    let sign_key = cfg.effective_sign_key(args.sign_key.as_deref());
+    let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
+    let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
+
+    // Input-keyed artifact cache: key = recipe (config + every build/sign/
+    // lintian flag that affects the output bytes or validation) + asset
+    // digest + format + dist + arch. Skipped for directory payloads (no
+    // single file to digest) and for detached signing (the cache doesn't
+    // track the sibling `.sig`).
+    let artifact_cache_key =
+        if let (Some(dir), true) = (&args.artifact_cache_dir, asset_path.is_file()) {
+            if sign_key.is_some() && sign_method == "detach" {
+                None
+            } else {
+                let asset_sha256 = lx_lib::checksum::sha256_file(&asset_path).ok();
+                asset_sha256.map(|digest| {
+                    let recipe = serde_json::json!({
+                        "cfg": cfg,
+                        "build_version": args.build_version,
+                        "sign_key": sign_key,
+                        "sign_key_id": sign_key_id,
+                        "sign_method": sign_method,
+                        "lintian": args.lintian,
+                        "lintian_fail_on_warnings": args.lintian_fail_on_warnings,
+                        "lintian_pedantic": args.lintian_pedantic,
+                        "lintian_suppress": args.lintian_suppress,
+                        "digest": digest,
+                        "format": format,
+                        "dist": job.dist,
+                        "arch": job.arch,
+                    });
+                    let key = lx_lib::cache::ArtifactCache::key(&recipe.to_string());
+                    (dir.clone(), key)
+                })
+            }
+        } else {
+            None
+        };
+    // --verify forces a real rebuild even on a cache hit, so it can
+    // byte-compare the fresh output against what's cached below; stash the
+    // pre-existing cached file here rather than returning early.
+    let mut verify_against: Option<PathBuf> = None;
+    if let Some((dir, key)) = &artifact_cache_key {
+        let cache = lx_lib::cache::ArtifactCache::new(dir.clone())?;
+        if let Some(cached) = cache.get(key) {
+            if args.verify {
+                verify_against = Some(cached);
+            } else if let Some(name) = cache.name_for(key) {
+                let final_path = args.output.join(&name);
+                std::fs::copy(&cached, &final_path).with_context(|| {
+                    format!("copying cached artifact to {}", final_path.display())
+                })?;
+                println!(
+                    "    (cache) reusing built artifact {}",
+                    final_path.display()
+                );
+                return Ok(final_path);
+            }
+        }
+    }
 
     // 2. Extract (or use directory payload as-is).
     let extract_dir = if asset_path.is_dir() {
@@ -1307,19 +1670,18 @@ fn build_one(
 
     // 4. Build the package via the selected plugin (deb or rpm).
     // Plugin stages the install tree and creates the archive.
-    let format = cfg.effective_package_format();
     let plugin = crate::plugins::get_plugin(&format).ok_or_else(|| {
         anyhow!(
             "unsupported package format '{}' (expected deb or rpm)",
             format
         )
     })?;
-    let debian_version = lpt_lib::pkgmeta::strip_upstream_prefix(if cfg.version.is_empty() {
+    let debian_version = lx_lib::pkgmeta::strip_upstream_prefix(if cfg.version.is_empty() {
         &job.tag
     } else {
         &cfg.version
     });
-    let mtime = lpt_lib::pkgmeta::reproducible_epoch(job.published_at);
+    let mtime = lx_lib::pkgmeta::reproducible_epoch(job.published_at);
     let staging_root = tmp.join(format!(
         "{}-{}-root-{}",
         job.arch,
@@ -1329,10 +1691,7 @@ fn build_one(
     std::fs::create_dir_all(&staging_root)?;
     // Signing: rpm embeds natively; deb debsign embeds via the plugin;
     // deb detach signs post-build (.sig).
-    let sign_key = cfg.effective_sign_key(args.sign_key.as_deref());
     let sign_passphrase = resolve_sign_passphrase();
-    let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
-    let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
     let ctx = crate::plugins::BuildContext {
         cfg,
         job,
@@ -1368,9 +1727,9 @@ fn build_one(
                         .collect()
                 })
                 .unwrap_or_default();
-            let report = lpt_lib::lintian::run(&final_path, args.lintian_pedantic, &suppress)?;
+            let report = lx_lib::lintian::run(&final_path, args.lintian_pedantic, &suppress)?;
             print_lintian_report(&final_path, &report);
-            if lpt_lib::lintian::should_fail(&report, args.lintian_fail_on_warnings) {
+            if lx_lib::lintian::should_fail(&report, args.lintian_fail_on_warnings) {
                 bail!("lintian failed for {}", final_path.display());
             }
         }
@@ -1380,12 +1739,12 @@ fn build_one(
     // debsign — that embeds `_gpgorigin` inside the plugin build).
     if let Some(key) = cfg.effective_sign_key(args.sign_key.as_deref()) {
         if format == "deb" && sign_method == "detach" {
-            let req = lpt_lib::sign::SignRequest {
+            let req = lx_lib::sign::SignRequest {
                 key_file: &key,
                 key_id: &sign_key_id,
                 passphrase: sign_passphrase.as_deref(),
             };
-            let sig = lpt_lib::sign::gpg_detach_sign(&final_path, &req)?;
+            let sig = lx_lib::sign::gpg_detach_sign(&final_path, &req)?;
             println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
         } else if format == "deb" && sign_method == "debsign" {
             println!(
@@ -1396,13 +1755,42 @@ fn build_one(
         }
     }
 
+    if args.verify {
+        match &verify_against {
+            Some(cached) => {
+                let prior = lx_lib::checksum::sha256_file(cached)?;
+                let fresh = lx_lib::checksum::sha256_file(&final_path)?;
+                if prior != fresh {
+                    bail!(
+                        "--verify: build is not reproducible for {} (cached {prior}, rebuilt {fresh})",
+                        final_path.display()
+                    );
+                }
+                println!("    ✓ verified reproducible: {}", final_path.display());
+            }
+            None => println!(
+                "    (verify) no prior cached build for this recipe; {} is now the baseline",
+                final_path.display()
+            ),
+        }
+    }
+
+    if let Some((dir, key)) = &artifact_cache_key {
+        let cache = lx_lib::cache::ArtifactCache::new(dir.clone())?;
+        let name = final_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        cache.put(key, &final_path, name)?;
+    }
+
     Ok(final_path)
 }
 
 /// Signing passphrase resolution shared by both formats:
-/// `$LPT_SIGN_PASSPHRASE`, falling back to `$NFPM_PASSPHRASE` (nfpm parity).
+/// `$LX_SIGN_PASSPHRASE`, falling back to `$NFPM_PASSPHRASE` (nfpm parity).
 fn resolve_sign_passphrase() -> Option<String> {
-    for var in ["LPT_SIGN_PASSPHRASE", "NFPM_PASSPHRASE"] {
+    for var in ["LX_SIGN_PASSPHRASE", "NFPM_PASSPHRASE"] {
         if let Ok(v) = std::env::var(var) {
             if !v.trim().is_empty() {
                 return Some(v);
@@ -1412,7 +1800,7 @@ fn resolve_sign_passphrase() -> Option<String> {
     None
 }
 
-fn print_lintian_report(deb: &Path, report: &lpt_lib::lintian::LintianReport) {
+fn print_lintian_report(deb: &Path, report: &lx_lib::lintian::LintianReport) {
     let name = deb
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
@@ -1447,6 +1835,8 @@ fn print_lintian_report(deb: &Path, report: &lpt_lib::lintian::LintianReport) {
 pub enum VerifyMethod {
     /// Matched a `--pinned-metadata` vet-time provenance pin.
     Pinned,
+    /// Matched a `package.lock` entry for this architecture.
+    Locked,
     /// Matched a live `.sha256`/`.sha256sum` sidecar next to the asset.
     Sidecar,
     /// No pin and no sidecar existed; proceeded anyway because
@@ -1460,6 +1850,7 @@ impl VerifyMethod {
     pub fn as_str(self) -> &'static str {
         match self {
             VerifyMethod::Pinned => "pinned",
+            VerifyMethod::Locked => "locked",
             VerifyMethod::Sidecar => "sidecar",
             VerifyMethod::UnverifiedAllowed => "unverified (--allow-unverified)",
             VerifyMethod::SkippedNoVerify => "skipped (--no-verify)",
@@ -1468,7 +1859,7 @@ impl VerifyMethod {
 }
 
 /// Live sidecar checksum verification (probe-and-verify logic shared with
-/// `debs.rs` via `lpt_lib::checksum::check_sidecar`). Most real-world
+/// `debs.rs` via `lx_lib::checksum::check_sidecar`). Most real-world
 /// GitHub releases don't publish a checksum sidecar, so without
 /// `--allow-unverified` this fails the build rather than silently
 /// proceeding on an unverified download that's about to become an
@@ -1477,14 +1868,13 @@ impl VerifyMethod {
 /// most repos had zero integrity verification with only a console line as
 /// evidence.
 fn verify_sidecar_or_require_flag(
-    client: &dyn lpt_lib::checksum::RawGetter,
+    client: &dyn lx_lib::checksum::RawGetter,
     asset: &Asset,
     path: &Path,
     allow_unverified: bool,
 ) -> Result<VerifyMethod> {
-    use lpt_lib::checksum::SidecarCheck;
-    match lpt_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)?
-    {
+    use lx_lib::checksum::SidecarCheck;
+    match lx_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)? {
         SidecarCheck::Verified => {
             println!("    ✓ checksum verified");
             Ok(VerifyMethod::Sidecar)
@@ -1517,7 +1907,7 @@ fn verify_sidecar_or_require_flag_source(
         source: &'a dyn crate::plugins::source::SourcePlugin,
         token: Option<&'a str>,
     }
-    impl lpt_lib::checksum::RawGetter for Getter<'_> {
+    impl lx_lib::checksum::RawGetter for Getter<'_> {
         fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
             self.source.raw_get(url, self.token)
         }
@@ -1585,5 +1975,26 @@ fn human_size(bytes: u64) -> String {
         format!("{:.1} KB", bytes as f64 / KB as f64)
     } else {
         format!("{bytes} B")
+    }
+}
+
+/// Write a failure record into `./failed-build-logs/` (bash action parity:
+/// that dir is uploaded as a workflow artifact on failure). Captures the
+/// error plus any `.telemetry/` logs present. Best-effort; never fails.
+pub fn write_failed_build_log(error: &str) {
+    let dir = std::path::Path::new("failed-build-logs");
+    let _ = std::fs::create_dir_all(dir);
+    let ts = jiff::Timestamp::now()
+        .strftime("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    let _ = std::fs::write(
+        dir.join("build-failure.log"),
+        format!("{ts} - Build failure: {error}\n"),
+    );
+    for name in ["stages.log", "failures.log", "metrics.json"] {
+        let src = std::path::Path::new(".telemetry").join(name);
+        if src.exists() {
+            let _ = std::fs::copy(&src, dir.join(name));
+        }
     }
 }

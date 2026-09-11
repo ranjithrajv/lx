@@ -1,6 +1,6 @@
 //! Arch Linux pacman `.pkg.tar.zst` plugin.
 //!
-//! Implements `Plugin` for Arch packages using `lpt_lib::archarchive`.
+//! Implements `Plugin` for Arch packages using `lx_lib::archarchive`.
 //! Shares the same staging logic as deb/rpm but emits a `tar.zst`
 //! containing `.PKGINFO` + `.MTREE` + payload.
 
@@ -21,11 +21,11 @@ impl Plugin for ArchPlugin {
     }
 
     fn description(&self) -> &'static str {
-        "Arch Linux pacman package (.pkg.tar.zst) — tar.zst via lpt_lib::archarchive"
+        "Arch Linux pacman package (.pkg.tar.zst) — tar.zst via lx_lib::archarchive"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {
-        lpt_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS
+        lx_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS
     }
 
     fn arch_supported_for_dist(&self, _arch: &str, _dist: &str) -> bool {
@@ -59,12 +59,12 @@ impl Plugin for ArchPlugin {
         let dest = out_dir.join(&file_name);
 
         let url = if cfg.effective_source() == "gitlab" {
-            lpt_lib::constants::homepage_for_gitlab(
+            lx_lib::constants::homepage_for_gitlab(
                 &cfg.github_repo,
                 cfg.gitlab_host.as_deref().unwrap_or(""),
             )
         } else {
-            lpt_lib::constants::homepage_for_github(&cfg.github_repo)
+            lx_lib::constants::homepage_for_github(&cfg.github_repo)
         };
         let description = cfg.effective_description();
         let license = if cfg.license_spdx.is_empty() {
@@ -73,7 +73,7 @@ impl Plugin for ArchPlugin {
             cfg.license_spdx.as_str()
         };
 
-        let meta = lpt_lib::archarchive::PackageMeta {
+        let meta = lx_lib::archarchive::PackageMeta {
             name: &cfg.package_name,
             version: &version,
             release: &release,
@@ -81,7 +81,7 @@ impl Plugin for ArchPlugin {
             url: &url,
             license,
         };
-        lpt_lib::archarchive::build(ctx.staging_root, &meta, &job.arch, ctx.mtime, &dest)
+        lx_lib::archarchive::build(ctx.staging_root, &meta, &job.arch, ctx.mtime, &dest)
             .with_context(|| format!("failed to build {}", dest.display()))?;
 
         Ok(dest)
@@ -89,5 +89,5 @@ impl Plugin for ArchPlugin {
 }
 
 fn to_pacman_arch(debian_arch: &str) -> &'static str {
-    lpt_lib::constants::to_pacman_arch(debian_arch)
+    lx_lib::constants::to_pacman_arch(debian_arch)
 }

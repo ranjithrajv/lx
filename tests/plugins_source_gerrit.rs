@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::gerrit::*;
+use lx_lib::plugins::source::gerrit::*;
 
 #[test]
 fn parses_gerrit_url() {

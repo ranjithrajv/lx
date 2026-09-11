@@ -161,6 +161,7 @@ impl ForgejoClient {
                 .as_deref()
                 .or(raw.published_at.as_deref())
                 .and_then(parse_time),
+            body: raw.body,
         }
     }
 
@@ -234,6 +235,8 @@ struct GiteaReleaseRaw {
     published_at: Option<String>,
     #[serde(default)]
     assets: Vec<GiteaAssetRaw>,
+    #[serde(default)]
+    body: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -1,4 +1,4 @@
-use lpt_lib::summary::*;
+use lx_lib::summary::*;
 use std::time::Instant;
 
 #[test]
@@ -42,7 +42,7 @@ fn summary_lists_built_debs() {
     };
     write(path, 2, &inputs).unwrap();
 
-    let text = std::fs::read_to_string(path.join(lpt_lib::constants::SUMMARY_FILENAME)).unwrap();
+    let text = std::fs::read_to_string(path.join(lx_lib::constants::SUMMARY_FILENAME)).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["total_packages"], 2);
     assert_eq!(v["total_size_bytes"], 6144);
@@ -85,7 +85,7 @@ fn provenance_is_embedded_and_unverified_assets_are_counted() {
     };
     write(path, 1, &inputs).unwrap();
 
-    let text = std::fs::read_to_string(path.join(lpt_lib::constants::SUMMARY_FILENAME)).unwrap();
+    let text = std::fs::read_to_string(path.join(lx_lib::constants::SUMMARY_FILENAME)).unwrap();
     let v: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(v["provenance"].as_array().unwrap().len(), 3);
     assert_eq!(v["provenance"][0]["asset"], "a");

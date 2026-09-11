@@ -1,4 +1,4 @@
-//! Plugin architecture for `lpt`.
+//! Plugin architecture for `lx`.
 //!
 //! Each package format (`.deb`, `.rpm`, …) is a plugin implementing the
 //! [`Plugin`] trait. The build pipeline is format-agnostic: it resolves
@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
-use lpt_lib::github::RepoLicense;
+use lx_lib::github::RepoLicense;
 
 /// Context passed to a plugin's build method. Contains everything the plugin
 /// needs to render its control/spec metadata and archive the staged tree.
@@ -225,7 +225,7 @@ pub(crate) fn is_elf(path: &Path) -> anyhow::Result<bool> {
 fn make_executable(path: &Path) -> anyhow::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)?.permissions();
-    perms.set_mode(perms.mode() | lpt_lib::constants::EXEC_MODE_MASK);
+    perms.set_mode(perms.mode() | lx_lib::constants::EXEC_MODE_MASK);
     std::fs::set_permissions(path, perms)?;
     Ok(())
 }
@@ -279,7 +279,7 @@ fn gzip_file_to(src: &Path, dest: &Path, mtime: i64) -> anyhow::Result<()> {
     let mut out = std::fs::File::create(dest)?;
     // Same deterministic treatment as the tar members (fixed mtime header)
     // via debarchive's shared helper.
-    let gz = lpt_lib::debarchive::deterministic_gzip_bytes(&data, mtime, 9)?;
+    let gz = lx_lib::debarchive::deterministic_gzip_bytes(&data, mtime, 9)?;
     out.write_all(&gz)?;
     Ok(())
 }
@@ -365,7 +365,7 @@ pub fn apply_contents(
 /// `postrm`, mode 0755). Empty when none are configured.
 pub fn maintainer_script_members(
     cfg: &PackageConfig,
-) -> anyhow::Result<Vec<lpt_lib::debarchive::ControlMember>> {
+) -> anyhow::Result<Vec<lx_lib::debarchive::ControlMember>> {
     let pairs = [
         ("preinst", cfg.scripts.preinstall.trim()),
         ("postinst", cfg.scripts.postinstall.trim()),
@@ -379,7 +379,7 @@ pub fn maintainer_script_members(
         }
         let content = std::fs::read(path)
             .map_err(|e| anyhow::anyhow!("failed to read {} script '{}': {e}", name, path))?;
-        members.push(lpt_lib::debarchive::ControlMember {
+        members.push(lx_lib::debarchive::ControlMember {
             name: name.to_string(),
             content,
             mode: 0o755,

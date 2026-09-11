@@ -1,4 +1,4 @@
-//! Centralized constants for `lpt` — hosts, timeouts, TTLs, file modes.
+//! Centralized constants for `lx` — hosts, timeouts, TTLs, file modes.
 //! Single source of truth for values previously duplicated across `lib/` and `src/`.
 
 /// Default VCS hosts
@@ -17,21 +17,21 @@ pub const DEFAULT_FORGEJO_API_URL: &str = "https://codeberg.org/api/v1";
 pub const DEFAULT_BITBUCKET_API_URL: &str = "https://api.bitbucket.org/2.0";
 pub const DEFAULT_GERRIT_API_URL: &str = "https://review.gerrithub.io/a";
 
-/// Registry org for `lpt install`'s `latest-debs` workflow
+/// Registry org for `lx install`'s `latest-debs` workflow
 pub const LATEST_DEBS_ORG: &str = "latest-debs";
 
 /// User-Agent for all HTTP clients. Version tracked to the crate version
 /// so bumps don't leave a stale UA string behind.
-pub const USER_AGENT: &str = concat!("lpt/", env!("CARGO_PKG_VERSION"), " (latest package tool)");
+pub const USER_AGENT: &str = concat!("lx/", env!("CARGO_PKG_VERSION"), " (latest package tool)");
 
 /// Default filename for a package definition, used as the clap default on
 /// every subcommand that takes a config path.
 pub const DEFAULT_CONFIG_FILENAME: &str = "package.yaml";
 
 /// Env var overriding [`DEFAULT_MAINTAINER`] when `maintainer:` is unset —
-/// lets downstream users of lpt attribute packages to themselves instead
+/// lets downstream users of lx attribute packages to themselves instead
 /// of the latest-debs org.
-pub const MAINTAINER_ENV_VAR: &str = "LPT_MAINTAINER";
+pub const MAINTAINER_ENV_VAR: &str = "LX_MAINTAINER";
 
 /// Cache TTLs (action parity)
 pub const DOWNLOAD_CACHE_TTL_SECS: u64 = 86_400; // 24h
@@ -49,14 +49,43 @@ pub const DEFAULT_DEBIAN_DISTRIBUTIONS: &[&str] =
 
 /// Suite -> LTS support end (YYYY-MM-DD), mirroring the action's
 /// system.yaml `distributions.details.<suite>.lts_support_ends` and its
-/// `filter_expired_distributions`: once Debian drops a suite, lpt stops
+/// `filter_expired_distributions`: once Debian drops a suite, lx stops
 /// building for it even if a package.yaml still lists it. Suites absent
 /// here (forky, sid) have no fixed end date and always pass.
 pub const DISTRIBUTION_LTS_ENDS: &[(&str, &str)] = &[
     ("bullseye", "2026-08-31"),
     ("bookworm", "2028-06-30"),
     ("trixie", "2030-06-30"),
+    // Ubuntu suites (standard-support, non-ESM, endoflife.date/ubuntu).
+    ("jammy", "2027-04-30"),
+    ("noble", "2029-05-30"),
+    ("questing", "2026-07-01"),
+    ("resolute", "2031-04-30"),
 ];
+
+/// Ubuntu suites available as opt-in native builds via
+/// `ubuntu_distributions` (mirrors the action's distributions.yaml).
+pub const UBUNTU_DISTRIBUTIONS: &[&str] = &["jammy", "noble", "questing", "resolute"];
+
+/// True when the distribution is an Ubuntu suite (builds FROM ubuntu:<suite>
+/// in the bash action; natively here, same as Debian suites).
+pub fn is_ubuntu_dist(dist: &str) -> bool {
+    matches!(
+        dist,
+        "jammy" | "noble" | "questing" | "resolute" | "plucky" | "oracular"
+    )
+}
+
+/// Default architectures for each Ubuntu suite (distributions.yaml).
+pub fn ubuntu_archs(dist: &str) -> &'static [&'static str] {
+    match dist {
+        "jammy" => &["amd64", "arm64", "armhf", "ppc64el", "s390x"],
+        "noble" | "questing" | "resolute" | "plucky" | "oracular" => {
+            &["amd64", "arm64", "armhf", "ppc64el", "s390x", "riscv64"]
+        }
+        _ => &[],
+    }
+}
 
 /// RPM-based distros
 pub const DEFAULT_RPM_DISTRIBUTIONS: &[&str] = &["fedora", "el9", "el8", "opensuse"];

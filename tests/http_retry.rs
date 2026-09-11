@@ -38,8 +38,8 @@ fn spawn_server(statuses: Vec<u16>) -> (String, Arc<AtomicUsize>) {
 #[test]
 fn retries_on_5xx_then_succeeds() {
     let (base, hits) = spawn_server(vec![503, 503, 200]);
-    let client = lpt_lib::http::new_client().unwrap();
-    let resp = lpt_lib::http::send_get_with_retry(&client, &base, None).unwrap();
+    let client = lx_lib::http::new_client().unwrap();
+    let resp = lx_lib::http::send_get_with_retry(&client, &base, None).unwrap();
     assert_eq!(resp.status(), 200);
     assert_eq!(hits.load(Ordering::SeqCst), 3);
 }
@@ -47,8 +47,8 @@ fn retries_on_5xx_then_succeeds() {
 #[test]
 fn does_not_retry_4xx() {
     let (base, hits) = spawn_server(vec![404]);
-    let client = lpt_lib::http::new_client().unwrap();
-    let resp = lpt_lib::http::send_get_with_retry(&client, &base, None).unwrap();
+    let client = lx_lib::http::new_client().unwrap();
+    let resp = lx_lib::http::send_get_with_retry(&client, &base, None).unwrap();
     assert_eq!(resp.status(), 404);
     assert_eq!(hits.load(Ordering::SeqCst), 1);
 }

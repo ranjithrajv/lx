@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::{get_source_plugin, source_available_names};
+use lx_lib::plugins::source::{get_source_plugin, source_available_names};
 
 #[test]
 fn github_sync_is_registered_and_parses_github_urls() {

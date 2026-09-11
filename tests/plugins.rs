@@ -1,6 +1,6 @@
-use lpt_lib::plugins::*;
+use lx_lib::plugins::*;
 
-use lpt_lib::config::PackageConfig;
+use lx_lib::config::PackageConfig;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
@@ -244,12 +244,12 @@ fn deb_and_rpm_plugins_build_valid_archives() {
             package_format: format.into(),
             ..Default::default()
         };
-        let asset = lpt_lib::github::Asset {
+        let asset = lx_lib::github::Asset {
             name: "hello.tar.gz".into(),
             size: None,
             browser_download_url: "".into(),
         };
-        let job = lpt_lib::build::ResolvedJob {
+        let job = lx_lib::build::ResolvedJob {
             dist: match format {
                 "deb" => "trixie".into(),
                 "arch" => "arch".into(),
@@ -343,12 +343,12 @@ fn deb_with_new_control_fields_and_compression_is_valid() {
         compression: "xz".into(),
         ..Default::default()
     };
-    let asset = lpt_lib::github::Asset {
+    let asset = lx_lib::github::Asset {
         name: "hello.tar.gz".into(),
         size: None,
         browser_download_url: "".into(),
     };
-    let job = lpt_lib::build::ResolvedJob {
+    let job = lx_lib::build::ResolvedJob {
         dist: "trixie".into(),
         arch: "amd64".into(),
         asset,
@@ -491,7 +491,7 @@ fn deb_contents_scripts_conffiles_end_to_end() {
         license_spdx: "MIT".into(),
         package_format: "deb".into(),
         contents: vec![
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: env
                     .path()
                     .join("completions/hello.bash")
@@ -501,31 +501,31 @@ fn deb_contents_scripts_conffiles_end_to_end() {
                 kind: String::new(),
                 packager: String::new(),
             },
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: env.path().join("hello.conf").to_string_lossy().to_string(),
                 dst: "/etc/hello/hello.conf".into(),
                 kind: "config|noreplace".into(),
                 packager: String::new(),
             },
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: String::new(),
                 dst: "/var/lib/hello".into(),
                 kind: "dir".into(),
                 packager: String::new(),
             },
         ],
-        scripts: lpt_lib::config::Scripts {
+        scripts: lx_lib::config::Scripts {
             postinstall: env.path().join("postinst.sh").to_string_lossy().to_string(),
             ..Default::default()
         },
         ..Default::default()
     };
-    let asset = lpt_lib::github::Asset {
+    let asset = lx_lib::github::Asset {
         name: "hello.tar.gz".into(),
         size: None,
         browser_download_url: "".into(),
     };
-    let job = lpt_lib::build::ResolvedJob {
+    let job = lx_lib::build::ResolvedJob {
         dist: "trixie".into(),
         arch: "amd64".into(),
         asset,
@@ -590,7 +590,7 @@ fn deb_contents_scripts_conffiles_end_to_end() {
 
     // data payload got the overlay files — verify via full extract.
     let dest = tempfile::tempdir().unwrap();
-    lpt_lib::debarchive::extract(&out, dest.path()).unwrap();
+    lx_lib::debarchive::extract(&out, dest.path()).unwrap();
     assert!(
         dest.path()
             .join("usr/share/bash-completion/completions/hello")
@@ -612,7 +612,7 @@ fn safe_join_rejects_traversal() {
 
 #[test]
 fn apply_contents_respects_packager_filter() {
-    use lpt_lib::plugins::apply_contents;
+    use lx_lib::plugins::apply_contents;
     let env = tempfile::tempdir().unwrap();
     std::fs::write(env.path().join("deb-only"), b"deb").unwrap();
     std::fs::write(env.path().join("rpm-only"), b"rpm").unwrap();
@@ -622,19 +622,19 @@ fn apply_contents_respects_packager_filter() {
         package_name: "x".into(),
         github_repo: "o/x".into(),
         contents: vec![
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: env.path().join("deb-only").to_string_lossy().into(),
                 dst: "/usr/share/deb-only".into(),
                 kind: String::new(),
                 packager: "deb".into(),
             },
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: env.path().join("rpm-only").to_string_lossy().into(),
                 dst: "/usr/share/rpm-only".into(),
                 kind: String::new(),
                 packager: "rpm".into(),
             },
-            lpt_lib::config::ContentEntry {
+            lx_lib::config::ContentEntry {
                 src: env.path().join("all").to_string_lossy().into(),
                 dst: "/usr/share/all".into(),
                 kind: String::new(),

@@ -138,7 +138,7 @@ pub fn render_pkginfo(
         meta.license
     };
     // packager fallback
-    let packager = "lpt <lpt@latest-debs.org>";
+    let packager = "lx <lx@latest-debs.org>";
     // Arch's builddate is unix epoch seconds.
     let builddate = mtime.max(0).to_string();
 

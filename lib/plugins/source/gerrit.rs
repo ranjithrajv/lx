@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-use lpt_lib::github::{Release, ReleaseMeta};
+use lx_lib::github::{Release, ReleaseMeta};
 
 use super::SourcePlugin;
 
@@ -34,7 +34,7 @@ impl SourcePlugin for GerritSourcePlugin {
         token: Option<&str>,
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
-        let client = lpt_lib::gerrit::GerritClient::with_cache(
+        let client = lx_lib::gerrit::GerritClient::with_cache(
             token.map(|s| s.to_string()),
             cache_dir.map(|p| p.to_path_buf()),
         )?;
@@ -50,7 +50,7 @@ impl SourcePlugin for GerritSourcePlugin {
         token: Option<&str>,
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
-        let client = lpt_lib::gerrit::GerritClient::with_cache(
+        let client = lx_lib::gerrit::GerritClient::with_cache(
             token.map(|s| s.to_string()),
             cache_dir.map(|p| p.to_path_buf()),
         )?;
@@ -64,7 +64,7 @@ impl SourcePlugin for GerritSourcePlugin {
         token: Option<&str>,
         cache_dir: Option<&Path>,
     ) -> Result<Vec<ReleaseMeta>> {
-        let client = lpt_lib::gerrit::GerritClient::with_cache(
+        let client = lx_lib::gerrit::GerritClient::with_cache(
             token.map(|s| s.to_string()),
             cache_dir.map(|p| p.to_path_buf()),
         )?;
@@ -72,7 +72,7 @@ impl SourcePlugin for GerritSourcePlugin {
     }
 
     fn raw_get(&self, url: &str, token: Option<&str>) -> Result<Box<dyn std::io::Read + Send>> {
-        let client = lpt_lib::gerrit::GerritClient::new(token.map(|s| s.to_string()))?;
+        let client = lx_lib::gerrit::GerritClient::new(token.map(|s| s.to_string()))?;
         client.raw_get(url)
     }
 }
@@ -85,7 +85,7 @@ pub fn parse_gerrit_url(s: &str) -> Option<String> {
     // We also handle https://{host}/projects/{project} style
 
     // Check for gerrit host via env or default
-    let default_host = lpt_lib::constants::DEFAULT_GERRIT_HOST;
+    let default_host = lx_lib::constants::DEFAULT_GERRIT_HOST;
     if let Some(repo) = try_parse_for_host(s, default_host) {
         return Some(repo);
     }

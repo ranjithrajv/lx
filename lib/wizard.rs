@@ -17,6 +17,13 @@ pub struct InitArgs {
     /// name to list the available templates.
     #[arg(long)]
     pub template: Option<String>,
+
+    /// Import from the Arch User Repository: fetch <name>'s PKGBUILD from
+    /// the AUR and convert pkgname/pkgver/source/depends into a starter
+    /// package.yaml (makedeb-orphan migration path; review the output —
+    /// PKGBUILD build() steps become prebuild_steps hints, not code).
+    #[arg(long, value_name = "AUR_PKG")]
+    pub from_aur: Option<String>,
 }
 
 /// Bundled starter configs, ported verbatim from
@@ -83,6 +90,10 @@ fn prompt_yes(question: &str, default: bool) -> bool {
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
+    // --from-aur: convert an AUR PKGBUILD into a starter package.yaml.
+    if let Some(name) = &args.from_aur {
+        return import_from_aur(name, args.output);
+    }
     // --template: write a bundled starter config verbatim (the action's
     // "Option 3: Use a Template" workflow) and stop — no prompts.
     if let Some(name) = &args.template {
@@ -96,7 +107,7 @@ pub fn run(args: InitArgs) -> Result<()> {
         };
         let output = args
             .output
-            .unwrap_or_else(|| PathBuf::from(lpt_lib::constants::DEFAULT_CONFIG_FILENAME));
+            .unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME));
         if output.exists() {
             bail!(
                 "'{}' already exists; remove it or pass --output",
@@ -110,14 +121,14 @@ pub fn run(args: InitArgs) -> Result<()> {
         }
         std::fs::write(&output, body)?;
         println!(
-            "Wrote template '{name}' to {} — edit it, then run `lpt validate {}`.",
+            "Wrote template '{name}' to {} — edit it, then run `lx validate {}`.",
             output.display(),
             output.display()
         );
         return Ok(());
     }
 
-    println!("lpt init — interactive setup wizard\n");
+    println!("lx init — interactive setup wizard\n");
 
     let package_name = prompt("Package name", "mytool");
     let source = prompt(
@@ -175,7 +186,7 @@ pub fn run(args: InitArgs) -> Result<()> {
             }
         }
         "gerrit" => {
-            let default_host = lpt_lib::constants::DEFAULT_GERRIT_HOST;
+            let default_host = lx_lib::constants::DEFAULT_GERRIT_HOST;
             let host = prompt(
                 &format!("Gerrit host (blank for {default_host})"),
                 default_host,
@@ -245,7 +256,7 @@ pub fn run(args: InitArgs) -> Result<()> {
 
     let output = args
         .output
-        .unwrap_or_else(|| PathBuf::from(lpt_lib::constants::DEFAULT_CONFIG_FILENAME));
+        .unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME));
     if output.exists() {
         let ok = prompt_yes(
             &format!("'{}' already exists — overwrite?", output.display()),
@@ -264,9 +275,155 @@ pub fn run(args: InitArgs) -> Result<()> {
     let yaml = serde_yaml::to_string(&cfg)?;
     std::fs::write(&output, yaml)?;
     println!(
-        "\nWrote {} — run `lpt validate {}` to check it.",
+        "\nWrote {} — run `lx validate {}` to check it.",
         output.display(),
         output.display()
     );
     Ok(())
 }
+
+/// Fetch an AUR package's metadata + PKGBUILD and render a starter
+/// package.yaml. Field mapping: pkgname -> package_name, pkgver ->
+/// version, url host + pkgname -> github_repo guess (review!), depends ->
+/// depends (Arch names kept verbatim with a warning — they rarely match
+/// Debian names), license -> license_spdx, source=…github… -> release
+/// asset hints in comments. PKGBUILD build()/package() bodies are shell,
+/// not declarative: they become commented `prebuild_steps` hints, never
+/// executed code (unlike makedeb, lx never evals recipes).
+fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct RpcResult {
+        #[serde(default, rename = "Name")]
+        pkgname: String,
+        #[serde(default, rename = "Version")]
+        pkgver: String,
+        #[serde(default, rename = "Description")]
+        description: String,
+        #[serde(default, rename = "URL")]
+        url: String,
+        #[serde(default, rename = "License")]
+        license: Vec<String>,
+        #[serde(default, rename = "Depends")]
+        depends: Vec<String>,
+        #[serde(default, rename = "Maintainer")]
+        maintainer: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Rpc {
+        #[serde(default)]
+        results: Vec<RpcResult>,
+    }
+
+    let client = lx_lib::http::new_client()?;
+    let meta: Rpc = client
+        .get(format!(
+            "https://aur.archlinux.org/rpc/?v=5&type=info&arg[]={name}"
+        ))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .with_context(|| format!("AUR lookup for '{name}' failed"))?
+        .json()
+        .with_context(|| format!("parsing AUR metadata for '{name}'"))?;
+    let m = meta
+        .results
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("'{name}' not found in the AUR"))?;
+
+    let pkgbuild: String = client
+        .get(format!(
+            "https://aur.archlinux.org/cgit/aur.git/plain/PKGBUILD?h={}",
+            m.pkgname
+        ))
+        .send()
+        .and_then(|r| r.error_for_status())
+        .with_context(|| format!("fetching PKGBUILD for '{}'", m.pkgname))?
+        .text()
+        .unwrap_or_default();
+    let has_build_fn = pkgbuild.contains("build()");
+    let src_hint: Option<String> = pkgbuild
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("source="))
+        .map(str::to_string);
+
+    let repo_guess = github_guess(&m.url, &m.pkgname);
+    let mut yaml = format!(
+        "# Imported from AUR package '{}' via `lx init --from-aur` — REVIEW ME.\n",
+        m.pkgname
+    );
+    yaml.push_str(&format!("package_name: {}\n", m.pkgname));
+    yaml.push_str(&format!(
+        "github_repo: {}   # guessed from AUR url: {}\n",
+        repo_guess, m.url
+    ));
+    if !m.description.is_empty() {
+        yaml.push_str(&format!(
+            "description: \"{}\"\n",
+            m.description.replace('"', "'")
+        ));
+    }
+    if !m.pkgver.is_empty() {
+        yaml.push_str(&format!("version: \"{}\"\n", m.pkgver));
+    }
+    if let Some(l) = m.license.first() {
+        yaml.push_str(&format!(
+            "license_spdx: {l}   # AUR license field, verify SPDX\n"
+        ));
+    }
+    if !m.depends.is_empty() {
+        yaml.push_str(&format!(
+            "# WARNING: Arch dependency names kept verbatim — map to Debian names:\ndepends: \"{}\"\n",
+            m.depends.join(", ")
+        ));
+    }
+    if !m.maintainer.is_empty() {
+        yaml.push_str(&format!("# AUR maintainer: {}\n", m.maintainer));
+    }
+    if has_build_fn {
+        yaml.push_str(
+            "# This PKGBUILD compiles from source (build() present). Consider:\n#   build_mode: source\n#   build_system: cmake   # or: custom + build_commands/install_commands\n#   build_suites: [trixie, forky, sid]\n#   architectures: [<this-host-arch>]\n",
+        );
+    } else {
+        yaml.push_str(
+            "# Binary repack (no build() in PKGBUILD): pin release assets with\n#   architectures:\n#     amd64:\n#       release_pattern: \"...\"\n",
+        );
+    }
+    if let Some(s) = src_hint {
+        yaml.push_str(&format!("# AUR source line (asset-name hint): {s}\n"));
+    }
+
+    let output =
+        output.unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME));
+    if output.exists() {
+        bail!(
+            "'{}' already exists; remove it or pass --output",
+            output.display()
+        );
+    }
+    std::fs::write(&output, yaml)?;
+    println!(
+        "Imported AUR '{}' to {} — review guesses, then `lx validate {}`.",
+        m.pkgname,
+        output.display(),
+        output.display()
+    );
+    Ok(())
+}
+
+/// Guess owner/repo from an upstream URL; falls back to a placeholder the
+/// user must fix (a wrong guess is louder than a silent one).
+fn github_guess(url: &str, pkgname: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    for marker in ["https://github.com/", "http://github.com/"] {
+        if let Some(rest) = u.strip_prefix(marker) {
+            let rest = rest.trim_end_matches(".git");
+            if rest.contains('/') {
+                return rest.to_string();
+            }
+        }
+    }
+    format!("OWNER/{pkgname}   # FIXME: not a GitHub URL")
+}
+
+use anyhow::Context;

@@ -1,4 +1,4 @@
-use lpt_lib::sign::*;
+use lx_lib::sign::*;
 use std::path::{Path, PathBuf};
 
 #[test]
@@ -30,7 +30,7 @@ fn gpg_detach_sign_round_trip_with_generated_key() {
             "--passphrase",
             "",
             "--quick-gen-key",
-            "lpt-test <lpt@example.invalid>",
+            "lx-test <lx@example.invalid>",
             "default",
             "default",
             "never",
@@ -93,7 +93,7 @@ fn clearsign_round_trip_with_generated_key() {
             "--passphrase",
             "",
             "--quick-gen-key",
-            "lpt-clearsign <lpt@example.invalid>",
+            "lx-clearsign <lx@example.invalid>",
             "default",
             "default",
             "never",

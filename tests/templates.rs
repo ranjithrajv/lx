@@ -2,8 +2,8 @@
 //! debian-multiarch-builder's templates/) must parse through the same
 //! pipeline a real package.yaml takes, including legacy-key compat.
 
-use lpt_lib::config::PackageConfig;
-use lpt_lib::wizard::EMBEDDED_TEMPLATES;
+use lx_lib::config::PackageConfig;
+use lx_lib::wizard::EMBEDDED_TEMPLATES;
 
 #[test]
 fn every_embedded_template_parses() {

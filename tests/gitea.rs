@@ -1,4 +1,4 @@
-use lpt_lib::gitea::*;
+use lx_lib::gitea::*;
 
 #[test]
 fn maps_gitea_release() {
@@ -16,6 +16,7 @@ fn maps_gitea_release() {
                 .into(),
             size: Some(123),
         }],
+        body: None,
     };
     let r = GiteaClient::map_release(raw, "a/b");
     assert_eq!(r.tag_name, "v1.0.0");

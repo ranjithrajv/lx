@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::bitbucket::*;
+use lx_lib::plugins::source::bitbucket::*;
 
 #[test]
 fn parses_bitbucket_url() {

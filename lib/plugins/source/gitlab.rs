@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-use lpt_lib::github::{Release, ReleaseMeta};
+use lx_lib::github::{Release, ReleaseMeta};
 
 use super::SourcePlugin;
 
@@ -35,7 +35,7 @@ impl SourcePlugin for GitlabSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<lpt_lib::gitlab::GitlabClient>(
+        let client = lx_lib::source_client::new_client_for::<lx_lib::gitlab::GitlabClient>(
             token, cache_dir,
         )?;
         client.latest_release(owner, repo_name)
@@ -49,7 +49,7 @@ impl SourcePlugin for GitlabSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<lpt_lib::gitlab::GitlabClient>(
+        let client = lx_lib::source_client::new_client_for::<lx_lib::gitlab::GitlabClient>(
             token, cache_dir,
         )?;
         client.release_by_tag(owner, repo_name, tag)
@@ -63,14 +63,14 @@ impl SourcePlugin for GitlabSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Vec<ReleaseMeta>> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<lpt_lib::gitlab::GitlabClient>(
+        let client = lx_lib::source_client::new_client_for::<lx_lib::gitlab::GitlabClient>(
             token, cache_dir,
         )?;
         client.releases(owner, repo_name, per_page)
     }
 
     fn raw_get(&self, url: &str, token: Option<&str>) -> Result<Box<dyn std::io::Read + Send>> {
-        let client = lpt_lib::gitlab::GitlabClient::new(token.map(|s| s.to_string()))?;
+        let client = lx_lib::gitlab::GitlabClient::new(token.map(|s| s.to_string()))?;
         let r = client.raw_get(url)?;
         Ok(Box::new(r))
     }
@@ -84,7 +84,7 @@ pub fn parse_gitlab_url(s: &str) -> Option<String> {
     // For custom host, we check GITLAB_HOST env first, but also accept any
     // host containing "gitlab" as fallback. Simplest: try github-style strip
     // for gitlab.com, and also for custom host if set.
-    if let Some(repo) = try_parse_for_host(s, lpt_lib::constants::DEFAULT_GITLAB_HOST) {
+    if let Some(repo) = try_parse_for_host(s, lx_lib::constants::DEFAULT_GITLAB_HOST) {
         return Some(repo);
     }
     if let Ok(host) = std::env::var("GITLAB_HOST") {
@@ -93,7 +93,7 @@ pub fn parse_gitlab_url(s: &str) -> Option<String> {
             .trim_start_matches("https://")
             .trim_start_matches("http://")
             .trim_end_matches('/');
-        if !host.is_empty() && host != lpt_lib::constants::DEFAULT_GITLAB_HOST {
+        if !host.is_empty() && host != lx_lib::constants::DEFAULT_GITLAB_HOST {
             if let Some(repo) = try_parse_for_host(s, host) {
                 return Some(repo);
             }

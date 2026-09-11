@@ -1,4 +1,4 @@
-use lpt_lib::scandeps::*;
+use lx_lib::scandeps::*;
 
 #[test]
 fn find_elf_files_walks_nested_dirs_and_skips_non_elf() {
@@ -29,7 +29,7 @@ fn raw_format_extraction_preserves_the_real_asset_name() {
     std::fs::write(&asset_path, b"\x7fELFfake-appimage-bytes").unwrap();
 
     let extract_dir = tmp.path().join("amd64-scan-extract");
-    lpt_lib::build::extract(&asset_path, &extract_dir, "raw").unwrap();
+    lx_lib::build::extract(&asset_path, &extract_dir, "raw").unwrap();
 
     let found = find_elf_files(&extract_dir).unwrap();
     assert_eq!(found.len(), 1);
@@ -38,6 +38,22 @@ fn raw_format_extraction_preserves_the_real_asset_name() {
         "nvim-linux-x86_64.appimage",
         "extracted raw asset must keep its real name, not an internal disambiguation prefix"
     );
+}
+
+#[test]
+fn declared_package_names_strips_versions_and_alternatives() {
+    let names = declared_package_names("libc6 (>= 2.34), libssl3 | libssl1.1, libz1");
+    assert!(names.contains("libc6"));
+    assert!(names.contains("libssl3"));
+    assert!(names.contains("libssl1.1"));
+    assert!(names.contains("libz1"));
+    assert_eq!(names.len(), 4);
+}
+
+#[test]
+fn declared_package_names_of_empty_string_is_empty() {
+    assert!(declared_package_names("").is_empty());
+    assert!(declared_package_names("   ").is_empty());
 }
 
 #[test]

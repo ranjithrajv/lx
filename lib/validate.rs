@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
@@ -7,16 +7,25 @@ use crate::config::{ArchSpec, PackageConfig};
 #[derive(Debug, Clone, Args)]
 pub struct ValidateArgs {
     /// Path to package.yaml
-    #[arg(default_value = lpt_lib::constants::DEFAULT_CONFIG_FILENAME)]
+    #[arg(default_value = lx_lib::constants::DEFAULT_CONFIG_FILENAME)]
     pub config: PathBuf,
 
     /// Version to validate against (defaults to latest release).
     #[arg(short = 'v', long)]
     pub version: Option<String>,
+
+    /// Apply a delta package.yaml over the base config before validating
+    /// (see `lx build --overlay`).
+    #[arg(long)]
+    pub overlay: Option<PathBuf>,
 }
 
 pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
-    let cfg = PackageConfig::load(&args.config)?;
+    let mut cfg = PackageConfig::load(&args.config)?;
+    if let Some(overlay) = &args.overlay {
+        cfg.apply_overlay(overlay)
+            .with_context(|| format!("applying overlay '{}'", overlay.display()))?;
+    }
     println!(
         "config: OK (package '{}' from {})",
         cfg.package_name, cfg.github_repo
@@ -51,7 +60,21 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
     let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
 
     let release = match &args.version {
-        Some(v) => source.release_by_tag(&cfg.github_repo, v, token_for_source.as_deref(), None)?,
+        Some(v) => {
+            match source.release_by_tag(&cfg.github_repo, v, token_for_source.as_deref(), None) {
+                Ok(r) => r,
+                Err(e) => {
+                    crate::build::suggest_versions_source(
+                        source.as_ref(),
+                        &cfg.github_repo,
+                        v,
+                        token_for_source.as_deref(),
+                        None,
+                    );
+                    return Err(e);
+                }
+            }
+        }
         None => source.latest_release(&cfg.github_repo, token_for_source.as_deref(), None)?,
     };
     println!(

@@ -1,4 +1,4 @@
-use lpt_lib::telemetry::*;
+use lx_lib::telemetry::*;
 use serde_json::json;
 use std::path::PathBuf;
 

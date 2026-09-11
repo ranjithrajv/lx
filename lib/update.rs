@@ -3,24 +3,28 @@ use clap::Args;
 
 use crate::debs;
 use crate::manifest::Manifest;
-use lpt_lib::github::GitHubClient;
+use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct UpdateArgs {
-    /// Package to check (omit to check every lpt-managed package).
+    /// Package to check (omit to check every lx-managed package).
     pub package: Option<String>,
+
+    /// Print the available release's notes for each outdated package.
+    #[arg(long)]
+    pub diff: bool,
 }
 
-/// Check every lpt-managed package against its latest release, reporting
+/// Check every lx-managed package against its latest release, reporting
 /// what's outdated without installing anything (the `apt update` half of
-/// the update/upgrade split; `lpt upgrade` does the install).
+/// the update/upgrade split; `lx upgrade` does the install).
 pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
     let manifest = Manifest::load()?;
 
     let targets: Vec<String> = match &args.package {
         Some(p) => {
             if !manifest.packages.contains_key(p) {
-                bail!("'{p}' is not managed by lpt (run `lpt install {p}` first)");
+                bail!("'{p}' is not managed by lx (run `lx install {p}` first)");
             }
             vec![p.clone()]
         }
@@ -28,7 +32,7 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
     };
 
     if targets.is_empty() {
-        println!("no lpt-managed packages installed");
+        println!("no lx-managed packages installed");
         return Ok(());
     }
 
@@ -36,7 +40,7 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
     let mut outdated = 0;
 
     for package in &targets {
-        let entry = manifest.packages.get(package).unwrap();
+        let entry = manifest.current(package).unwrap();
         let release = match client.latest_release(debs::LATEST_DEBS_ORG, package) {
             Ok(r) => r,
             Err(e) => {
@@ -59,7 +63,10 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
             debs::dpkg_installed_version(package).unwrap_or_else(|| entry.version.clone());
         match debs::is_newer(&installed, &candidate) {
             Ok(true) => {
-                println!("  ↑ {package}: {installed} -> {candidate} (run `lpt upgrade {package}`)");
+                println!("  ↑ {package}: {installed} -> {candidate} (run `lx upgrade {package}`)");
+                if args.diff {
+                    print_release_notes(&release);
+                }
                 outdated += 1;
             }
             Ok(false) => println!("  = {package} up to date ({installed})"),
@@ -70,7 +77,20 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
     if outdated == 0 {
         println!("\nall packages up to date");
     } else {
-        println!("\n{outdated} package(s) can be upgraded; run `lpt upgrade` to install");
+        println!("\n{outdated} package(s) can be upgraded; run `lx upgrade` to install");
     }
     Ok(())
+}
+
+/// Prints the candidate release's own notes as a stand-in changelog,
+/// indented under its `↑ package: ...` line.
+fn print_release_notes(release: &lx_lib::github::Release) {
+    match release.body.as_deref().map(str::trim) {
+        Some(body) if !body.is_empty() => {
+            for line in body.lines() {
+                println!("      {line}");
+            }
+        }
+        _ => println!("      (no release notes)"),
+    }
 }

@@ -170,6 +170,7 @@ impl GiteaClient {
                 .as_deref()
                 .or(raw.published_at.as_deref())
                 .and_then(parse_gitea_time),
+            body: raw.body,
         }
     }
 
@@ -243,6 +244,8 @@ pub struct GiteaReleaseRaw {
     pub published_at: Option<String>,
     #[serde(default)]
     pub assets: Vec<GiteaAssetRaw>,
+    #[serde(default)]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

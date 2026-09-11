@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::forgejo::*;
+use lx_lib::plugins::source::forgejo::*;
 
 #[test]
 fn parses_forgejo_url() {

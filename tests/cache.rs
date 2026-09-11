@@ -1,5 +1,5 @@
 use anyhow::Result;
-use lpt_lib::cache::*;
+use lx_lib::cache::*;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -48,7 +48,7 @@ fn different_urls_dont_collide() {
 fn verifies_checksum_on_fresh_download() {
     let dir = tempfile::tempdir().unwrap();
     let cache = DownloadCache::new(dir.path().join("c")).unwrap();
-    let sum = lpt_lib::checksum::sha256_file(&{
+    let sum = lx_lib::checksum::sha256_file(&{
         let p = dir.path().join("tmp");
         std::fs::write(&p, b"payload").unwrap();
         p
@@ -75,7 +75,7 @@ fn verifies_checksum_on_fresh_download() {
 fn reuses_checksummed_cache_fast_path() {
     let dir = tempfile::tempdir().unwrap();
     let cache = DownloadCache::new(dir.path().join("c")).unwrap();
-    let sum = lpt_lib::checksum::sha256_file(&{
+    let sum = lx_lib::checksum::sha256_file(&{
         let p = dir.path().join("tmp");
         std::fs::write(&p, b"payload").unwrap();
         p
@@ -96,7 +96,7 @@ fn reuses_checksummed_cache_fast_path() {
 fn redownloads_when_cached_checksum_mismatches() {
     let dir = tempfile::tempdir().unwrap();
     let cache = DownloadCache::new(dir.path().join("c")).unwrap();
-    let sum = lpt_lib::checksum::sha256_file(&{
+    let sum = lx_lib::checksum::sha256_file(&{
         let p = dir.path().join("tmp");
         std::fs::write(&p, b"payload").unwrap();
         p
@@ -167,7 +167,7 @@ fn under_lock_recheck_reuses_checksummed_cache() {
     let sum = {
         let p = dir.path().join("seed");
         std::fs::write(&p, b"payload").unwrap();
-        lpt_lib::checksum::sha256_file(&p).unwrap()
+        lx_lib::checksum::sha256_file(&p).unwrap()
     };
 
     let dl: DownloadFn = Box::new(move |_: &str, out: &Path| {
@@ -207,7 +207,7 @@ fn stale_cache_entry_is_redownloaded() {
     let key = cache.key("https://x/a", None);
     let cache_file = dir.path().join("c").join(&key);
     let old = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(2 * lpt_lib::constants::DOWNLOAD_CACHE_TTL_SECS);
+        - std::time::Duration::from_secs(2 * lx_lib::constants::DOWNLOAD_CACHE_TTL_SECS);
     let f = std::fs::File::open(&cache_file).unwrap();
     f.set_modified(old).unwrap();
     let out2 = dir.path().join("out2");
@@ -225,7 +225,7 @@ fn try_lock_reports_error() {
     let fd = unsafe { libc::open(path.as_ptr(), libc::O_PATH) };
     assert!(fd >= 0, "open(O_PATH) failed");
     let f = unsafe { std::fs::File::from_raw_fd(fd) };
-    assert!(lpt_lib::cache::lock_file::FileLock::try_lock(f).is_err());
+    assert!(lx_lib::cache::lock_file::FileLock::try_lock(f).is_err());
 }
 
 #[test]
@@ -305,4 +305,27 @@ fn valid_entry_branch_coverage() {
         now,
         Some(Err(std::io::Error::other("boom")))
     ));
+}
+
+#[test]
+fn artifact_cache_round_trips_by_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let cache = ArtifactCache::new(dir.path().join("artifacts")).unwrap();
+    let key = ArtifactCache::key("recipe-a");
+
+    assert!(cache.get(&key).is_none());
+
+    let built = dir.path().join("hello_1.0_amd64.deb");
+    std::fs::write(&built, b"deb bytes").unwrap();
+    cache.put(&key, &built, "hello_1.0_amd64.deb").unwrap();
+
+    let cached = cache.get(&key).expect("cache hit after put");
+    assert_eq!(std::fs::read(cached).unwrap(), b"deb bytes");
+    assert_eq!(cache.name_for(&key).as_deref(), Some("hello_1.0_amd64.deb"));
+}
+
+#[test]
+fn artifact_cache_keys_differ_by_material() {
+    assert_ne!(ArtifactCache::key("a"), ArtifactCache::key("b"));
+    assert_eq!(ArtifactCache::key("a"), ArtifactCache::key("a"));
 }

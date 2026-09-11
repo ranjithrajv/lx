@@ -1,10 +1,10 @@
-use lpt_lib::progress::*;
+use lx_lib::progress::*;
 use std::path::PathBuf;
 
 fn tmp_file() -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-    std::env::temp_dir().join(format!("lpt-progress-test-{}-{n}.json", std::process::id()))
+    std::env::temp_dir().join(format!("lx-progress-test-{}-{n}.json", std::process::id()))
 }
 
 #[test]

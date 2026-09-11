@@ -3,12 +3,12 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
-use lpt_lib::github::Asset;
+use lx_lib::github::Asset;
 
 #[derive(Debug, Clone, Args)]
 pub struct ScanDepsArgs {
     /// Path to package.yaml, or a bare GitHub URL for a zero-config scan.
-    #[arg(default_value = lpt_lib::constants::DEFAULT_CONFIG_FILENAME)]
+    #[arg(default_value = lx_lib::constants::DEFAULT_CONFIG_FILENAME)]
     pub config: PathBuf,
 
     /// Version of the software to scan (overrides any version in config).
@@ -24,10 +24,16 @@ pub struct ScanDepsArgs {
     /// machine's own.
     #[arg(long)]
     pub all_architectures: bool,
+
+    /// Print a why-depends report: every non-essential shared-library need
+    /// found, whether it's covered by package.yaml's `depends:`, and (when
+    /// resolvable locally via `dpkg -S`) the Debian package that owns it.
+    #[arg(long)]
+    pub explain: bool,
 }
 
 /// Downloads a release binary and reports its `DT_NEEDED` shared-library
-/// dependencies (`lpt_lib::elfdeps`), to help verify or fill in
+/// dependencies (`lx_lib::elfdeps`), to help verify or fill in
 /// `package.yaml`'s `depends:` field. Read-only: unlike `build`/`install`,
 /// nothing scanned here is ever installed or built into a package, so it
 /// deliberately skips checksum verification -- the downloaded bytes are
@@ -176,10 +182,12 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
 
     let non_essential: Vec<&String> = all_sonames
         .iter()
-        .filter(|s| !lpt_lib::elfdeps::is_essential_libc_soname(s))
+        .filter(|s| !lx_lib::elfdeps::is_essential_libc_soname(s))
         .collect();
     if non_essential.is_empty() {
         println!("\nNo non-essential shared-library dependencies found.");
+    } else if args.explain {
+        print_why_depends(&cfg, &non_essential);
     } else {
         println!(
             "\n{} non-essential shared-library dependency(ies) found:",
@@ -199,6 +207,63 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Declared package names from a Debian relation field (`depends:`,
+/// `recommends:`, ...), stripped of version constraints (`libfoo (>= 1.0)`
+/// -> `libfoo`) and alternatives (`a | b` -> `a`, `b`), lowercased for
+/// case-insensitive matching against `dpkg -S` output.
+pub fn declared_package_names(relation: &str) -> std::collections::BTreeSet<String> {
+    relation
+        .split(',')
+        .flat_map(|clause| clause.split('|'))
+        .map(|s| s.split('(').next().unwrap_or(s).trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// `lx why-depends` (nfpm/Nix closure parity, minus a full closure graph):
+/// ties each non-essential shared-library need to the Debian package that
+/// owns it (best-effort via local `dpkg -S`) and flags whether that owner
+/// is covered by package.yaml's `depends:`, so declared-vs-actual runtime
+/// deps can be reviewed without walking the whole ELF graph by hand.
+fn print_why_depends(cfg: &PackageConfig, non_essential: &[&String]) {
+    let declared = declared_package_names(&cfg.depends);
+    println!(
+        "\nwhy-depends report ({} shared librar{}):",
+        non_essential.len(),
+        if non_essential.len() == 1 { "y" } else { "ies" }
+    );
+    let mut undeclared = Vec::new();
+    for lib in non_essential {
+        match dpkg_owner(lib) {
+            Some(pkg) => {
+                let pkg_lc = pkg.to_ascii_lowercase();
+                if declared.contains(&pkg_lc) {
+                    println!("  {lib:<32} -> {pkg:<24} [declared in depends:]");
+                } else {
+                    println!("  {lib:<32} -> {pkg:<24} [NOT in depends: -- consider adding]");
+                    undeclared.push(pkg);
+                }
+            }
+            None => {
+                println!("  {lib:<32} -> ? (not owned by any locally installed package)");
+            }
+        }
+    }
+    if undeclared.is_empty() {
+        println!(
+            "\nEvery owned shared-library need is already covered by package.yaml's `depends:`."
+        );
+    } else {
+        undeclared.sort();
+        undeclared.dedup();
+        println!(
+            "\n{} package(s) not declared in `depends:`: {}",
+            undeclared.len(),
+            undeclared.join(", ")
+        );
+    }
 }
 
 /// Download, extract, and scan one architecture's asset. Returns `Ok(true)`
@@ -271,7 +336,7 @@ fn scan_one_arch(
         let rel = elf_path.strip_prefix(&extract_dir).unwrap_or(&elf_path);
         let bytes = std::fs::read(&elf_path)
             .with_context(|| format!("failed to read '{}'", elf_path.display()))?;
-        let libs = lpt_lib::elfdeps::needed_libraries(&bytes)
+        let libs = lx_lib::elfdeps::needed_libraries(&bytes)
             .with_context(|| format!("failed to scan '{}'", rel.display()))?;
         if libs.is_empty() {
             println!(
@@ -283,7 +348,7 @@ fn scan_one_arch(
         println!("  {}:", rel.display());
         for lib in &libs {
             all_sonames.insert(lib.clone());
-            if lpt_lib::elfdeps::is_essential_libc_soname(lib) {
+            if lx_lib::elfdeps::is_essential_libc_soname(lib) {
                 println!("    {lib}  (glibc/essential, usually omit from depends:)");
             } else if let Some(pkg) = dpkg_owner(lib) {
                 println!("    {lib}  -> {pkg} (via local dpkg -S)");

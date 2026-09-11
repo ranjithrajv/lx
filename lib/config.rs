@@ -78,7 +78,7 @@ pub struct Scripts {
 ///   - `method: debsign` — armored detach-sign of the ar payload is
 ///     embedded as `_gpgorigin` inside the `.deb` (debsigs / nfpm).
 ///
-/// Passphrase resolution (both formats): `$LPT_SIGN_PASSPHRASE`, falling
+/// Passphrase resolution (both formats): `$LX_SIGN_PASSPHRASE`, falling
 /// back to `$NFPM_PASSPHRASE` for nfpm parity.
 ///
 /// String fields expand `${VAR}` / `${VAR:-default}` at parse time.
@@ -123,6 +123,11 @@ pub struct PackageConfig {
     /// Debian distributions to target. Defaults to all supported.
     #[serde(default)]
     pub debian_distributions: Vec<String>,
+    /// Ubuntu suites to target natively (opt-in; e.g. [noble, jammy]).
+    /// Merged with `debian_distributions` for deb builds, mirroring the
+    /// action's separate `ubuntu_distributions` key.
+    #[serde(default)]
+    pub ubuntu_distributions: Vec<String>,
     /// Per-architecture release asset patterns, or a plain list restricting
     /// auto-discovery to a named subset. Omit entirely for full
     /// auto-discovery.
@@ -256,7 +261,7 @@ pub struct PackageConfig {
     // ---- Legacy debian-multiarch-builder keys ---------------------------
     // The bash action's templates and zero-config wizard emitted these key
     // names; `deny_unknown_fields` would hard-reject every config written
-    // against it, so they are parsed and folded into their modern lpt
+    // against it, so they are parsed and folded into their modern lx
     // equivalents by [`PackageConfig::apply_legacy_compat`]. Modern keys win
     // whenever both are set.
     //
@@ -298,6 +303,75 @@ pub struct PackageConfig {
     /// regardless of --max-parallel auto-tuning.
     #[serde(default)]
     pub parallel_builds: Option<bool>,
+    /// Build mode: "binary" (default) repacks an upstream release asset;
+    /// "source" fetches the upstream source tag and compiles it (cmake)
+    /// on the host, then wraps the install tree per suite. Mirrors the
+    /// bash action's `build_mode:` (see build_mode: source template).
+    #[serde(default = "default_build_mode")]
+    pub build_mode: String,
+    /// Source-mode build system. Only "cmake" is supported (bash parity:
+    /// `build_mode: source` errors on anything else).
+    #[serde(default = "default_build_system")]
+    pub build_system: String,
+    /// Source tarball URL root for `build_mode: source` (e.g. a Forgejo
+    /// instance). Empty means GitHub `<repo>/archive/refs/tags/<ref>.tar.gz`.
+    #[serde(default)]
+    pub upstream_url: String,
+    /// Source-mode tag to fetch. Empty means the resolved `--version`.
+    #[serde(default)]
+    pub upstream_ref: String,
+    /// Extra host packages the compile needs (installed via the host
+    /// package manager by the caller/CI; lx itself never apt-gets).
+    #[serde(default)]
+    pub build_depends: Vec<String>,
+    /// Extra flags appended to the cmake configure step.
+    #[serde(default)]
+    pub cmake_flags: Vec<String>,
+    /// Shell steps run in the extracted source dir after unpack and before
+    /// the build-system configure (patches, codegen, `go generate`, ...).
+    /// makedeb-`prepare()` spirit, kept as an ordered list rather than a
+    /// full second language. Applies to every `build_mode: source` build.
+    #[serde(default)]
+    pub prebuild_steps: Vec<String>,
+    /// Custom build commands replacing the cmake configure+build when
+    /// `build_system: custom` (run in the source dir, in order). For Go,
+    /// Rust, Node, Make and other ecosystems cmake cannot express.
+    #[serde(default)]
+    pub build_commands: Vec<String>,
+    /// Custom install commands replacing `cmake --install` when
+    /// `build_system: custom` (run in the source dir with `$DESTDIR` set
+    /// to the staging tree; install the FHS tree there).
+    #[serde(default)]
+    pub install_commands: Vec<String>,
+    /// Source-mode suites to build. Empty means every configured
+    /// (debian + ubuntu) distribution.
+    #[serde(default)]
+    pub build_suites: Vec<String>,
+    /// Source-mode suites to skip (applied after `build_suites`/defaults).
+    #[serde(default)]
+    pub skip_suites: Vec<String>,
+    /// Per-suite apt overlay for compile cells
+    /// (`build_depends_suites: { trixie: { from: forky, packages: [...] } }`),
+    /// kept for config compat. Only meaningful with containerized builds;
+    /// lx compiles on the host, so these are validated but not applied.
+    /// Use `build_depends` for host packages instead.
+    #[serde(default)]
+    pub build_depends_suites: HashMap<String, BuildDependsSuite>,
+    /// Apt source lines keyed by suite name (companion to
+    /// `build_depends_suites`). Same host-build caveat as above.
+    #[serde(default)]
+    pub build_apt_sources: HashMap<String, Vec<String>>,
+}
+
+/// One entry of `build_depends_suites`: install `packages` from suite
+/// `from` with `apt-get install -t`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BuildDependsSuite {
+    #[serde(default)]
+    pub from: String,
+    #[serde(default)]
+    pub packages: Vec<String>,
 }
 
 /// An entry of `distribution_arch_overrides`: the distributions an
@@ -316,6 +390,14 @@ fn default_package_format() -> String {
 
 fn default_source() -> String {
     "github".to_string()
+}
+
+fn default_build_mode() -> String {
+    "binary".to_string()
+}
+
+fn default_build_system() -> String {
+    "cmake".to_string()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -402,6 +484,30 @@ impl PackageConfig {
         Ok(config)
     }
 
+    /// Applies a thin delta package.yaml over this already-loaded config:
+    /// top-level keys present in the overlay replace the base's, everything
+    /// else is left untouched. Lets an org keep one shared base
+    /// `package.yaml` and fork only what differs (version pin, `depends`,
+    /// `release_pattern`) instead of duplicating the whole template.
+    pub fn apply_overlay(&mut self, overlay_path: &Path) -> Result<()> {
+        let text = std::fs::read_to_string(overlay_path)
+            .with_context(|| format!("failed to read overlay '{}'", overlay_path.display()))?;
+        let expanded = expand_env_vars(&text)?;
+        let overlay_value: serde_yaml::Value = serde_yaml::from_str(&expanded)
+            .with_context(|| format!("failed to parse overlay '{}'", overlay_path.display()))?;
+        let base_value = serde_yaml::to_value(&*self)
+            .with_context(|| "failed to re-serialize base config for overlay merge")?;
+        let merged = merge_yaml_top_level(base_value, overlay_value);
+        *self = serde_yaml::from_value(merged).with_context(|| {
+            format!(
+                "failed to apply overlay '{}' onto package.yaml",
+                overlay_path.display()
+            )
+        })?;
+        self.apply_legacy_compat();
+        self.validate()
+    }
+
     /// Fold legacy debian-multiarch-builder keys into their modern
     /// equivalents. Modern fields win whenever both are set. Pure (no I/O,
     /// no env), so it is unit-testable.
@@ -430,7 +536,7 @@ impl PackageConfig {
                 names.sort();
                 names
             } else if self.download_pattern.contains("{arch}") {
-                lpt_lib::constants::DEFAULT_ARCHITECTURES
+                lx_lib::constants::DEFAULT_ARCHITECTURES
                     .iter()
                     .map(|s| s.to_string())
                     .collect()
@@ -497,10 +603,15 @@ impl PackageConfig {
         }
         if !self.source.trim().is_empty() {
             match self.source.trim().to_ascii_lowercase().as_str() {
-                "github" | "github-sync" | "gitlab" | "gitea" | "forgejo" | "bitbucket" | "gerrit" => {}
+                "github" | "github-sync" | "gitlab" | "gitea" | "forgejo" | "bitbucket" | "gerrit" | "custom" => {}
                 other => bail!(
-                    "unsupported source '{other}' (expected github, github-sync, gitlab, gitea, forgejo, bitbucket, or gerrit)"
+                    "unsupported source '{other}' (expected github, github-sync, gitlab, gitea, forgejo, bitbucket, gerrit, or custom)"
                 ),
+            }
+            if self.source.trim().eq_ignore_ascii_case("custom")
+                && self.upstream_url.trim().is_empty()
+            {
+                bail!("source 'custom' requires upstream_url in package.yaml (URL template with {{version}}/{{arch}} placeholders)");
             }
         }
         if !self.compression.trim().is_empty() {
@@ -600,6 +711,28 @@ impl PackageConfig {
                 ),
             }
         }
+        match self.build_mode.trim().to_ascii_lowercase().as_str() {
+            "binary" | "source" => {}
+            other => bail!("unsupported build_mode '{other}' (expected binary or source)"),
+        }
+        if self.is_source_mode() {
+            match self.build_system.trim().to_ascii_lowercase().as_str() {
+                "cmake" | "custom" => {}
+                other => bail!(
+                    "build_mode: source supports build_system: cmake or custom (got '{other}')"
+                ),
+            }
+            if self.effective_build_system() == "custom" && self.install_commands.is_empty() {
+                bail!("build_system: custom requires install_commands (install the FHS tree into $DESTDIR)");
+            }
+            // Source mode has no release assets to auto-discover, so an
+            // explicit architectures list is required (bash parity).
+            if self.architectures.is_empty() {
+                bail!(
+                    "build_mode: source requires an explicit architectures: list in package.yaml"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -610,6 +743,64 @@ impl PackageConfig {
         } else {
             self.source.trim().to_ascii_lowercase()
         }
+    }
+
+    /// Effective build mode, normalized to lowercase ("binary" or "source").
+    pub fn effective_build_mode(&self) -> String {
+        if self.build_mode.trim().is_empty() {
+            "binary".to_string()
+        } else {
+            self.build_mode.trim().to_ascii_lowercase()
+        }
+    }
+
+    /// True for `build_mode: source` (compile upstream on the host).
+    pub fn is_source_mode(&self) -> bool {
+        self.effective_build_mode() == "source"
+    }
+
+    /// Effective build system, normalized to lowercase ("cmake" or "custom").
+    pub fn effective_build_system(&self) -> String {
+        if self.build_system.trim().is_empty() {
+            "cmake".to_string()
+        } else {
+            self.build_system.trim().to_ascii_lowercase()
+        }
+    }
+
+    /// Source-mode suites: explicit `build_suites` minus `skip_suites`
+    /// when set, otherwise the configured distributions minus
+    /// `skip_suites` (bash `source_build_suites` parity).
+    pub fn source_suites(&self, configured: &[String]) -> Vec<String> {
+        let base: Vec<String> = if self.build_suites.is_empty() {
+            configured.to_vec()
+        } else {
+            self.build_suites.clone()
+        };
+        base.into_iter()
+            .filter(|s| !self.skip_suites.iter().any(|skip| skip.trim() == s.trim()))
+            .collect()
+    }
+
+    /// Oldest suite in a same-family list per the bash
+    /// SOURCE_BUILD_DEBIAN_ORDER / SOURCE_BUILD_UBUNTU_ORDER (compile on
+    /// the oldest suite so symbols are the intersection of every suite).
+    /// Unknown names fall back to the first entry.
+    pub fn oldest_suite(suites: &[String]) -> Option<String> {
+        const DEBIAN_ORDER: &[&str] = &["bullseye", "bookworm", "trixie", "forky", "sid"];
+        const UBUNTU_ORDER: &[&str] = &[
+            "jammy", "noble", "oracular", "plucky", "questing", "resolute",
+        ];
+        let order: &[&str] = match suites.first().map(|s| s.as_str()) {
+            Some(s) if lx_lib::constants::is_ubuntu_dist(s) => UBUNTU_ORDER,
+            _ => DEBIAN_ORDER,
+        };
+        for o in order {
+            if let Some(s) = suites.iter().find(|s| s.trim() == *o) {
+                return Some(s.clone());
+            }
+        }
+        suites.first().cloned()
     }
 
     /// Effective package format, normalized to lowercase ("deb", "rpm", or "arch").
@@ -633,12 +824,12 @@ impl PackageConfig {
 
     /// Maintainer fallback (the action defaults to the repo owner / a
     /// generic maintainer identity). When `maintainer:` is unset, the
-    /// `LPT_MAINTAINER` env var wins over the built-in latest-debs
-    /// default, so downstream users of lpt can attribute packages to
+    /// `LX_MAINTAINER` env var wins over the built-in latest-debs
+    /// default, so downstream users of lx can attribute packages to
     /// themselves without editing every package.yaml.
     pub fn effective_maintainer(&self) -> String {
         if self.maintainer.is_empty() {
-            resolve_default_maintainer(std::env::var(lpt_lib::constants::MAINTAINER_ENV_VAR).ok())
+            resolve_default_maintainer(std::env::var(lx_lib::constants::MAINTAINER_ENV_VAR).ok())
         } else {
             self.maintainer.clone()
         }
@@ -658,13 +849,15 @@ impl PackageConfig {
     /// built-in rules: empty -> all supported suites for that format (used
     /// when --format overrides the config file).
     pub fn effective_distributions_for(&self, format: &str) -> Vec<String> {
-        if !self.debian_distributions.is_empty() {
-            return self.debian_distributions.clone();
+        if !self.debian_distributions.is_empty() || !self.ubuntu_distributions.is_empty() {
+            let mut out = self.debian_distributions.clone();
+            out.extend(self.ubuntu_distributions.clone());
+            return out;
         }
         let defaults: &[&str] = match format.to_ascii_lowercase().as_str() {
-            "rpm" => lpt_lib::constants::DEFAULT_RPM_DISTRIBUTIONS,
-            "arch" => lpt_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS,
-            _ => lpt_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS,
+            "rpm" => lx_lib::constants::DEFAULT_RPM_DISTRIBUTIONS,
+            "arch" => lx_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS,
+            _ => lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS,
         };
         defaults.iter().map(|s| s.to_string()).collect()
     }
@@ -684,7 +877,7 @@ impl PackageConfig {
     /// Effective Section (defaults to "utils").
     pub fn effective_section(&self) -> String {
         if self.section.trim().is_empty() {
-            lpt_lib::constants::DEFAULT_SECTION.to_string()
+            lx_lib::constants::DEFAULT_SECTION.to_string()
         } else {
             self.section.trim().to_string()
         }
@@ -693,7 +886,7 @@ impl PackageConfig {
     /// Effective Priority (defaults to "optional").
     pub fn effective_priority(&self) -> String {
         if self.priority.trim().is_empty() {
-            lpt_lib::constants::DEFAULT_PRIORITY.to_string()
+            lx_lib::constants::DEFAULT_PRIORITY.to_string()
         } else {
             self.priority.trim().to_string()
         }
@@ -717,8 +910,8 @@ impl PackageConfig {
     /// `overrides.<format>`. An override present for a field replaces the
     /// top-level value for that format (including with an empty string to
     /// clear it); absent overrides fall through to the top-level value.
-    pub fn effective_relations(&self, format: &str) -> lpt_lib::pkgmeta::Relations {
-        let mut r = lpt_lib::pkgmeta::Relations {
+    pub fn effective_relations(&self, format: &str) -> lx_lib::pkgmeta::Relations {
+        let mut r = lx_lib::pkgmeta::Relations {
             depends: self.depends.clone(),
             recommends: self.recommends.clone(),
             suggests: self.suggests.clone(),
@@ -815,6 +1008,9 @@ impl PackageConfig {
         if let Some(o) = self.distribution_arch_overrides.get(arch) {
             return o.distributions.iter().any(|d| d.trim() == dist);
         }
+        if lx_lib::constants::is_ubuntu_dist(dist) {
+            return lx_lib::constants::ubuntu_archs(dist).contains(&arch);
+        }
         if UNIVERSAL_ARCHS.contains(&arch) {
             return true;
         }
@@ -834,6 +1030,22 @@ impl PackageConfig {
 /// becomes a literal `$`. Used by [`PackageConfig::parse_str`] so config
 /// fields like `signature.key_file` / `local_payload` can reference CI
 /// secrets without baking paths into the file.
+/// Shallow overlay merge: overlay's top-level mapping keys replace the
+/// base's wholesale (no recursive field-by-field merge inside e.g.
+/// `architectures:`) -- "modern keys win", matching a `package.yaml`
+/// override's usual intent of swapping one whole section at a time.
+fn merge_yaml_top_level(base: serde_yaml::Value, overlay: serde_yaml::Value) -> serde_yaml::Value {
+    match (base, overlay) {
+        (serde_yaml::Value::Mapping(mut base_map), serde_yaml::Value::Mapping(overlay_map)) => {
+            for (k, v) in overlay_map {
+                base_map.insert(k, v);
+            }
+            serde_yaml::Value::Mapping(base_map)
+        }
+        (_, overlay) => overlay,
+    }
+}
+
 pub fn expand_env_vars(text: &str) -> Result<String> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -899,7 +1111,7 @@ pub fn filter_expired_distributions(
     });
     let mut kept = Vec::with_capacity(dists.len());
     for dist in dists {
-        let expired = lpt_lib::constants::DISTRIBUTION_LTS_ENDS
+        let expired = lx_lib::constants::DISTRIBUTION_LTS_ENDS
             .iter()
             .find(|(d, _)| *d == dist.as_str())
             .and_then(|(_, ends)| ends.parse::<jiff::civil::Date>().ok())
@@ -913,8 +1125,8 @@ pub fn filter_expired_distributions(
     kept
 }
 
-pub use lpt_lib::constants::DEFAULT_ARCHITECTURES;
-pub use lpt_lib::constants::UNIVERSAL_ARCHS;
+pub use lx_lib::constants::DEFAULT_ARCHITECTURES;
+pub use lx_lib::constants::UNIVERSAL_ARCHS;
 
 /// Human-readable name for a contents entry type (empty -> "file").
 fn display_kind(kind: &str) -> &str {
@@ -925,14 +1137,14 @@ fn display_kind(kind: &str) -> &str {
     }
 }
 
-/// Maintainer precedence when `maintainer:` is unset: `$LPT_MAINTAINER`
+/// Maintainer precedence when `maintainer:` is unset: `$LX_MAINTAINER`
 /// (non-empty), else the built-in latest-debs default. Split out as a pure
 /// function so the precedence is testable without mutating process env.
 pub fn resolve_default_maintainer(env_value: Option<String>) -> String {
     env_value
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| lpt_lib::constants::DEFAULT_MAINTAINER.to_string())
+        .unwrap_or_else(|| lx_lib::constants::DEFAULT_MAINTAINER.to_string())
 }
 
 /// Architecture aliases commonly used by upstream projects, keyed by

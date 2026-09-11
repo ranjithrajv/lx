@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use clap::Args;
 
 use crate::config::{upstream_arch_names, PackageConfig};
-use lpt_lib::github::{Asset, Release};
+use lx_lib::github::{Asset, Release};
 
 #[derive(Debug, Clone, Args)]
 pub struct DiscoverArgs {
@@ -181,10 +181,7 @@ pub fn run(args: DiscoverArgs, token: Option<&str>) -> Result<()> {
 }
 
 fn print_config(repo: &str, source: &str, release: &Release, matched: &[ArchAsset]) {
-    println!(
-        "# Auto-discovered by lpt discover from {}",
-        release.html_url
-    );
+    println!("# Auto-discovered by lx discover from {}", release.html_url);
     println!(
         "package_name: {}",
         repo.split('/').next_back().unwrap_or(repo)

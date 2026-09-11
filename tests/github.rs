@@ -1,4 +1,4 @@
-use lpt_lib::github::*;
+use lx_lib::github::*;
 
 #[test]
 fn converts_octocrab_release() {

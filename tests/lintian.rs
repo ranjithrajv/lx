@@ -1,4 +1,4 @@
-use lpt_lib::lintian::*;
+use lx_lib::lintian::*;
 
 #[test]
 fn parses_severity_lines() {

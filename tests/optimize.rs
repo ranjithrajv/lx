@@ -1,4 +1,4 @@
-use lpt_lib::optimize::*;
+use lx_lib::optimize::*;
 
 #[test]
 fn optimum_respects_most_restrictive() {

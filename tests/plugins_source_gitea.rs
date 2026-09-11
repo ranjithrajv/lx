@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::gitea::*;
+use lx_lib::plugins::source::gitea::*;
 
 #[test]
 fn parses_gitea_url() {

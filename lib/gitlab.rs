@@ -169,6 +169,7 @@ impl GitlabClient {
                 .released_at
                 .or(raw.created_at)
                 .and_then(|s| parse_gitlab_time(&s)),
+            body: raw.description,
         }
     }
 

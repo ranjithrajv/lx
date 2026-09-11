@@ -1,7 +1,7 @@
 use anyhow::Result;
 use std::path::Path;
 
-use lpt_lib::github::{GitHubSyncClient, Release, ReleaseMeta, RepoLicense};
+use lx_lib::github::{GitHubSyncClient, Release, ReleaseMeta, RepoLicense};
 
 use super::SourcePlugin;
 
@@ -34,7 +34,7 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.latest_release(owner, repo_name)
     }
 
@@ -46,7 +46,7 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Release> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.release_by_tag(owner, repo_name, tag)
     }
 
@@ -58,7 +58,7 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Vec<ReleaseMeta>> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.releases(owner, repo_name, per_page)
     }
 
@@ -69,7 +69,7 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Option<RepoLicense>> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.repo_license(owner, repo_name)
     }
 
@@ -80,7 +80,7 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Vec<String>> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.repo_root(owner, repo_name)
     }
 
@@ -92,12 +92,12 @@ impl SourcePlugin for GithubSyncSourcePlugin {
         cache_dir: Option<&Path>,
     ) -> Result<Option<String>> {
         let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, cache_dir)?;
         client.repo_file_text(owner, repo_name, path)
     }
 
     fn raw_get(&self, url: &str, token: Option<&str>) -> Result<Box<dyn std::io::Read + Send>> {
-        let client = lpt_lib::source_client::new_client_for::<GitHubSyncClient>(token, None)?;
+        let client = lx_lib::source_client::new_client_for::<GitHubSyncClient>(token, None)?;
         client.raw_get(url)
     }
 }

@@ -4,15 +4,15 @@ Pre-built starter configs ported verbatim from
 [debian-multiarch-builder](https://github.com/ranjithrajv/debian-multiarch-builder)'s
 `templates/` directory (Rust, Go, C/C++, Node.js, Python, Ruby). They use
 that action's legacy key names (`summary:`, `license:`, `download_pattern:`,
-`architecture_map:`, `dependencies:`) — all of which `lpt` accepts and folds
+`architecture_map:`, `dependencies:`) — all of which `lx` accepts and folds
 into their modern equivalents at load time.
 
 Start from one with:
 
 ```sh
-lpt init --template rust/eza            # writes package.yaml in the cwd
-lpt init --template go/hugo --output path/to/package.yaml
-lpt init --template                     # no match lists all names
+lx init --template rust/eza            # writes package.yaml in the cwd
+lx init --template go/hugo --output path/to/package.yaml
+lx init --template                     # no match lists all names
 ```
 
 Then edit `package_name`, `github_repo`, and the download pattern to match
@@ -20,7 +20,7 @@ the upstream release you are packaging, and check it resolves against a real
 release without building:
 
 ```sh
-lpt validate package.yaml
+lx validate package.yaml
 ```
 
 Available templates: `rust/{eza,bat,generic,ripgrep}`, `go/{hugo,kubectl,generic}`,

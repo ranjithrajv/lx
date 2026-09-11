@@ -103,6 +103,46 @@ impl Telemetry {
         }
     }
 
+    /// `save_as_baseline`: copy metrics.json to baseline.json for future
+    /// regression comparison (mirrors the action's `save_as_baseline`).
+    /// No-op when telemetry is disabled or no metrics exist yet.
+    pub fn save_as_baseline(&self) -> Result<()> {
+        if !self.enabled {
+            return Ok(());
+        }
+        let src = self.dir.join("metrics.json");
+        if !src.exists() {
+            return Ok(());
+        }
+        let dst = self.dir.join("baseline.json");
+        std::fs::copy(src, dst)?;
+        Ok(())
+    }
+
+    /// Compare the current build duration against baseline.json; returns a
+    /// warning string when duration regressed >20% (mirrors the action's
+    /// `check_performance_regressions`, duration half — lx tracks no
+    /// memory metric). `None` when no baseline or no regression.
+    pub fn check_regression(&self) -> Option<String> {
+        if !self.enabled {
+            return None;
+        }
+        let cur: serde_json::Value = self.read_metrics()?;
+        let base: serde_json::Value = std::fs::read_to_string(self.dir.join("baseline.json"))
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())?;
+        let cur_d = cur.get("build_duration")?.as_u64()?;
+        let base_d = base.get("build_duration")?.as_u64()?;
+        if base_d > 0 && cur_d > base_d * 120 / 100 {
+            let pct = (cur_d - base_d) * 100 / base_d;
+            Some(format!(
+                "Build duration increased by {pct}% ({base_d}s -> {cur_d}s)"
+            ))
+        } else {
+            None
+        }
+    }
+
     fn append_log(&self, file: &str, line: &str) -> Result<()> {
         if !self.enabled {
             return Ok(());

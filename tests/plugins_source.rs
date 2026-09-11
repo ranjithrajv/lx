@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::*;
+use lx_lib::plugins::source::*;
 
 #[test]
 fn registry_contains_github_and_gitlab() {

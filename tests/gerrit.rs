@@ -1,4 +1,4 @@
-use lpt_lib::gerrit::*;
+use lx_lib::gerrit::*;
 
 #[test]
 fn maps_tag_to_release() {

@@ -219,6 +219,58 @@ pub fn valid_entry(
     }
 }
 
+/// Input-keyed store for *built* package artifacts (not downloads). The key
+/// is sha256 of recipe material (config + build-affecting flags + asset
+/// digest + format + dist + arch); same inputs means the built bytes are
+/// guaranteed identical, so a hit copies the cached file instead of
+/// re-running the packaging pipeline. Foundation for a future remote
+/// substituter (same key scheme, just fetched over HTTP instead of read
+/// from disk).
+pub struct ArtifactCache {
+    dir: PathBuf,
+}
+
+impl ArtifactCache {
+    pub fn new(dir: PathBuf) -> Result<Self> {
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("failed to create artifact cache dir '{}'", dir.display()))?;
+        Ok(Self { dir })
+    }
+
+    /// Content-based key over arbitrary recipe material (caller composes
+    /// the string from whatever inputs affect the output bytes).
+    pub fn key(material: &str) -> String {
+        let mut hasher = sha2::Sha256::new();
+        use sha2::Digest;
+        hasher.update(material.as_bytes());
+        hex::encode(hasher.finalize())
+    }
+
+    /// Path to the cached artifact for `key`, if present.
+    pub fn get(&self, key: &str) -> Option<PathBuf> {
+        let p = self.dir.join(key);
+        if p.is_file() {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// Cache `artifact`, remembering its original file name (needed to
+    /// reconstruct the output path on a later hit -- the key itself carries
+    /// no naming information).
+    pub fn put(&self, key: &str, artifact: &Path, original_name: &str) -> Result<()> {
+        std::fs::copy(artifact, self.dir.join(key))
+            .with_context(|| format!("failed to cache artifact '{}'", artifact.display()))?;
+        std::fs::write(self.dir.join(format!("{key}.name")), original_name)?;
+        Ok(())
+    }
+
+    pub fn name_for(&self, key: &str) -> Option<String> {
+        std::fs::read_to_string(self.dir.join(format!("{key}.name"))).ok()
+    }
+}
+
 pub mod lock_file {
     use anyhow::Result;
     use std::fs::File;

@@ -1,4 +1,4 @@
-use lpt_lib::debarchive::*;
+use lx_lib::debarchive::*;
 use std::os::unix::fs::PermissionsExt;
 
 #[test]

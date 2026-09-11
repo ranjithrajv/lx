@@ -1,4 +1,4 @@
-use lpt_lib::source::*;
+use lx_lib::source::*;
 use sha2::{Digest, Sha256};
 
 fn test_pkg(epoch: &str) -> Pkg {
@@ -60,7 +60,7 @@ fn content_version_gets_epoch_but_filenames_dont() {
     // build_source_package uses.
     let pkg = test_pkg("1");
     let src_version = "0.23.5-1+bookworm";
-    let content_version = lpt_lib::pkgmeta::with_epoch(&pkg.epoch, src_version);
+    let content_version = lx_lib::pkgmeta::with_epoch(&pkg.epoch, src_version);
     assert_eq!(content_version, "1:0.23.5-1+bookworm");
 
     let dsc_name = format!("{}_{src_version}.dsc", pkg.name);
@@ -103,9 +103,9 @@ fn generate_rpm_writes_srpm_per_dist_and_shares_source_tarball() {
         ("1.fedora", "eza-0.23.5-1.fedora.x86_64.rpm"),
         ("1.el9", "eza-0.23.5-1.el9.x86_64.rpm"),
     ] {
-        lpt_lib::rpmarchive::build(
+        lx_lib::rpmarchive::build(
             staged.path(),
-            &lpt_lib::rpmarchive::PackageMeta {
+            &lx_lib::rpmarchive::PackageMeta {
                 name: "eza",
                 version: "0.23.5",
                 release,
@@ -153,9 +153,9 @@ fn generate_rpm_writes_srpm_per_dist_and_shares_source_tarball() {
 fn generate_arch_writes_pkgbuild_with_matching_sha256() {
     let staged = fake_staged_tree();
     let out_dir = tempfile::tempdir().unwrap();
-    lpt_lib::archarchive::build(
+    lx_lib::archarchive::build(
         staged.path(),
-        &lpt_lib::archarchive::PackageMeta {
+        &lx_lib::archarchive::PackageMeta {
             name: "eza",
             version: "0.23.5",
             release: "1.arch",

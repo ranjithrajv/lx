@@ -13,7 +13,7 @@ pub struct Pkg {
     pub version: String,
     pub build_version: String,
     /// Debian epoch (e.g. "1"), matching the binary package's -- see
-    /// `lpt_lib::pkgmeta::with_epoch`. Empty means none.
+    /// `lx_lib::pkgmeta::with_epoch`. Empty means none.
     pub epoch: String,
     pub license_spdx: String,
     /// Dependency-relation fields, matching the binary package's -- a
@@ -33,20 +33,20 @@ pub struct Pkg {
     pub fields: std::collections::HashMap<String, String>,
     /// Unix epoch seconds the release was published, for reproducible
     /// changelog/copyright timestamps -- see
-    /// `lpt_lib::pkgmeta::reproducible_epoch`. Matching the binary
+    /// `lx_lib::pkgmeta::reproducible_epoch`. Matching the binary
     /// package's `job.published_at`.
     pub published_at: Option<i64>,
     /// The upstream license actually detected from GitHub, when available
     /// -- preferred over `license_spdx`/generic text in the rendered
     /// copyright, matching the binary package's behavior.
-    pub license: Option<lpt_lib::github::RepoLicense>,
+    pub license: Option<lx_lib::github::RepoLicense>,
 }
 
 /// Generate Debian source packages (3.0 quilt) for each distribution among
 /// the built .debs in `out_dir`, mirroring the action's
 /// `build_source_packages`:
 ///   * architecture-independent, so generated once per dist,
-///   * built entirely in-process (`lpt_lib::debarchive`) -- no Docker, no
+///   * built entirely in-process (`lx_lib::debarchive`) -- no Docker, no
 ///     `dpkg-source`/`dpkg-deb` subprocess,
 ///   * best-effort: on failure, the binary builds still stand.
 pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
@@ -63,7 +63,7 @@ pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
         dists.join(", ")
     );
 
-    let debian_version = lpt_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
+    let debian_version = lx_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
     let workdir = tempfile::tempdir().context("failed to create temp dir")?;
     let mut orig_done = false;
 
@@ -159,7 +159,7 @@ fn build_source_package(
     // filenames -- Debian policy excludes it there since `:` isn't
     // filename-safe. `src_version` above stays epoch-free for filenames;
     // this is the one used for file *content*.
-    let content_version = lpt_lib::pkgmeta::with_epoch(&pkg.epoch, &src_version);
+    let content_version = lx_lib::pkgmeta::with_epoch(&pkg.epoch, &src_version);
     let tree = format!("{}-{src_version}", pkg.name);
     let tree_dir = workdir.join(&tree);
     let orig_name = format!("{}_{debian_version}.orig.tar.xz", pkg.name);
@@ -176,7 +176,7 @@ fn build_source_package(
     // Extract the binary package as the source tree. DEBIAN/ and
     // usr/share/doc are Debian packaging output, not upstream payload, so
     // strip them.
-    lpt_lib::debarchive::extract(&out_dir.join(&ref_deb), &tree_dir)
+    lx_lib::debarchive::extract(&out_dir.join(&ref_deb), &tree_dir)
         .with_context(|| format!("failed to extract {ref_deb}"))?;
     let _ = std::fs::remove_dir_all(tree_dir.join("DEBIAN"));
     let _ = std::fs::remove_dir_all(tree_dir.join("usr/share/doc"));
@@ -185,7 +185,7 @@ fn build_source_package(
     // stanza's relation fields mirror the shipped .deb's -- a
     // `dpkg-buildpackage` build of this tree needs the same Depends/etc. to
     // reproduce it.
-    let relations = lpt_lib::pkgmeta::Relations {
+    let relations = lx_lib::pkgmeta::Relations {
         depends: pkg.depends.clone(),
         recommends: pkg.recommends.clone(),
         suggests: pkg.suggests.clone(),
@@ -196,14 +196,14 @@ fn build_source_package(
         predepends: pkg.predepends.clone(),
     }
     .render();
-    let homepage = lpt_lib::constants::homepage_for_github(&pkg.github_repo);
+    let homepage = lx_lib::constants::homepage_for_github(&pkg.github_repo);
     let sec = if pkg.section.trim().is_empty() {
-        lpt_lib::constants::DEFAULT_SECTION
+        lx_lib::constants::DEFAULT_SECTION
     } else {
         pkg.section.trim()
     };
     let pri = if pkg.priority.trim().is_empty() {
-        lpt_lib::constants::DEFAULT_PRIORITY
+        lx_lib::constants::DEFAULT_PRIORITY
     } else {
         pkg.priority.trim()
     };
@@ -214,8 +214,8 @@ fn build_source_package(
         section = sec,
         priority = pri,
         m = pkg.maintainer,
-        standards = lpt_lib::constants::STANDARDS_VERSION,
-        build_depends = lpt_lib::constants::DEBHELPER_COMPAT,
+        standards = lx_lib::constants::STANDARDS_VERSION,
+        build_depends = lx_lib::constants::DEBHELPER_COMPAT,
         desc = pkg.description,
     );
     std::fs::write(tree_dir.join("debian/control"), control)?;
@@ -230,14 +230,14 @@ fn build_source_package(
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
             tree_dir.join("debian/rules"),
-            std::fs::Permissions::from_mode(lpt_lib::constants::DIR_MODE),
+            std::fs::Permissions::from_mode(lx_lib::constants::DIR_MODE),
         )?;
     }
 
     // debian/changelog: shares the exact renderer (and thus the exact
     // reproducible-builds-aware date derivation) the binary .deb's
     // changelog uses, rather than an independent hardcoded date.
-    let changelog = lpt_lib::pkgmeta::render_changelog_entry(
+    let changelog = lx_lib::pkgmeta::render_changelog_entry(
         &pkg.name,
         &content_version,
         dist,
@@ -250,7 +250,7 @@ fn build_source_package(
     // debian/copyright: same renderer as the binary .deb's, so the source
     // package gets the full upstream license text/year handling instead of
     // a hardcoded year and a simplified, less-complete template.
-    let copyright = lpt_lib::pkgmeta::render_copyright(
+    let copyright = lx_lib::pkgmeta::render_copyright(
         &pkg.name,
         &pkg.github_repo,
         pkg.license.as_ref(),
@@ -266,20 +266,20 @@ fn build_source_package(
     // must contain a top-level <pkg>-<debian_version>/ directory (standard
     // upstream layout).
     //
-    // Reproducible-builds hygiene: `lpt_lib::debarchive::tar_xz_tree` walks
+    // Reproducible-builds hygiene: `lx_lib::debarchive::tar_xz_tree` walks
     // in sorted order and normalizes owner/group -- see its own doc
     // comment. `mtime` respects SOURCE_DATE_EPOCH (the reproducible-builds
     // .org standard) when set, else the release's own publish time, else a
     // fixed epoch -- the same precedence the binary .deb's mtime uses (see
-    // `lpt_lib::pkgmeta::reproducible_epoch`); previously this only ever
+    // `lx_lib::pkgmeta::reproducible_epoch`); previously this only ever
     // consulted SOURCE_DATE_EPOCH and fell straight to a fixed epoch,
     // ignoring `published_at` entirely. (xz itself has no mtime field to
     // normalize, unlike gzip -- only the tar entries carry one.)
-    let source_date_epoch = lpt_lib::pkgmeta::reproducible_epoch(pkg.published_at);
+    let source_date_epoch = lx_lib::pkgmeta::reproducible_epoch(pkg.published_at);
     let orig_path = workdir.join(&orig_name);
     let created_orig = if !orig_done {
         let upstream_dir = format!("{}-{debian_version}", pkg.name);
-        let orig_bytes = lpt_lib::debarchive::tar_xz_tree(
+        let orig_bytes = lx_lib::debarchive::tar_xz_tree(
             &tree_dir.join("usr"),
             &format!("{upstream_dir}/usr/"),
             source_date_epoch,
@@ -293,10 +293,10 @@ fn build_source_package(
     let orig_bytes = std::fs::read(&orig_path)
         .with_context(|| format!("failed to read '{}'", orig_path.display()))?;
 
-    // debian.tar.xz: just the debian/ metadata directory -- lpt never
+    // debian.tar.xz: just the debian/ metadata directory -- lx never
     // produces quilt patches, so there's no .pc/ or patches/ to include.
     let debian_bytes =
-        lpt_lib::debarchive::tar_xz_tree(&tree_dir.join("debian"), "debian/", source_date_epoch)
+        lx_lib::debarchive::tar_xz_tree(&tree_dir.join("debian"), "debian/", source_date_epoch)
             .context("failed to build debian.tar.xz")?;
     std::fs::write(workdir.join(&debian_tar_name), &debian_bytes)?;
 
@@ -323,14 +323,14 @@ fn build_source_package(
 /// Unsigned, matching the previous Docker-based behavior (which never
 /// signed either).
 pub fn render_dsc(pkg: &Pkg, content_version: &str, orig: &DscFile, debian: &DscFile) -> String {
-    let homepage = lpt_lib::constants::homepage_for_github(&pkg.github_repo);
+    let homepage = lx_lib::constants::homepage_for_github(&pkg.github_repo);
     let sec = if pkg.section.trim().is_empty() {
-        lpt_lib::constants::DEFAULT_SECTION
+        lx_lib::constants::DEFAULT_SECTION
     } else {
         pkg.section.trim()
     };
     let pri = if pkg.priority.trim().is_empty() {
-        lpt_lib::constants::DEFAULT_PRIORITY
+        lx_lib::constants::DEFAULT_PRIORITY
     } else {
         pkg.priority.trim()
     };
@@ -358,8 +358,8 @@ pub fn render_dsc(pkg: &Pkg, content_version: &str, orig: &DscFile, debian: &Dsc
         name = pkg.name,
         maintainer = pkg.maintainer,
         homepage = homepage,
-        standards = lpt_lib::constants::STANDARDS_VERSION,
-        build_depends = lpt_lib::constants::DEBHELPER_COMPAT,
+        standards = lx_lib::constants::STANDARDS_VERSION,
+        build_depends = lx_lib::constants::DEBHELPER_COMPAT,
         section = sec,
         priority = pri,
         o_sha1 = orig.sha1,
@@ -402,7 +402,7 @@ fn find_ref_deb(out_dir: &Path, pkg_name: &str, dist: &str) -> Result<Option<Str
 // ---------------------------------------------------------------------------
 
 /// Generate a `.src.rpm` (spec file + source tarball, built entirely
-/// in-process via `lpt_lib::rpmarchive::build_srpm`) for each distribution
+/// in-process via `lx_lib::rpmarchive::build_srpm`) for each distribution
 /// among the built `.rpm`s in `out_dir`. Mirrors [`generate`]'s shape: the
 /// source tarball content (the extracted upstream payload under `usr/`) is
 /// identical across dists and built once, reused across the per-dist spec
@@ -418,8 +418,8 @@ pub fn generate_rpm(out_dir: &Path, pkg: &Pkg) -> Result<()> {
     }
     println!("Generating RPM source packages for: {}", dists.join(", "));
 
-    let version = lpt_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
-    let source_date_epoch = lpt_lib::pkgmeta::reproducible_epoch(pkg.published_at);
+    let version = lx_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
+    let source_date_epoch = lx_lib::pkgmeta::reproducible_epoch(pkg.published_at);
     let source_name = format!("{}-{version}.tar.xz", pkg.name);
     let workdir = tempfile::tempdir().context("failed to create temp dir")?;
     let mut source_bytes: Option<Vec<u8>> = None;
@@ -467,18 +467,18 @@ fn build_srpm_for_dist(
 
     if source.bytes.is_none() {
         let tree_dir = workdir.join("tree");
-        lpt_lib::rpmarchive::extract(&out_dir.join(&ref_rpm), &tree_dir)
+        lx_lib::rpmarchive::extract(&out_dir.join(&ref_rpm), &tree_dir)
             .with_context(|| format!("failed to extract {ref_rpm}"))?;
         let _ = std::fs::remove_dir_all(tree_dir.join("usr/share/doc"));
         let bytes =
-            lpt_lib::debarchive::tar_xz_tree(&tree_dir.join("usr"), "usr/", source_date_epoch)
+            lx_lib::debarchive::tar_xz_tree(&tree_dir.join("usr"), "usr/", source_date_epoch)
                 .context("failed to build source tarball")?;
         *source.bytes = Some(bytes);
     }
     let source_bytes = source.bytes.as_ref().unwrap();
 
     let summary = pkg.description.clone();
-    let homepage = lpt_lib::constants::homepage_for_github(&pkg.github_repo);
+    let homepage = lx_lib::constants::homepage_for_github(&pkg.github_repo);
     let description = format!(
         "{summary}\nPackaged from the upstream release ({homepage}) for RPM-based distributions."
     );
@@ -487,7 +487,7 @@ fn build_srpm_for_dist(
     } else {
         pkg.license_spdx.trim()
     };
-    let meta = lpt_lib::rpmarchive::PackageMeta {
+    let meta = lx_lib::rpmarchive::PackageMeta {
         name: &pkg.name,
         version,
         release: &release,
@@ -506,7 +506,7 @@ fn build_srpm_for_dist(
 
     let srpm_name = format!("{}-{version}-{release}.src.rpm", pkg.name);
     let srpm_path = out_dir.join(&srpm_name);
-    lpt_lib::rpmarchive::build_srpm(
+    lx_lib::rpmarchive::build_srpm(
         &meta,
         (&spec_name, spec.as_bytes()),
         (source.name, source_bytes),
@@ -586,7 +586,7 @@ fn find_ref_rpm(
 /// of the binary rpm plugin (`src/plugins/rpm.rs`): no `Requires:`/relations
 /// rendering, since the binary plugin doesn't wire those either.
 fn render_rpm_spec(
-    meta: &lpt_lib::rpmarchive::PackageMeta,
+    meta: &lx_lib::rpmarchive::PackageMeta,
     maintainer: &str,
     homepage: &str,
     source_name: &str,
@@ -642,7 +642,7 @@ fn render_rpm_spec(
 /// "source package" format -- a real Arch source package *is* a `PKGBUILD`
 /// text file (see AUR convention), so there is no archive to build here.
 pub fn generate_arch(out_dir: &Path, pkg: &Pkg) -> Result<()> {
-    let version = lpt_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
+    let version = lx_lib::pkgmeta::strip_upstream_prefix(&pkg.version);
     let Some((ref_pkg, release)) = find_ref_arch(out_dir, &pkg.name, &version)? else {
         println!(
             "(no arch PKGBUILD: no built .pkg.tar.zst found in {})",
@@ -652,16 +652,16 @@ pub fn generate_arch(out_dir: &Path, pkg: &Pkg) -> Result<()> {
     };
     println!("Generating Arch PKGBUILD from {ref_pkg}");
 
-    let source_date_epoch = lpt_lib::pkgmeta::reproducible_epoch(pkg.published_at);
+    let source_date_epoch = lx_lib::pkgmeta::reproducible_epoch(pkg.published_at);
     let workdir = tempfile::tempdir().context("failed to create temp dir")?;
     let tree_dir = workdir.path().join("tree");
-    lpt_lib::archarchive::extract(&out_dir.join(&ref_pkg), &tree_dir)
+    lx_lib::archarchive::extract(&out_dir.join(&ref_pkg), &tree_dir)
         .with_context(|| format!("failed to extract {ref_pkg}"))?;
     let _ = std::fs::remove_dir_all(tree_dir.join("usr/share/doc"));
 
     let source_name = format!("{}-{version}.tar.xz", pkg.name);
     let source_bytes =
-        lpt_lib::debarchive::tar_xz_tree(&tree_dir.join("usr"), "usr/", source_date_epoch)
+        lx_lib::debarchive::tar_xz_tree(&tree_dir.join("usr"), "usr/", source_date_epoch)
             .context("failed to build source tarball")?;
     std::fs::write(out_dir.join(&source_name), &source_bytes)
         .with_context(|| format!("failed to write '{source_name}'"))?;
@@ -671,7 +671,7 @@ pub fn generate_arch(out_dir: &Path, pkg: &Pkg) -> Result<()> {
         h.update(&source_bytes);
         hex::encode(h.finalize())
     };
-    let homepage = lpt_lib::constants::homepage_for_github(&pkg.github_repo);
+    let homepage = lx_lib::constants::homepage_for_github(&pkg.github_repo);
     let license = if pkg.license_spdx.trim().is_empty() {
         "custom"
     } else {
@@ -738,7 +738,7 @@ fn render_pkgbuild(
     sha256: &str,
 ) -> String {
     format!(
-        "# Packaged from the upstream release for Arch Linux (generated by lpt).\n\
+        "# Packaged from the upstream release for Arch Linux (generated by lx).\n\
          pkgname={name}\n\
          pkgver={version}\n\
          pkgrel={release}\n\

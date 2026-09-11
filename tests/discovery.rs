@@ -1,6 +1,6 @@
-use lpt_lib::discovery::*;
+use lx_lib::discovery::*;
 
-use lpt_lib::github::{Asset, Release};
+use lx_lib::github::{Asset, Release};
 
 fn asset(name: &str) -> Asset {
     Asset {
@@ -18,6 +18,7 @@ fn release(assets: Vec<Asset>) -> Release {
         html_url: "https://github.com/x/y/releases".into(),
         assets,
         published_at: None,
+        body: None,
     }
 }
 

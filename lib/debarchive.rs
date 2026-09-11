@@ -307,7 +307,7 @@ pub fn extract(deb_path: &Path, dest: &Path) -> Result<()> {
 /// Upper bound on the decompressed size accepted when unpacking a
 /// zstd-compressed `data.tar.zst` member. `zstd::bulk::decompress`
 /// requires a pre-allocated output bound; 256 MiB comfortably covers any
-/// package lpt produces while still capping memory on corrupt input.
+/// package lx produces while still capping memory on corrupt input.
 const MAX_ZSTD_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
 
 #[allow(dead_code)]

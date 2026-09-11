@@ -3,17 +3,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-/// Tracks packages `lpt install`/`upgrade` have put on this system, so
+/// Tracks packages `lx install`/`upgrade` have put on this system, so
 /// `upgrade`/`remove`/`list` can operate without re-deriving state from
 /// dpkg's database. Lives per-user (not root-owned) under the local data
 /// dir, independent of where dpkg itself records package state -- dpkg
 /// remains the source of truth for whether a package is actually installed
 /// (see `dpkg_installed_version`); this manifest only remembers what
-/// *lpt* manages and which asset/tag it came from.
+/// *lx* manages and which asset/tag it came from.
+///
+/// Each package keeps its full generation history (oldest first, current
+/// last) rather than a single snapshot, so `lx rollback` can reinstall a
+/// prior version -- Nix profile generations, adapted for dpkg.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Manifest {
     #[serde(default)]
-    pub packages: BTreeMap<String, PackageEntry>,
+    pub packages: BTreeMap<String, Vec<PackageEntry>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,7 +35,7 @@ impl Manifest {
     pub fn path() -> Result<PathBuf> {
         let dir = dirs::data_local_dir()
             .ok_or_else(|| anyhow::anyhow!("could not determine a local data directory"))?
-            .join("lpt");
+            .join("lx");
         Ok(dir.join("installed.json"))
     }
 
@@ -53,11 +57,28 @@ impl Manifest {
         std::fs::write(&path, json).with_context(|| format!("failed to write '{}'", path.display()))
     }
 
+    /// Appends a new generation for `package` (does not overwrite history).
     pub fn record(&mut self, package: &str, entry: PackageEntry) {
-        self.packages.insert(package.to_string(), entry);
+        self.packages
+            .entry(package.to_string())
+            .or_default()
+            .push(entry);
     }
 
-    pub fn forget(&mut self, package: &str) -> Option<PackageEntry> {
+    pub fn forget(&mut self, package: &str) -> Option<Vec<PackageEntry>> {
         self.packages.remove(package)
+    }
+
+    /// The most recent (current) generation.
+    pub fn current(&self, package: &str) -> Option<&PackageEntry> {
+        self.packages.get(package).and_then(|gens| gens.last())
+    }
+
+    /// The generation `steps` back from current (`steps = 1` is the one
+    /// immediately before current). `None` if there aren't that many.
+    pub fn previous(&self, package: &str, steps: usize) -> Option<&PackageEntry> {
+        self.packages
+            .get(package)
+            .and_then(|gens| gens.iter().rev().nth(steps))
     }
 }

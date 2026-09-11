@@ -1,4 +1,4 @@
-use lpt_lib::plugins::source::gitlab::*;
+use lx_lib::plugins::source::gitlab::*;
 
 #[test]
 fn parses_gitlab_url() {
