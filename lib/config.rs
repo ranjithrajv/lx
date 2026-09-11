@@ -57,12 +57,15 @@ pub struct FormatOverrides {
 /// formats. Paths are in the build environment.
 ///
 /// - **deb**: `preinstall`→`DEBIAN/preinst`, `postinstall`→`DEBIAN/postinst`,
-///   `preremove`→`DEBIAN/prerm`, `postremove`→`DEBIAN/postrm` (all mode
-///   0755).
+///   `preremove`→`DEBIAN/prerm`, `postremove`→`DEBIAN/postrm`,
+///   `preupgrade_script`→`DEBIAN/preupgrade`,
+///   `postupgrade_script`→`DEBIAN/postupgrade` (all mode 0755).
 /// - **rpm**: `preinstall`→`%pre`, `postinstall`→`%post`,
 ///   `preremove`→`%preun`, `postremove`→`%postun`, `pretrans`→`%pretrans`,
-///   `posttrans`→`%posttrans`, `verify`→`%verify`.
-/// - **arch**: `preupgrade`→`pre_upgrade()`, `postupgrade`→`postupgrade()`
+///   `posttrans`→`%posttrans`, `verify`→`%verify`. `pretrans`/`posttrans`
+///   also serve as upgrade hooks (`%pretrans`/`%posttrans` run around the
+///   whole transaction).
+/// - **arch**: `preupgrade`→`pre_upgrade()`, `postupgrade`→`post_upgrade()`
 ///   inside a `.INSTALL` file.
 ///
 /// Fields not relevant to a given format are silently ignored by that
@@ -96,6 +99,14 @@ pub struct Scripts {
     /// Arch `post_upgrade()` hook (inside `.INSTALL`). Ignored by deb/rpm.
     #[serde(default)]
     pub postupgrade: String,
+    /// Pre-upgrade script path (deb: DEBIAN/preupgrade; rpm: %pretrans;
+    /// arch: pre_upgrade()). Runs before the package is upgraded.
+    #[serde(default)]
+    pub preupgrade_script: String,
+    /// Post-upgrade script path (deb: DEBIAN/postupgrade; rpm: %posttrans;
+    /// arch: post_upgrade()). Runs after the package is upgraded.
+    #[serde(default)]
+    pub postupgrade_script: String,
 }
 
 /// Debian-specific configuration (`deb:`), mirroring nfpm's `deb.` block.
@@ -144,6 +155,44 @@ pub struct DebConfig {
     /// `activate_noawait`). Ignored by rpm/arch.
     #[serde(default)]
     pub triggers_activate_noawait: Vec<String>,
+}
+
+/// RPM-specific configuration (`rpm:`), mirroring fpm's `--rpm-trigger-*`
+/// flags. RPM triggers are scripts that fire when another package is
+/// installed or removed. The four trigger types map to fpm's:
+/// - `pre_install` → `--rpm-trigger-before-install` (%triggerprein)
+/// - `post_install` → `--rpm-trigger-after-install` (%triggerin)
+/// - `pre_uninstall` → `--rpm-trigger-before-uninstall` (%triggerun)
+/// - `post_uninstall` → `--rpm-trigger-after-target-uninstall` (%triggerpostun)
+///
+/// Each entry is a `package: script_path` pair. The package name is the
+/// trigger condition (fire when this package is installed/removed), and
+/// the script path is the script to run. Mirrors fpm's
+/// `--rpm-trigger-after-install 'PACKAGE: FILEPATH'` syntax.
+///
+/// Note: the underlying `rpm` crate has limited trigger support. Trigger
+/// dependencies (the package condition) are emitted, but trigger scripts
+/// may require manual rpmbuild or a future rpm-crate version for full
+/// support. Ignored by deb/arch.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RpmConfig {
+    /// Trigger before install: `%triggerprein`. Each entry is
+    /// `"package: script_path"`.
+    #[serde(default)]
+    pub trigger_pre_install: Vec<String>,
+    /// Trigger after install: `%triggerin`. Each entry is
+    /// `"package: script_path"`.
+    #[serde(default)]
+    pub trigger_post_install: Vec<String>,
+    /// Trigger before uninstall: `%triggerun`. Each entry is
+    /// `"package: script_path"`.
+    #[serde(default)]
+    pub trigger_pre_uninstall: Vec<String>,
+    /// Trigger after uninstall: `%triggerpostun`. Each entry is
+    /// `"package: script_path"`.
+    #[serde(default)]
+    pub trigger_post_uninstall: Vec<String>,
 }
 
 /// Package signing configuration (`signature:`).
@@ -314,6 +363,9 @@ pub struct PackageConfig {
     /// Debian-specific configuration (debconf, triggers, rules). See [`DebConfig`].
     #[serde(default)]
     pub deb: DebConfig,
+    /// RPM-specific configuration (triggers). See [`RpmConfig`].
+    #[serde(default)]
+    pub rpm: RpmConfig,
     /// Package signing. See [`SignatureConfig`].
     #[serde(default)]
     pub signature: SignatureConfig,
@@ -448,6 +500,28 @@ pub struct PackageConfig {
     /// package manager by the caller/CI; lx itself never apt-gets).
     #[serde(default)]
     pub build_depends: Vec<String>,
+    /// Enable ERB-like templating for maintainer scripts (preinstall,
+    /// postinstall, preremove, postremove, preupgrade_script,
+    /// postupgrade_script). When true, script files are processed through
+    /// the template engine before being staged, replacing `<%= key %>`
+    /// expressions with package values.
+    ///
+    /// Available template variables:
+    /// - `<%= name %>` — package name
+    /// - `<%= version %>` — package version
+    /// - `<%= maintainer %>` — maintainer string
+    /// - `<%= description %>` — package description
+    /// - `<%= homepage %>` — homepage URL
+    /// - `<%= license %>` — SPDX license
+    /// - `<%= arch %>` — target architecture
+    /// - `<%= dist %>` — target distribution
+    /// - `<%= iteration %>` — build version/revision
+    /// - `<%= epoch %>` — epoch
+    /// - `<%= vendor %>` — vendor
+    /// - `<%= packager %>` — packager
+    /// - `<%= prefix %>` — install prefix
+    #[serde(default)]
+    pub template_scripts: bool,
     /// Extra flags appended to the cmake configure step.
     #[serde(default)]
     pub cmake_flags: Vec<String>,
@@ -924,6 +998,27 @@ impl PackageConfig {
                 self.umask.trim()
             );
         }
+        // RPM trigger entries must contain a ':' separator (package: script).
+        let trigger_lists = [
+            &self.rpm.trigger_pre_install,
+            &self.rpm.trigger_post_install,
+            &self.rpm.trigger_pre_uninstall,
+            &self.rpm.trigger_post_uninstall,
+        ];
+        for list in trigger_lists {
+            for entry in list {
+                let entry = entry.trim();
+                if entry.is_empty() {
+                    continue;
+                }
+                if !entry.contains(':') {
+                    bail!(
+                        "invalid rpm trigger entry '{}' (expected 'package: script_path')",
+                        entry
+                    );
+                }
+            }
+        }
         Ok(())
     }
 
@@ -942,6 +1037,17 @@ impl PackageConfig {
             bail!("prefix must not contain '..' components: '{}'", self.prefix);
         }
         Ok(())
+    }
+
+    /// Effective input source for language package managers ("npm", "python",
+    /// "gem"), or empty when not using an input source plugin.
+    pub fn effective_input_source(&self) -> String {
+        let s = self.input_source.trim();
+        if s.is_empty() {
+            String::new()
+        } else {
+            s.to_ascii_lowercase()
+        }
     }
 
     /// Effective source provider, normalized to lowercase ("github" or "gitlab").

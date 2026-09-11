@@ -86,7 +86,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
 
     let _ = full_version_epoch; // already in control
 
-    let mut extras = super::maintainer_script_members(cfg)?;
+    let mut extras = super::maintainer_script_members(ctx)?;
     // Deb-specific extras: debconf templates/config, rules, triggers.
     extras.extend(super::deb_extra_members(cfg)?);
     if !conffiles.is_empty() {

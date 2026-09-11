@@ -250,11 +250,13 @@ overrides:
 | Custom build commands | `build_commands: ["make all"]` |
 | Custom install commands | `install_commands: ["make install DESTDIR=$DESTDIR"]` |
 
-### Script templating (fpm only)
+### Script templating
 
-- `--template-scripts` enables ERB templating in packaging scripts
-- `--template-value KEY=VALUE` injects values into templates
-- Example: `--after-install "scripts/postinst" --template-scripts --template-value name=myapp`
+| | fpm | nfpm | lx |
+|---|---|---|---|
+| Template engine | ERB (`--template-scripts`) | ❌ | `<%= key %>` expressions (`template_scripts: true`) |
+| Template values | `--template-value KEY=VALUE` | — | Auto: name, version, maintainer, description, homepage, license, arch, dist, iteration, epoch, vendor, packager, prefix |
+| Example | `--after-install script.sh --template-scripts --template-value name=myapp` | — | `template_scripts: true` + `<%= name %>` in script |
 
 ---
 
@@ -391,6 +393,9 @@ How it works per build system:
 | Binary that runs on old distros | **lx** | `musl: true` — no glibc dependency |
 | No runtime dependencies | **nfpm** or **lx** | Both are single static binaries |
 | Maximum format coverage | **fpm** | 15+ formats |
+| RPM trigger scripts | **fpm** | Only tool with full %triggerin/%triggerun support |
+| Upgrade-time scripts (pre/post-upgrade) | **fpm** or **lx** | fpm for rpm/deb/pacman; lx for deb/rpm/arch |
+| Script templating in packaging scripts | **fpm** or **lx** | fpm uses ERB; lx uses `<%= key %>` expressions |
 
 ### Philosophical differences
 

@@ -409,6 +409,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     if cfg.is_source_mode() {
         return crate::sourcebuild::run(args, &cfg, token);
     }
+
     // Resolve effective package format: --format overrides package.yaml.
     let effective_format = args
         .format
@@ -433,6 +434,64 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         effective_format,
         plugin_for_matrix.description()
     );
+
+    // Input source plugins (language package managers): npm, python, gem.
+    // These fetch from language registries and produce a local payload
+    // directory, then flow through the normal packaging pipeline via run_local.
+    let input_source_name = cfg.effective_input_source();
+    if !input_source_name.is_empty() {
+        let input_plugin = crate::plugins::input::get_input_source(&input_source_name)
+            .ok_or_else(|| {
+                anyhow!(
+                    "unsupported input source '{}' (expected one of: {})",
+                    input_source_name,
+                    crate::plugins::input::input_source_names().join(", ")
+                )
+            })?;
+
+        // Check required tools.
+        for tool in input_plugin.required_tools() {
+            crate::sourcebuild::require_tool(tool)?;
+        }
+
+        // The package name for the registry is github_repo (there's no
+        // separate "npm_package" field — github_repo doubles as the
+        // external package identifier for non-forge sources).
+        let package_id = if cfg.github_repo.trim().is_empty() {
+            &cfg.package_name
+        } else {
+            &cfg.github_repo
+        };
+
+        println!(
+            "input source: {} ({}) — {}",
+            input_source_name,
+            package_id,
+            input_plugin.description()
+        );
+
+        let payload = input_plugin.fetch(package_id, &cfg.version, &cfg)?;
+
+        // Update config with resolved values.
+        if cfg.version.trim().is_empty() && !payload.resolved_version.is_empty() {
+            println!("  resolved version: {}", payload.resolved_version);
+            cfg.version = payload.resolved_version;
+        }
+        if cfg.description.is_empty() && !payload.description.is_empty() {
+            cfg.description = payload.description;
+        }
+
+        // Route through local packaging with the fetched payload directory.
+        cfg.local_payload = payload.files_dir.to_string_lossy().to_string();
+        cfg.artifact_format = "raw".to_string();
+        return run_local(
+            args,
+            cfg,
+            &effective_format,
+            plugin_for_matrix.as_ref(),
+            build_start,
+        );
+    }
 
     // Resolve source provider plugin (github vs gitlab) for auto-discovery.
     // Local builds skip the network entirely.

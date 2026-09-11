@@ -91,6 +91,7 @@ pub mod source_client;
 pub mod sourcebuild;
 pub mod summary;
 pub mod telemetry;
+pub mod templating;
 pub mod update;
 pub mod upgrade;
 pub mod validate;

@@ -348,7 +348,7 @@ pub fn generate_schema() -> serde_json::Value {
             "scripts": {
                 "type": "object",
                 "additionalProperties": false,
-                "description": "Maintainer scripts from the build environment. deb: preinstall→DEBIAN/preinst, postinstall→DEBIAN/postinst, preremove→DEBIAN/prerm, postremove→DEBIAN/postrm (all mode 0755). rpm: preinstall→%pre, postinstall→%post, preremove→%preun, postremove→%postun, pretrans→%pretrans, posttrans→%posttrans, verify→%verify. arch: preupgrade→pre_upgrade(), postupgrade→post_upgrade() in .INSTALL.",
+                "description": "Maintainer scripts from the build environment. deb: preinstall→DEBIAN/preinst, postinstall→DEBIAN/postinst, preremove→DEBIAN/prerm, postremove→DEBIAN/postrm, preupgrade_script→DEBIAN/preupgrade, postupgrade_script→DEBIAN/postupgrade (all mode 0755). rpm: preinstall→%pre, postinstall→%post, preremove→%preun, postremove→%postun, pretrans→%pretrans (also pre-upgrade), posttrans→%posttrans (also post-upgrade), verify→%verify. arch: preupgrade→pre_upgrade(), postupgrade→post_upgrade() in .INSTALL.",
                 "properties": {
                     "preinstall": {"type": "string", "description": "preinstall script path (deb: DEBIAN/preinst; rpm: %pre)"},
                     "postinstall": {"type": "string", "description": "postinstall script path (deb: DEBIAN/postinst; rpm: %post)"},
@@ -358,7 +358,36 @@ pub fn generate_schema() -> serde_json::Value {
                     "posttrans": {"type": "string", "description": "RPM %posttrans transaction script path (ignored by deb/arch)"},
                     "verify": {"type": "string", "description": "RPM %verify script path (ignored by deb/arch)"},
                     "preupgrade": {"type": "string", "description": "Arch pre_upgrade() hook path (ignored by deb/rpm)"},
-                    "postupgrade": {"type": "string", "description": "Arch post_upgrade() hook path (ignored by deb/rpm)"}
+                    "postupgrade": {"type": "string", "description": "Arch post_upgrade() hook path (ignored by deb/rpm)"},
+                    "preupgrade_script": {"type": "string", "description": "Pre-upgrade script path (deb: DEBIAN/preupgrade; rpm: %pretrans; arch: pre_upgrade())"},
+                    "postupgrade_script": {"type": "string", "description": "Post-upgrade script path (deb: DEBIAN/postupgrade; rpm: %posttrans; arch: post_upgrade())"}
+                }
+            },
+            "rpm": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "RPM-specific configuration: triggers. Mirrors fpm's --rpm-trigger-* flags. Ignored by deb/arch.",
+                "properties": {
+                    "trigger_pre_install": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers before install (%triggerprein). Each entry is 'package: script_path'."
+                    },
+                    "trigger_post_install": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers after install (%triggerin). Each entry is 'package: script_path'."
+                    },
+                    "trigger_pre_uninstall": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers before uninstall (%triggerun). Each entry is 'package: script_path'."
+                    },
+                    "trigger_post_uninstall": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers after uninstall (%triggerpostun). Each entry is 'package: script_path'."
+                    }
                 }
             },
             "deb": {
@@ -483,6 +512,10 @@ pub fn generate_schema() -> serde_json::Value {
             "gerrit_host": {
                 "type": "string",
                 "description": "Gerrit host (e.g. review.gerrithub.io or a self-hosted instance); falls back to $GERRIT_HOST"
+            },
+            "template_scripts": {
+                "type": "boolean",
+                "description": "Enable ERB-like templating for maintainer scripts. When true, <%= name %>, <%= version %>, <%= maintainer %>, <%= description %>, <%= homepage %>, <%= license %>, <%= arch %>, <%= dist %>, <%= iteration %>, <%= epoch %>, <%= vendor %>, <%= packager %>, <%= prefix %> expressions are replaced at build time. Mirrors fpm --template-scripts."
             }
         }
     })

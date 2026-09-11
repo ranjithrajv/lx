@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+### fpm feature parity: pre/post-upgrade, RPM triggers, script templating
+
+- **Pre-/post-upgrade scripts**: `scripts.preupgrade_script` and
+  `scripts.postupgrade_script` map to `DEBIAN/preupgrade` +
+  `DEBIAN/postupgrade` (deb), `%pretrans`/`%posttrans` (rpm), and
+  `pre_upgrade()`/`post_upgrade()` (arch). Mirrors fpm's
+  `--before-upgrade`/`--after-upgrade`.
+- **RPM triggers**: new `rpm:` config block with `trigger_pre_install`,
+  `trigger_post_install`, `trigger_pre_uninstall`,
+  `trigger_post_uninstall`. Each entry is `"package: script_path"`.
+  Trigger dependencies are emitted with the correct RPM trigger flags
+  (`TRIGGERPREIN`, `TRIGGERIN`, `TRIGGERUN`, `TRIGGERPOSTUN`). Scripts
+  are best-effort (full `%triggerin`/`%triggerun` scriptlets need
+  rpmbuild or a future rpm-crate version). Mirrors fpm's 4
+  `--rpm-trigger-*` flags.
+- **Script templating**: `template_scripts: true` enables ERB-like
+  `<%= key %>` substitution in all maintainer scripts. 13 variables are
+  auto-populated: `name`, `version`, `maintainer`, `description`,
+  `homepage`, `license`, `arch`, `dist`, `iteration`, `epoch`, `vendor`,
+  `packager`, `prefix`. Mirrors fpm's `--template-scripts`.
+- **Glob patterns in `contents:`**: `src` patterns with `*`, `?`, `[` are
+  expanded via the `glob` crate. `disable_globbing: true` opts out.
+  Mirrors fpm's glob support in `contents:`.
+- **RPM relation fields**: `depends`, `provides`, `conflicts`, `replaces`,
+  `recommends`, `suggests`, `breaks` now map to rpm-crate dependency
+  tags (`requires`, `provides`, `conflicts`, `obsoletes`, `recommends`,
+  `suggests`). RPM packages now carry proper dependency metadata.
+- **Packager field**: new `packager:` config field maps to the RPM
+  `packager` header tag (falls back to maintainer). Mirrors fpm's
+  `--rpm-packager` and nfpm's `rpm.packager`.
+- **Arch variant**: new `arch_variant:` field (e.g. `amd64v3`) appends
+  to the `Architecture` control field. Mirrors nfpm's
+  `deb.arch_variant`.
+- **Version schema**: new `version_schema: ` field (`semver` default or
+  `none`). Semver mode strips `v` prefix and normalizes. Mirrors nfpm's
+  `version_schema`.
+- **Umask control**: new `umask:` field (octal, e.g. `0o002`) masks file
+  permissions for all staged files. Mirrors nfpm's `umask`.
+- **Per-format relation overrides**: `overrides: {deb: {depends: ...}}`
+  lets the same field have different values per format. Mirrors nfpm's
+  `overrides`.
+- **Suggests + Pre-Depends**: `suggests:` and `predepends:` fields now
+  render `Suggests:` and `Pre-Depends:` control lines. Mirrors nfpm.
+
 ### Musl-static builds for old-distro portability
 
 - `musl: true` in package.yaml produces a musl-static binary with no

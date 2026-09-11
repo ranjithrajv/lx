@@ -29,7 +29,7 @@ impl LxCommunitySource {
         }
     }
 
-    fn recipes(&self) -> Result<BTreeMap<String, RecipeEntry>> {
+    pub fn recipes(&self) -> Result<BTreeMap<String, RecipeEntry>> {
         let root = self.cache.join(RECIPES_DIR);
         if !root.is_dir() {
             return Ok(BTreeMap::new());

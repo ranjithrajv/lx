@@ -522,6 +522,7 @@ lx index update               # refresh the repology cache from the API
 lx search --distro eza        # show distro versions alongside org results
 lx index status               # show host distro's repology identity
 lx index outdated             # list packages where host distro lags upstream
+lx index coverage             # find popular packages LX does not yet cover
 ```
 
 With `--distro`, search results show the host distro's version, the newest
@@ -534,6 +535,26 @@ eza    A modern, maintained replacement for ls [latest-debs] — host: 0.18.0 (n
 `lx index outdated` produces a gap list — packages where your distro ships an
 older version than upstream — which is exactly the set the LX community recipe
 index can fill.
+
+`lx index coverage` compares repology's project set against the recipe index
+and latest-debs org, then reports the gap — popular projects (by repo count)
+that LX does not yet package. This validates `lx search` result quality: if a
+project is everywhere in repology but missing from the index, `lx search`
+won't find it, and that's a recipe worth contributing.
+
+```
+$ lx index coverage --min-repos 10
+coverage: repology vs. LX (recipe index + latest-debs org)
+  repology projects (≥10 repos): 34
+  covered by LX:                 4 (11%)
+  gap (not yet packaged):        30
+
+top gap-fillers by repo count (showing 10 of 30):
+  uv            408 repos
+  python        380 repos
+  node          350 repos
+  ...
+```
 
 The LX index runs `lx build` + `--sbom` on every merged recipe in CI, so
 community contributions ship prebuilt binaries without the contributor

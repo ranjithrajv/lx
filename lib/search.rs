@@ -57,12 +57,12 @@ pub struct SearchArgs {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct OrgRepo {
-    name: String,
-    description: Option<String>,
+pub struct OrgRepo {
+    pub name: String,
+    pub description: Option<String>,
 }
 
-fn org_repos(org: &str, token: Option<&str>) -> Result<Vec<OrgRepo>> {
+pub fn org_repos(org: &str, token: Option<&str>) -> Result<Vec<OrgRepo>> {
     let client = crate::http::new_client()?;
     let auth: Option<(&'static str, String)> = token
         .map(str::to_string)

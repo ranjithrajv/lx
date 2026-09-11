@@ -95,6 +95,44 @@ impl Plugin for RpmPlugin {
         let rpm_dest = out_dir.join(&rpm_name);
 
         let relations = cfg.effective_relations("rpm");
+        // Parse RPM triggers from config. Each trigger is a
+        // "package: script_path" pair. Scripts are read relative to the
+        // current working directory (the build environment).
+        let trigger_specs = lx_lib::rpmarchive::parse_rpm_triggers(
+            &cfg.rpm.trigger_pre_install,
+            rpm::DependencyFlags::TRIGGERPREIN,
+            std::path::Path::new("."),
+        )?;
+        let mut triggers: Vec<lx_lib::rpmarchive::RpmTrigger> = Vec::new();
+        let mut trigger_flags: Vec<rpm::DependencyFlags> = Vec::new();
+        for (trigger, flags) in trigger_specs {
+            triggers.push(trigger);
+            trigger_flags.push(flags);
+        }
+        for (trigger, flags) in lx_lib::rpmarchive::parse_rpm_triggers(
+            &cfg.rpm.trigger_post_install,
+            rpm::DependencyFlags::TRIGGERIN,
+            std::path::Path::new("."),
+        )? {
+            triggers.push(trigger);
+            trigger_flags.push(flags);
+        }
+        for (trigger, flags) in lx_lib::rpmarchive::parse_rpm_triggers(
+            &cfg.rpm.trigger_pre_uninstall,
+            rpm::DependencyFlags::TRIGGERUN,
+            std::path::Path::new("."),
+        )? {
+            triggers.push(trigger);
+            trigger_flags.push(flags);
+        }
+        for (trigger, flags) in lx_lib::rpmarchive::parse_rpm_triggers(
+            &cfg.rpm.trigger_post_uninstall,
+            rpm::DependencyFlags::TRIGGERPOSTUN,
+            std::path::Path::new("."),
+        )? {
+            triggers.push(trigger);
+            trigger_flags.push(flags);
+        }
         let opts = lx_lib::rpmarchive::BuildOptions {
             pre_install: Some(cfg.scripts.preinstall.trim()),
             post_install: Some(cfg.scripts.postinstall.trim()),
@@ -114,6 +152,8 @@ impl Plugin for RpmPlugin {
                 &relations.provides,
                 &relations.breaks,
             ),
+            triggers,
+            trigger_flags,
         };
         let meta = lx_lib::rpmarchive::PackageMeta {
             name: &cfg.package_name,

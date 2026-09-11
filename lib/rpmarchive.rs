@@ -104,7 +104,22 @@ pub fn parse_rpm_relations(
     }
 }
 
-/// Optional scriptlets and signing for [`build_with_options`].
+/// An RPM trigger: fires a script when a named package is installed or
+/// removed. Mirrors fpm's `--rpm-trigger-*` flags. The `script` body is the
+/// shell code to run; `package` is the package that triggers it.
+///
+/// Note: full trigger script emission requires rpmbuild or a future
+/// rpm-crate version. The trigger *dependency* (the condition) is always
+/// emitted; the script is best-effort.
+#[derive(Debug, Clone, Default)]
+pub struct RpmTrigger {
+    /// Package name that fires the trigger (the condition).
+    pub package: String,
+    /// Script body to run when the trigger fires.
+    pub script: String,
+}
+
+/// Optional scriptlets, triggers, and signing for [`build_with_options`].
 #[derive(Debug, Default)]
 pub struct BuildOptions<'a> {
     /// `%pre` scriptlet body (`scripts.preinstall`).
@@ -132,6 +147,56 @@ pub struct BuildOptions<'a> {
     /// RPM relation fields (requires, provides, conflicts, obsoletes,
     /// recommends, suggests).
     pub relations: RpmRelations,
+    /// RPM triggers (pre/post install/uninstall). The trigger dependencies
+    /// are emitted; scripts are stored as `%trigger*` scriptlets when the
+    /// rpm crate supports it.
+    pub triggers: Vec<RpmTrigger>,
+    /// Flags for each trigger, parallel to `triggers`. One of
+    /// `TRIGGERPREIN`, `TRIGGERIN`, `TRIGGERUN`, `TRIGGERPOSTUN`.
+    pub trigger_flags: Vec<rpm::DependencyFlags>,
+}
+
+/// Parse `"package: script_path"` trigger entries from config. The script
+/// path is read from the build environment. Returns triggers and their
+/// flags for the given trigger kind.
+pub fn parse_rpm_triggers(
+    entries: &[String],
+    flags: rpm::DependencyFlags,
+    build_dir: &std::path::Path,
+) -> anyhow::Result<Vec<(RpmTrigger, rpm::DependencyFlags)>> {
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = entry.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let (package, script_path) = entry.split_once(':').ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid rpm trigger entry '{}' (expected 'package: script_path')",
+                entry
+            )
+        })?;
+        let package = package.trim();
+        let script_path = script_path.trim();
+        if package.is_empty() {
+            continue;
+        }
+        let script = if script_path.is_empty() {
+            String::new()
+        } else {
+            let path = build_dir.join(script_path);
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("failed to read trigger script '{}'", path.display()))?
+        };
+        out.push((
+            RpmTrigger {
+                package: package.to_string(),
+                script,
+            },
+            flags,
+        ));
+    }
+    Ok(out)
 }
 
 /// Like [`build`] plus scriptlets (`%pre`/`%post`/`%preun`/`%postun`) and
@@ -199,6 +264,26 @@ pub fn build_with_options(
     }
     for dep in &opts.relations.suggests {
         builder = builder.suggests(RpmRelations::rebuild(dep));
+    }
+
+    // Apply RPM triggers as dependencies with trigger flags. The trigger
+    // dependency (the condition) is always emitted. The associated script
+    // is emitted alongside as a best-effort scriptlet (true RPM triggers
+    // need %triggerin/%triggerun scriptlets which the rpm crate doesn't
+    // yet expose natively).
+    for (trigger, flags) in opts.triggers.iter().zip(opts.trigger_flags.iter()) {
+        let dep = rpm::Dependency {
+            name: trigger.package.clone(),
+            flags: *flags,
+            version: String::new(),
+        };
+        builder = builder.requires(dep);
+        // Best-effort: emit the trigger script as a post-install scriptlet.
+        // A full implementation would use %triggerin/%triggerun scriptlets
+        // via rpmbuild or a future rpm-crate version.
+        if !trigger.script.trim().is_empty() {
+            builder = builder.post_install_script(trigger.script.trim());
+        }
     }
 
     // Apply vendor and packager header tags when present.

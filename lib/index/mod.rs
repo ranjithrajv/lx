@@ -152,6 +152,9 @@ pub enum IndexCommands {
     Outdated(OutdatedOpts),
     /// Show the host distro's repology identity and tracked repo count
     Status,
+    /// Compare repology projects against the recipe index + latest-debs org
+    /// to find popular packages LX does not yet cover
+    Coverage(CoverageOpts),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -169,6 +172,19 @@ pub struct OutdatedOpts {
     /// Limit output to N results
     #[arg(long, default_value = "50")]
     pub limit: usize,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CoverageOpts {
+    /// Only count repology projects with at least this many repos
+    #[arg(long, default_value = "5")]
+    pub min_repos: usize,
+    /// Show the top N gap-fillers
+    #[arg(long, default_value = "30")]
+    pub limit: usize,
+    /// Only show the gap list (skip the covered/totals breakdown)
+    #[arg(long)]
+    pub gaps_only: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -216,6 +232,7 @@ pub fn run(args: IndexArgs, token: Option<&str>) -> Result<()> {
         IndexCommands::Remove(o) => run_remove(o),
         IndexCommands::Outdated(o) => run_outdated(o),
         IndexCommands::Status => run_status(),
+        IndexCommands::Coverage(o) => run_coverage(o),
     }
 }
 
@@ -457,6 +474,121 @@ fn run_status() -> Result<()> {
                 "fresh"
             }
         );
+    }
+    Ok(())
+}
+
+fn run_coverage(opts: CoverageOpts) -> Result<()> {
+    let reg = registry::Registry::ensure_exists()?;
+    // 1. Load repology cache.
+    let rep = reg
+        .sources
+        .iter()
+        .find(|s| matches!(s.kind, registry::SourceKind::Repology) && s.enabled)
+        .context("repology index not enabled; run `lx index update` first")?;
+    let rep_src = repology::RepologySource::new(&rep.name);
+    let cache = rep_src.load_cache()?;
+    if cache.is_empty() {
+        println!("no repology data cached. Run `lx index update` first.");
+        return Ok(());
+    }
+
+    // 2. Build the set of names LX already covers.
+    let mut covered = std::collections::HashSet::new();
+
+    // Embedded templates (e.g. "rust/eza" → "eza").
+    for (name, _) in crate::wizard::EMBEDDED_TEMPLATES {
+        let short = name.rsplit('/').next().unwrap_or(name);
+        covered.insert(short.to_ascii_lowercase());
+    }
+
+    // Community recipe index.
+    let comm = lx_community::LxCommunitySource::new("lx-community");
+    if let Ok(recipes) = comm.recipes() {
+        for name in recipes.keys() {
+            covered.insert(name.to_ascii_lowercase());
+        }
+    }
+
+    // latest-debs org repos (strip "-debian" suffix).
+    if let Ok(repos) = crate::search::org_repos(crate::debs::LATEST_DEBS_ORG, None) {
+        for repo in &repos {
+            if let Some(pkg) = repo.name.strip_suffix("-debian") {
+                covered.insert(pkg.to_ascii_lowercase());
+            }
+        }
+    }
+
+    // 3. Partition repology projects into covered vs gap.
+    let mut gap: Vec<(String, usize)> = Vec::new();
+    let mut covered_count = 0;
+    let mut total_projects = 0;
+    for (name, project) in &cache {
+        let (newest, repos, _outdated, _vulnerable) =
+            repology::RepologySource::distro_summary(project);
+        if repos < opts.min_repos {
+            continue;
+        }
+        // Skip rolling/unique-only projects (e.g. homebrew HEAD) with no
+        // meaningful newest version.
+        if newest.is_none() {
+            continue;
+        }
+        total_projects += 1;
+        if covered.contains(&name.to_ascii_lowercase()) {
+            covered_count += 1;
+        } else {
+            gap.push((name.clone(), repos));
+        }
+    }
+
+    // Sort gap by repo count descending (most popular un-packed first).
+    gap.sort_by(|a, b| b.1.cmp(&a.1));
+
+    // 4. Print.
+    if !opts.gaps_only {
+        println!("coverage: repology vs. LX (recipe index + latest-debs org)");
+        let pct = if total_projects > 0 {
+            (covered_count * 100) / total_projects
+        } else {
+            0
+        };
+        println!(
+            "  repology projects (≥{} repos): {}",
+            opts.min_repos, total_projects
+        );
+        println!("  covered by LX:                 {covered_count} ({pct}%)");
+        println!("  gap (not yet packaged):        {}", gap.len());
+        println!(
+            "  coverage sources: {} embedded templates, {} community recipes, latest-debs org",
+            crate::wizard::EMBEDDED_TEMPLATES.len(),
+            comm.recipes().map(|r| r.len()).unwrap_or(0)
+        );
+        println!();
+    }
+
+    if gap.is_empty() {
+        if !opts.gaps_only {
+            println!("all popular repology projects are covered by LX.");
+        }
+        return Ok(());
+    }
+
+    if !opts.gaps_only {
+        println!(
+            "top gap-fillers by repo count (showing {} of {}):",
+            opts.limit.min(gap.len()),
+            gap.len()
+        );
+    }
+    let pad = gap
+        .iter()
+        .take(opts.limit)
+        .map(|(n, _)| n.len())
+        .max()
+        .unwrap_or(0);
+    for (name, repos) in gap.iter().take(opts.limit) {
+        println!("  {:<pad$}  {} repos", name, repos);
     }
     Ok(())
 }

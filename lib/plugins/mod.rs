@@ -14,6 +14,7 @@
 pub mod arch;
 pub mod build_system;
 pub mod deb;
+pub mod input;
 pub mod rpm;
 pub mod source;
 
@@ -496,15 +497,27 @@ fn stage_contents_entry(
 /// Read the configured maintainer scripts from the build environment and
 /// render them as deb control members (`preinst`/`postinst`/`prerm`/
 /// `postrm`, mode 0755). Empty when none are configured.
+///
+/// When `cfg.template_scripts` is true, each script file is processed
+/// through the template engine before being staged, replacing `<%= key %>`
+/// expressions with package values from the build context.
 pub fn maintainer_script_members(
-    cfg: &PackageConfig,
+    ctx: &BuildContext,
 ) -> anyhow::Result<Vec<lx_lib::debarchive::ControlMember>> {
+    let cfg = ctx.cfg;
     let pairs = [
         ("preinst", cfg.scripts.preinstall.trim()),
         ("postinst", cfg.scripts.postinstall.trim()),
         ("prerm", cfg.scripts.preremove.trim()),
         ("postrm", cfg.scripts.postremove.trim()),
+        ("preupgrade", cfg.scripts.preupgrade_script.trim()),
+        ("postupgrade", cfg.scripts.postupgrade_script.trim()),
     ];
+    let template_context = if cfg.template_scripts {
+        Some(lx_lib::templating::build_context(cfg, ctx.job))
+    } else {
+        None
+    };
     let mut members = Vec::new();
     for (name, path) in pairs {
         if path.is_empty() {
@@ -512,6 +525,13 @@ pub fn maintainer_script_members(
         }
         let content = std::fs::read(path)
             .map_err(|e| anyhow::anyhow!("failed to read {} script '{}': {e}", name, path))?;
+        let content = if let Some(ref tmpl_ctx) = template_context {
+            let script_text = String::from_utf8_lossy(&content);
+            let rendered = lx_lib::templating::render_template(&script_text, tmpl_ctx);
+            rendered.into_bytes()
+        } else {
+            content
+        };
         members.push(lx_lib::debarchive::ControlMember {
             name: name.to_string(),
             content,
