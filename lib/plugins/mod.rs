@@ -60,6 +60,40 @@ pub struct BuildContext<'a> {
     pub sign_method: &'a str,
 }
 
+// ---------------------------------------------------------------------------
+// Shared helpers for packager plugins (DRY: deb/rpm/arch all used to duplicate these)
+// ---------------------------------------------------------------------------
+
+/// Resolve the homepage URL from config, accounting for self-hosted GitLab.
+pub fn resolve_homepage(cfg: &PackageConfig) -> String {
+    if cfg.effective_forge_source() == "gitlab" {
+        lx_lib::constants::homepage_for_gitlab(
+            &cfg.github_repo,
+            cfg.gitlab_host.as_deref().unwrap_or(""),
+        )
+    } else {
+        lx_lib::constants::homepage_for_github(&cfg.github_repo)
+    }
+}
+
+/// Compute `{build_version}+{dist}` formatted for non-debian release strings
+/// (the `+` is replaced with `.` per RPM/Arch conventions).
+pub fn format_release(build_version: &str, dist: &str) -> String {
+    format!("{build_version}+{dist}").replace('+', ".")
+}
+
+/// Create the sibling output directory `__out` next to the staging root.
+/// The archive builders tar/zst the whole staging tree, so an in-tree out
+/// dir would package the artifact into itself.
+pub fn output_dir(staging_root: &Path) -> anyhow::Result<PathBuf> {
+    let dir = staging_root
+        .parent()
+        .context("staging root has no parent")?
+        .join("__out");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
+}
+
 /// A package-format plugin.
 ///
 /// Implementors are stateless; they are registered once in [`registry`].

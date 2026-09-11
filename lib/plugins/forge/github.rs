@@ -27,8 +27,7 @@ impl ForgeSource for GithubForgeSource {
     }
 
     fn parse_url(&self, url: &str) -> Option<String> {
-        // Mirrors build.rs::parse_github_url but returns repo.
-        crate::build::parse_github_url(url)
+        parse_github_url(url)
     }
 
     fn latest_release(
@@ -104,4 +103,22 @@ impl ForgeSource for GithubForgeSource {
         let client = lx_lib::source_client::new_client_for::<GitHubClient>(token, None)?;
         client.raw_get(url)
     }
+}
+
+/// Parse a bare `https://github.com/<owner>/<repo>` URL into `"owner/repo"`,
+/// ignoring any further path (a `.git` suffix, `/releases`, a tag, etc.).
+/// Returns `None` for anything that isn't a github.com URL, so callers can
+/// fall through to treating the argument as a package.yaml path.
+pub fn parse_github_url(s: &str) -> Option<String> {
+    let host = lx_lib::constants::DEFAULT_GITHUB_HOST;
+    let rest = s
+        .strip_prefix(&format!("https://{host}/"))
+        .or_else(|| s.strip_prefix(&format!("http://{host}/")))?;
+    let mut parts = rest.trim_end_matches('/').splitn(3, '/');
+    let owner = parts.next()?;
+    let repo = parts.next()?.trim_end_matches(".git");
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+    Some(format!("{owner}/{repo}"))
 }

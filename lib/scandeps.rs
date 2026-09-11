@@ -59,23 +59,25 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
             cfg.validate()?;
             cfg
         }
-        None => match crate::build::parse_github_url(&args.config.to_string_lossy()) {
-            Some(github_repo) => {
-                println!("Zero-config scan of {github_repo} (no package.yaml)");
-                let cfg = PackageConfig {
-                    package_name: github_repo
-                        .split('/')
-                        .next_back()
-                        .unwrap_or(&github_repo)
-                        .to_string(),
-                    github_repo,
-                    ..PackageConfig::default()
-                };
-                cfg.validate()?;
-                cfg
+        None => {
+            match crate::plugins::forge::github::parse_github_url(&args.config.to_string_lossy()) {
+                Some(github_repo) => {
+                    println!("Zero-config scan of {github_repo} (no package.yaml)");
+                    let cfg = PackageConfig {
+                        package_name: github_repo
+                            .split('/')
+                            .next_back()
+                            .unwrap_or(&github_repo)
+                            .to_string(),
+                        github_repo,
+                        ..PackageConfig::default()
+                    };
+                    cfg.validate()?;
+                    cfg
+                }
+                None => PackageConfig::load(&args.config)?,
             }
-            None => PackageConfig::load(&args.config)?,
-        },
+        }
     };
     if let Some(v) = &args.version {
         cfg.version = v.clone();

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use lx_lib::build::*;
+use lx_lib::plugins::forge::github::parse_github_url;
 
 #[test]
 fn verify_method_as_str_names_every_variant() {

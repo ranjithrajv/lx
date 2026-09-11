@@ -26,7 +26,7 @@ impl ForgeSource for GithubSyncForgeSource {
     }
 
     fn parse_url(&self, url: &str) -> Option<String> {
-        crate::build::parse_github_url(url)
+        super::github::parse_github_url(url)
     }
 
     fn latest_release(

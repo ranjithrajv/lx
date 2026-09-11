@@ -97,16 +97,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         });
     }
 
-    // Temp out dir for the .deb file: a SIBLING of the staging root, not
-    // inside it -- debarchive tars the whole staging tree, so an in-tree
-    // out dir would package the .deb into itself (lintian:
-    // non-standard-toplevel-dir [__out/]).
-    let out_dir = ctx
-        .staging_root
-        .parent()
-        .context("staging root has no parent")?
-        .join("__out");
-    std::fs::create_dir_all(&out_dir)?;
+    let out_dir = super::output_dir(ctx.staging_root)?;
     let deb_dest = out_dir.join(&deb_name);
 
     let comp = cfg.effective_compression();
@@ -163,14 +154,7 @@ pub fn render_control(
     );
     // Per-format overrides applied for "deb".
     let relations = cfg.effective_relations("deb").render();
-    let homepage = if cfg.effective_forge_source() == "gitlab" {
-        lx_lib::constants::homepage_for_gitlab(
-            &cfg.github_repo,
-            cfg.gitlab_host.as_deref().unwrap_or(""),
-        )
-    } else {
-        lx_lib::constants::homepage_for_github(&cfg.github_repo)
-    };
+    let homepage = super::resolve_homepage(cfg);
     let extra_fields = super::render_extra_fields(&cfg.fields);
     // Append arch variant to architecture (e.g. "amd64v3") when set.
     let arch = if cfg.effective_arch_variant().is_empty() {

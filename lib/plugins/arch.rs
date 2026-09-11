@@ -44,10 +44,7 @@ impl Packager for ArchPackager {
         let _conffiles = super::apply_contents(cfg, ctx.staging_root, "arch")?;
 
         let version = ctx.debian_version.to_string();
-        // Arch's pkgver is {version}-{release}; release encodes build_version
-        // + dist. For Arch we keep dist-agnostic (arch is rolling) but
-        // preserve dist in release for matrix uniqueness, e.g. "1.arch".
-        let release = format!("{}+{}", ctx.build_version, job.dist).replace('+', ".");
+        let release = super::format_release(ctx.build_version, &job.dist);
         // Filename: {name}-{version}-{release}-{arch}.pkg.tar.zst
         // Example: hello-1.0-1.arch-x86_64.pkg.tar.zst
         let arch_name = to_pacman_arch(&job.arch);
@@ -56,25 +53,10 @@ impl Packager for ArchPackager {
             cfg.package_name, version, release, arch_name
         );
 
-        // Sibling of the staging root, not inside it -- the payload is
-        // staged from the whole staging tree, so an in-tree out dir
-        // would package the artifact into itself.
-        let out_dir = ctx
-            .staging_root
-            .parent()
-            .context("staging root has no parent")?
-            .join("__out");
-        std::fs::create_dir_all(&out_dir)?;
+        let out_dir = super::output_dir(ctx.staging_root)?;
         let dest = out_dir.join(&file_name);
 
-        let url = if cfg.effective_forge_source() == "gitlab" {
-            lx_lib::constants::homepage_for_gitlab(
-                &cfg.github_repo,
-                cfg.gitlab_host.as_deref().unwrap_or(""),
-            )
-        } else {
-            lx_lib::constants::homepage_for_github(&cfg.github_repo)
-        };
+        let url = super::resolve_homepage(cfg);
         let description = cfg.effective_description();
         let license = if cfg.license_spdx.is_empty() {
             "custom:unknown"

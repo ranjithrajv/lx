@@ -343,7 +343,9 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             // Fallback for plain package.yaml path; also handle legacy
             // `parse_github_url` for backward compat (though parse_any_forge_url
             // already covers it).
-            if let Some(github_repo) = parse_github_url(&args.config.to_string_lossy()) {
+            if let Some(github_repo) =
+                crate::plugins::forge::github::parse_github_url(&args.config.to_string_lossy())
+            {
                 println!("Zero-config build from {github_repo} (no package.yaml)");
                 args.source = true;
                 let cfg = PackageConfig {
@@ -1335,24 +1337,6 @@ pub(crate) fn resolve_manual(
             .or_insert(asset_from_name(release, &m.asset));
     }
     Ok(out)
-}
-
-/// Parse a bare `https://github.com/<owner>/<repo>` URL into `"owner/repo"`,
-/// ignoring any further path (a `.git` suffix, `/releases`, a tag, etc.).
-/// Returns `None` for anything that isn't a github.com URL, so callers can
-/// fall through to treating the argument as a package.yaml path.
-pub fn parse_github_url(s: &str) -> Option<String> {
-    let host = lx_lib::constants::DEFAULT_GITHUB_HOST;
-    let rest = s
-        .strip_prefix(&format!("https://{host}/"))
-        .or_else(|| s.strip_prefix(&format!("http://{host}/")))?;
-    let mut parts = rest.trim_end_matches('/').splitn(3, '/');
-    let owner = parts.next()?;
-    let repo = parts.next()?.trim_end_matches(".git");
-    if owner.is_empty() || repo.is_empty() {
-        return None;
-    }
-    Some(format!("{owner}/{repo}"))
 }
 
 /// Surface a resolved release's prerelease/draft status. Both fields were
