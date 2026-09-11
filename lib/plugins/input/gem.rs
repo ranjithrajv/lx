@@ -67,11 +67,7 @@ impl InputSource for GemInputSource {
         // Find the downloaded .gem file.
         let gem_file = std::fs::read_dir(&download_dir)?
             .filter_map(|e| e.ok())
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .ends_with(".gem")
-            })
+            .find(|e| e.file_name().to_string_lossy().ends_with(".gem"))
             .context("gem fetch produced no .gem file")?;
 
         let gem_path = gem_file.path();
@@ -122,7 +118,8 @@ fn extract_gem_version(file_name: &str) -> Option<&str> {
     let stem = file_name.strip_suffix(".gem")?;
     // Find first "-" followed by a digit (version start).
     for (i, c) in stem.char_indices() {
-        if c == '-' && i + 1 < stem.len() && stem[i + 1..].starts_with(|c: char| c.is_ascii_digit()) {
+        if c == '-' && i + 1 < stem.len() && stem[i + 1..].starts_with(|c: char| c.is_ascii_digit())
+        {
             // Version may end at the next "-" (platform) or end of string.
             let rest = &stem[i + 1..];
             if let Some(end) = rest.find('-') {

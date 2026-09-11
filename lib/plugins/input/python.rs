@@ -131,7 +131,8 @@ fn extract_sdist_version(file_name: &str) -> Option<&str> {
     // sdist naming: name-version where name may contain hyphens but
     // version starts with a digit.
     for (i, c) in stem.char_indices().rev() {
-        if c == '-' && i + 1 < stem.len() && stem[i + 1..].starts_with(|c: char| c.is_ascii_digit()) {
+        if c == '-' && i + 1 < stem.len() && stem[i + 1..].starts_with(|c: char| c.is_ascii_digit())
+        {
             return Some(&stem[i + 1..]);
         }
     }
@@ -144,16 +145,27 @@ fn read_sdist_description(files_dir: &PathBuf, cfg: &PackageConfig) -> String {
         return cfg.description.clone();
     }
 
-    // Try pyproject.toml first.
+    // Try pyproject.toml first (simple key-value parsing to avoid a
+    // toml dependency; we only need the description field).
     let pyproject = files_dir.join("pyproject.toml");
     if let Ok(text) = std::fs::read_to_string(&pyproject) {
-        if let Ok(value) = text.parse::<toml_edit::ImDocument>() {
-            if let Some(desc) = value
-                .get("project")
-                .and_then(|p| p.get("description"))
-                .and_then(|d| d.as_str())
-            {
-                return desc.to_string();
+        let mut in_project = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed == "[project]" {
+                in_project = true;
+                continue;
+            }
+            if trimmed.starts_with('[') {
+                in_project = false;
+                continue;
+            }
+            if in_project {
+                if let Some((key, value)) = trimmed.split_once('=') {
+                    if key.trim() == "description" {
+                        return value.trim().trim_matches('"').trim_matches('\'').to_string();
+                    }
+                }
             }
         }
     }
@@ -165,6 +177,20 @@ fn read_sdist_description(files_dir: &PathBuf, cfg: &PackageConfig) -> String {
             if let Some((key, value)) = line.split_once('=') {
                 if key.trim() == "description" {
                     return value.trim().to_string();
+                }
+            }
+        }
+    }
+
+    // Fall back to setup.py (look for description= in the setup() call).
+    let setup_py = files_dir.join("setup.py");
+    if let Ok(text) = std::fs::read_to_string(&setup_py) {
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if let Some((key, value)) = trimmed.split_once('=') {
+                if key.trim() == "description" {
+                    let val = value.trim().trim_matches(',').trim_matches('"').trim_matches('\'');
+                    return val.to_string();
                 }
             }
         }

@@ -64,11 +64,7 @@ impl InputSource for NpmInputSource {
         // npm pack produces exactly one tarball: "<name>-<version>.tgz"
         let tarball = std::fs::read_dir(&pack_output)?
             .filter_map(|e| e.ok())
-            .find(|e| {
-                e.file_name()
-                    .to_string_lossy()
-                    .ends_with(".tgz")
-            })
+            .find(|e| e.file_name().to_string_lossy().ends_with(".tgz"))
             .context("npm pack produced no tarball")?;
 
         let tarball_path = tarball.path();

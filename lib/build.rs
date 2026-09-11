@@ -440,8 +440,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // directory, then flow through the normal packaging pipeline via run_local.
     let input_source_name = cfg.effective_input_source();
     if !input_source_name.is_empty() {
-        let input_plugin = crate::plugins::input::get_input_source(&input_source_name)
-            .ok_or_else(|| {
+        let input_plugin =
+            crate::plugins::input::get_input_source(&input_source_name).ok_or_else(|| {
                 anyhow!(
                     "unsupported input source '{}' (expected one of: {})",
                     input_source_name,
@@ -2049,6 +2049,12 @@ pub fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
             let f = std::fs::File::open(archive)?;
             let gz = flate2::read::GzDecoder::new(f);
             let mut tar = tar::Archive::new(gz);
+            tar.unpack(dest)
+                .with_context(|| format!("failed to extract '{}'", archive.display()))?;
+        }
+        "tar" => {
+            let f = std::fs::File::open(archive)?;
+            let mut tar = tar::Archive::new(f);
             tar.unpack(dest)
                 .with_context(|| format!("failed to extract '{}'", archive.display()))?;
         }

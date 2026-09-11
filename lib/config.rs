@@ -405,6 +405,14 @@ pub struct PackageConfig {
     #[serde(default = "default_source")]
     #[serde(alias = "source_provider")]
     pub source: String,
+    /// Input source plugin for language package managers. When set, `lx`
+    /// fetches the package from a language registry instead of a forge
+    /// release. Values: "npm", "python", "gem". The package to fetch is
+    /// taken from `github_repo` (or `package_name` if github_repo is
+    /// empty), and the version from `version`.
+    #[serde(default)]
+    #[serde(alias = "input_source")]
+    pub input_source: String,
     /// Optional GitLab host for self-hosted instances (e.g. "gitlab.example.com").
     /// Only used when `source = "gitlab"`.
     #[serde(default)]

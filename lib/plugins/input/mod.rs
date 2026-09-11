@@ -58,12 +58,7 @@ pub trait InputSource: Send + Sync {
     /// `package` is the registry package name (npm package name, pip
     /// requirement, gem name). `version` is the requested version
     /// constraint, or empty for "latest".
-    fn fetch(
-        &self,
-        package: &str,
-        version: &str,
-        cfg: &PackageConfig,
-    ) -> Result<InputPayload>;
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload>;
 }
 
 /// All known input source plugins, in registration order.
@@ -78,9 +73,7 @@ pub fn all_input_sources() -> Vec<Box<dyn InputSource>> {
 /// Look up an input source by name (case-insensitive). Returns `None` for unknown.
 pub fn get_input_source(name: &str) -> Option<Box<dyn InputSource>> {
     let lower = name.to_ascii_lowercase();
-    all_input_sources()
-        .into_iter()
-        .find(|p| p.name() == lower)
+    all_input_sources().into_iter().find(|p| p.name() == lower)
 }
 
 /// Available input source names for error messages / help text.

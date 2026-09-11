@@ -329,7 +329,7 @@ fn resolve_version(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) ->
     Ok(latest.tag_name)
 }
 
-fn require_tool(name: &str) -> Result<()> {
+pub(crate) fn require_tool(name: &str) -> Result<()> {
     if Command::new(name).arg("--version").output().is_ok() {
         Ok(())
     } else {
