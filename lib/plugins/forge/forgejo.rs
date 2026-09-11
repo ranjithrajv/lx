@@ -78,7 +78,7 @@ impl ForgeSource for ForgejoForgeSource {
 }
 
 pub fn parse_forgejo_url(s: &str) -> Option<String> {
-    if let Some(repo) = try_parse_for_host(s, lx_lib::constants::DEFAULT_FORGEJO_HOST) {
+    if let Some(repo) = super::parse_host_url(s, lx_lib::constants::DEFAULT_FORGEJO_HOST) {
         return Some(repo);
     }
     // Also accept FORGEJO_HOST env
@@ -89,7 +89,7 @@ pub fn parse_forgejo_url(s: &str) -> Option<String> {
             .trim_start_matches("http://")
             .trim_end_matches('/');
         if !host.is_empty() && host != lx_lib::constants::DEFAULT_FORGEJO_HOST {
-            if let Some(repo) = try_parse_for_host(s, host) {
+            if let Some(repo) = super::parse_host_url(s, host) {
                 return Some(repo);
             }
         }
@@ -107,27 +107,11 @@ pub fn parse_forgejo_url(s: &str) -> Option<String> {
         }
     }
     // Also accept codeberg.org for forgejo (since codeberg now runs forgejo)
-    if let Some(repo) = try_parse_for_host(s, "codeberg.org") {
+    if let Some(repo) = super::parse_host_url(s, "codeberg.org") {
         // Only claim codeberg for forgejo if gitea didn't already claim it?
         // For parse_any_forge_url, gitea is tried before forgejo, so codeberg will be gitea first.
         // We still handle it here for direct --source forgejo with codeberg URL.
         return Some(repo);
-    }
-    None
-}
-
-fn try_parse_for_host(s: &str, host: &str) -> Option<String> {
-    let prefixes = [format!("https://{host}/"), format!("http://{host}/")];
-    for prefix in &prefixes {
-        if let Some(rest) = s.strip_prefix(prefix.as_str()) {
-            let mut parts = rest.trim_end_matches('/').splitn(3, '/');
-            let owner = parts.next()?;
-            let repo = parts.next()?.trim_end_matches(".git");
-            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-                return None;
-            }
-            return Some(format!("{owner}/{repo}"));
-        }
     }
     None
 }
