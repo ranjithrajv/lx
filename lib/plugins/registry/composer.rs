@@ -55,8 +55,7 @@ impl RegistrySource for ComposerRegistrySource {
         );
 
         let composer_path = project_dir.join("composer.json");
-        std::fs::write(&composer_path, composer_json)
-            .context("failed to write composer.json")?;
+        std::fs::write(&composer_path, composer_json).context("failed to write composer.json")?;
 
         // composer install with --no-dev (production only), --no-interaction,
         // --no-scripts (avoid post-install scripts that may need network).
@@ -130,7 +129,7 @@ fn find_composer_package_dir(vendor_dir: &PathBuf, package: &str) -> Option<Path
 }
 
 /// Read the installed version from composer.lock.
-fn extract_composer_version(project_dir: &PathBuf, package: &str) -> String {
+fn extract_composer_version(project_dir: &std::path::Path, package: &str) -> String {
     let lock_file = project_dir.join("composer.lock");
     if !lock_file.exists() {
         return "0.0.0".to_string();

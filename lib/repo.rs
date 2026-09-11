@@ -160,10 +160,7 @@ fn run_multi_suite(args: &RepoArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "multi-suite mode: {} suite(s) found",
-        suites.len()
-    );
+    println!("multi-suite mode: {} suite(s) found", suites.len());
 
     let components: Vec<String> = args
         .components
@@ -194,7 +191,11 @@ fn run_multi_suite(args: &RepoArgs) -> Result<()> {
         let (packages, archs) = build_packages_index_with_base(&debs, suite_name)?;
 
         // Determine the correct output path: for dists/<suite>/ layout, write directly there.
-        let out_dir = if deb_dir != &args.dir { deb_dir.clone() } else { args.dir.clone() };
+        let out_dir = if deb_dir != &args.dir {
+            deb_dir.clone()
+        } else {
+            args.dir.clone()
+        };
 
         std::fs::create_dir_all(&out_dir)?;
         std::fs::write(out_dir.join("Packages"), &packages)?;
@@ -261,7 +262,11 @@ fn run_multi_suite(args: &RepoArgs) -> Result<()> {
     // Hash all per-suite Packages/Packages.gz/Release files.
     for (suite_name, _, _) in &suite_summaries {
         let suite_dists_dir = dists_dir.join(suite_name);
-        let suite_out_dir = if suite_dists_dir.exists() { &suite_dists_dir } else { &args.dir };
+        let suite_out_dir = if suite_dists_dir.exists() {
+            &suite_dists_dir
+        } else {
+            &args.dir
+        };
         for index in ["Packages", "Packages.gz", "Release"] {
             let path = suite_out_dir.join(index);
             if path.exists() {
@@ -295,10 +300,7 @@ fn discover_suites(dists_dir: &Path, root_dir: &Path) -> Result<Vec<(String, Pat
             let entry = entry?;
             let path = entry.path();
             if path.is_dir() {
-                let name = entry
-                    .file_name()
-                    .to_string_lossy()
-                    .to_string();
+                let name = entry.file_name().to_string_lossy().to_string();
                 if !name.starts_with('.') {
                     suites.push((name, path));
                 }

@@ -60,6 +60,26 @@ pub fn find_asset_musl<'a>(
         .find(|a| a.name.starts_with(&prefix) && a.name.ends_with(&musl_suffix))
 }
 
+/// Find any asset matching the package name prefix, regardless of format
+/// (.deb, .rpm, .pkg.tar.zst). Used by `go-native` for cross-distro installs
+/// where the target format differs from deb. Returns the first match.
+pub fn find_asset_any<'a>(release: &'a Release, package: &str) -> Option<&'a Asset> {
+    let prefix = format!("{package}_");
+    release
+        .assets
+        .iter()
+        .find(|a| {
+            a.name.starts_with(&prefix)
+                && (a.name.ends_with(".deb")
+                    || a.name.ends_with(".rpm")
+                    || a.name.ends_with(".pkg.tar.zst"))
+        })
+        .or_else(|| {
+            // Fallback: just match the package name prefix.
+            release.assets.iter().find(|a| a.name.starts_with(&prefix))
+        })
+}
+
 /// Recover the Debian `Version` field embedded in an asset filename
 /// (`{package}_{version}_{arch}.deb`), which matches
 /// `dpkg-query -W -f='${Version}'` for a package built by this tool.

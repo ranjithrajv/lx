@@ -218,7 +218,10 @@ fn registry_contains_deb_and_rpm() {
 fn plugin_file_extensions() {
     assert_eq!(get_packager("deb").unwrap().file_extension(), "deb");
     assert_eq!(get_packager("rpm").unwrap().file_extension(), "rpm");
-    assert_eq!(get_packager("arch").unwrap().file_extension(), "pkg.tar.zst");
+    assert_eq!(
+        get_packager("arch").unwrap().file_extension(),
+        "pkg.tar.zst"
+    );
 }
 
 #[test]

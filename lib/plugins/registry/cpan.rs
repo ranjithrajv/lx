@@ -11,7 +11,6 @@
 //! deployment when a system Perl module version is too old.
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
@@ -63,10 +62,7 @@ impl RegistrySource for CpanRegistrySource {
             .context("failed to run `cpanm` (is cpanm on PATH?)")?;
 
         if !output.status.success() {
-            bail!(
-                "cpanm failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+            bail!("cpanm failed: {}", String::from_utf8_lossy(&output.stderr));
         }
 
         // Now install the module itself into a DESTDIR-style tree.
@@ -134,13 +130,10 @@ impl RegistrySource for CpanRegistrySource {
 
 /// Try to determine the installed version by checking the perllocal.pod or
 /// by querying the module with perl.
-fn extract_cpan_version(package: &str, local_lib: &PathBuf) -> String {
+fn extract_cpan_version(package: &str, local_lib: &std::path::Path) -> String {
     // Convert Module::Name to Module/Name.pm
     let _module_path = package.replace("::", "/") + ".pm";
-    let pod_file = local_lib
-        .join("lib")
-        .join("perl5")
-        .join("perllocal.pod");
+    let pod_file = local_lib.join("lib").join("perl5").join("perllocal.pod");
 
     if pod_file.exists() {
         if let Ok(text) = std::fs::read_to_string(&pod_file) {
@@ -162,7 +155,12 @@ fn extract_cpan_version(package: &str, local_lib: &PathBuf) -> String {
 
     // Fallback: query the module directly.
     if let Ok(output) = Command::new("perl")
-        .args(["-M", package, "-e", "print eval('$'.$package.'::VERSION') || '0.0.0'"])
+        .args([
+            "-M",
+            package,
+            "-e",
+            "print eval('$'.$package.'::VERSION') || '0.0.0'",
+        ])
         .output()
     {
         let ver = String::from_utf8_lossy(&output.stdout).trim().to_string();

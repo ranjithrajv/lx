@@ -16,7 +16,7 @@
 //!    commands). Orphan removals are recorded in a side-manifest
 //!    (`~/.local/share/lx/sh_orphans.json`).
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -584,19 +584,11 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    if format != "deb" {
-        println!("\napply is currently deb-only (`lx install` backend); ");
-        println!("re-run on a dpkg host, or install the mapped packages manually: ");
-        for e in &plan {
-            println!("  {}", e.native);
-        }
-        return Ok(());
-    }
-
     let mut installed = Vec::new();
     let mut failed = Vec::new();
     for e in &plan {
-        if debs::dpkg_installed_version(&e.native).is_some() {
+        // Check if already installed (format-aware).
+        if is_native_installed(&e.native, &format) {
             println!(
                 "  = {} already native-installed; skipping install",
                 e.native
@@ -604,21 +596,8 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
             installed.push(e);
             continue;
         }
-        println!("  ↓ installing native package {}", e.native);
-        let res = crate::install::run(
-            InstallArgs {
-                package: e.native.clone(),
-                version: None,
-                arch: None,
-                distribution: None,
-                download_only: None,
-                no_verify: false,
-                allow_unverified: true,
-                reinstall: false,
-                yes: true,
-            },
-            token,
-        );
+        println!("  ↓ installing native package {} ({})", e.native, format);
+        let res = install_native_package(&e.native, &format, token);
         match res {
             Ok(()) => installed.push(e),
             Err(err) => {
@@ -1032,7 +1011,7 @@ fn remove_sh_orphan(path: &str) -> Result<()> {
             // Remove the bin dir, then try to remove the tool dir if empty.
             if let Some(tool_dir) = parent.parent() {
                 let _ = std::fs::remove_dir(parent); // bin dir
-                // Only remove tool_dir if empty (don't rm -rf other people's files).
+                                                     // Only remove tool_dir if empty (don't rm -rf other people's files).
                 if std::fs::read_dir(tool_dir)
                     .map(|mut d| d.next().is_none())
                     .unwrap_or(false)
@@ -1056,8 +1035,92 @@ fn record_sh_cleanup(installed: &[&PlanEntry]) -> Result<()> {
         });
     }
     manifest.save()?;
-    println!("  (recorded {} orphan removal(s) in sh_orphans.json)", installed.len());
+    println!(
+        "  (recorded {} orphan removal(s) in sh_orphans.json)",
+        installed.len()
+    );
     Ok(())
+}
+
+/// Check if a package is already installed, format-aware.
+fn is_native_installed(package: &str, format: &str) -> bool {
+    match format {
+        "deb" => debs::dpkg_installed_version(package).is_some(),
+        "rpm" => Command::new("rpm")
+            .args(["-q", package])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+        "arch" => Command::new("pacman")
+            .args(["-Q", package])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Install a native package in the given format.
+fn install_native_package(package: &str, format: &str, token: Option<&str>) -> Result<()> {
+    match format {
+        "deb" => crate::install::run(
+            InstallArgs {
+                package: package.to_string(),
+                version: None,
+                arch: None,
+                distribution: None,
+                download_only: None,
+                no_verify: false,
+                allow_unverified: true,
+                reinstall: false,
+                yes: true,
+            },
+            token,
+        ),
+        "rpm" => {
+            // Download the .rpm from latest-debs org and install with rpm.
+            let client = lx_lib::github::GitHubClient::new(token.map(|s| s.to_string()))?;
+            let repo = debs::repo_name(package);
+            let release = client.latest_release(debs::LATEST_DEBS_ORG, &repo)?;
+            let asset = debs::find_asset_any(&release, package).ok_or_else(|| {
+                anyhow::anyhow!("no .rpm for {} in release '{}'", package, release.tag_name)
+            })?;
+            let dest = std::env::temp_dir().join(&asset.name);
+            debs::download(&client, asset, &dest)?;
+            let status = Command::new("rpm")
+                .args(["-Uvh", "--force", &dest.to_string_lossy()])
+                .status()
+                .context("failed to run rpm")?;
+            if !status.success() {
+                bail!("rpm -Uvh failed for {}", package);
+            }
+            Ok(())
+        }
+        "arch" => {
+            // Download the .pkg.tar.zst from latest-debs org and install with pacman.
+            let client = lx_lib::github::GitHubClient::new(token.map(|s| s.to_string()))?;
+            let repo = debs::repo_name(package);
+            let release = client.latest_release(debs::LATEST_DEBS_ORG, &repo)?;
+            let asset = debs::find_asset_any(&release, package).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no .pkg.tar.zst for {} in release '{}'",
+                    package,
+                    release.tag_name
+                )
+            })?;
+            let dest = std::env::temp_dir().join(&asset.name);
+            debs::download(&client, asset, &dest)?;
+            let status = Command::new("pacman")
+                .args(["-U", "--noconfirm", &dest.to_string_lossy()])
+                .status()
+                .context("failed to run pacman")?;
+            if !status.success() {
+                bail!("pacman -U failed for {}", package);
+            }
+            Ok(())
+        }
+        _ => bail!("unsupported native format '{format}'"),
+    }
 }
 
 /// Side-manifest tracking `curl | sh` orphans that have been removed.
@@ -1098,8 +1161,7 @@ impl ShOrphanManifest {
                 .with_context(|| format!("failed to create '{}'", parent.display()))?;
         }
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json)
-            .with_context(|| format!("failed to write '{}'", path.display()))
+        std::fs::write(&path, json).with_context(|| format!("failed to write '{}'", path.display()))
     }
 }
 

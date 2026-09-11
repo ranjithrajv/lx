@@ -154,6 +154,10 @@ impl Packager for RpmPackager {
             ),
             triggers,
             trigger_flags,
+            compression: cfg.rpm.compression.clone(),
+            auto_provides: cfg.rpm.auto_provides,
+            auto_requires: cfg.rpm.auto_requires,
+            defines: cfg.rpm.defines.clone(),
         };
         let meta = lx_lib::rpmarchive::PackageMeta {
             name: &cfg.package_name,

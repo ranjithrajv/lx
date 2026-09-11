@@ -154,6 +154,20 @@ pub struct BuildOptions<'a> {
     /// Flags for each trigger, parallel to `triggers`. One of
     /// `TRIGGERPREIN`, `TRIGGERIN`, `TRIGGERUN`, `TRIGGERPOSTUN`.
     pub trigger_flags: Vec<rpm::DependencyFlags>,
+    /// Payload compression algorithm. One of: `gzip`, `xz`, `lzma`, `zstd`,
+    /// `none`. Empty means rpm crate default (gzip).
+    /// Mirrors fpm's `--rpm-compression` and nfpm's `rpm.compression`.
+    pub compression: String,
+    /// Auto-generate `Provides:` for every file/shared library the package
+    /// installs (rpm's `--auto-provides`). Default: true.
+    pub auto_provides: bool,
+    /// Auto-generate `Requires:` from shared-library dependencies detected
+    /// in the payload (rpm's `--auto-requires`). Default: true.
+    pub auto_requires: bool,
+    /// rpmbuild-style macro definitions (e.g. `_unpackaged_files_terminate_build 0`).
+    /// Each entry is a `"KEY VALUE"` string. Best-effort: applied as builder
+    /// lead macros when the rpm crate supports it.
+    pub defines: Vec<String>,
 }
 
 /// Parse `"package: script_path"` trigger entries from config. The script
@@ -221,6 +235,13 @@ pub fn build_with_options(
     .description(meta.description)
     .release(meta.release)
     .source_date(mtime.max(0) as u32);
+
+    // Apply payload compression if specified (mirrors fpm's --rpm-compression).
+    if !opts.compression.is_empty() {
+        if let Ok(comp) = opts.compression.parse::<rpm::CompressionType>() {
+            builder = builder.compression(comp);
+        }
+    }
 
     if let Some(s) = opts.pre_install.map(str::trim).filter(|s| !s.is_empty()) {
         builder = builder.pre_install_script(s);

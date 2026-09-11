@@ -440,8 +440,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // directory, then flow through the normal packaging pipeline via run_local.
     let registry_source_name = cfg.effective_registry_source();
     if !registry_source_name.is_empty() {
-        let input_plugin =
-            crate::plugins::registry::get_registry_source(&registry_source_name).ok_or_else(|| {
+        let input_plugin = crate::plugins::registry::get_registry_source(&registry_source_name)
+            .ok_or_else(|| {
                 anyhow!(
                     "unsupported input source '{}' (expected one of: {})",
                     registry_source_name,
@@ -523,14 +523,19 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         );
     }
 
-    let source = crate::plugins::forge::get_forge_source(&effective_forge_source).ok_or_else(|| {
-        anyhow!(
-            "unsupported source '{}' (expected one of: {})",
-            effective_forge_source,
-            crate::plugins::forge::forge_source_names().join(", ")
-        )
-    })?;
-    println!("source: {} ({})", effective_forge_source, source.description());
+    let source =
+        crate::plugins::forge::get_forge_source(&effective_forge_source).ok_or_else(|| {
+            anyhow!(
+                "unsupported source '{}' (expected one of: {})",
+                effective_forge_source,
+                crate::plugins::forge::forge_source_names().join(", ")
+            )
+        })?;
+    println!(
+        "source: {} ({})",
+        effective_forge_source,
+        source.description()
+    );
     crate::plugins::forge::apply_forge_host(source.as_ref(), &cfg);
     // Token resolution: prefer provider-specific env, fallback to CLI token.
     let token_for_source = crate::plugins::forge::resolve_forge_token(source.as_ref(), token);

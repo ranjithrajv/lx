@@ -18,6 +18,12 @@ pub struct UpgradeArgs {
     #[arg(long)]
     pub all: bool,
 
+    /// When `--all` is set, auto-migrate distro packages flagged as outdated:
+    /// install the lx-built version and remove the distro version. Without
+    /// this flag, `--all` only prints migration targets (plan-only).
+    #[arg(long, requires = "all")]
+    pub auto_migrate: bool,
+
     /// Skip checksum verification against the release's sidecar file (not
     /// recommended).
     #[arg(long)]
@@ -130,7 +136,8 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
 
 /// Check for distro-managed packages that are behind upstream (per repology).
 /// These are flagged as migration targets — packages `lx install` could take over.
-fn check_distro_outdated(_args: &UpgradeArgs, _token: Option<&str>) -> Result<()> {
+/// With `args.auto_migrate`, they are migrated automatically.
+fn check_distro_outdated(args: &UpgradeArgs, token: Option<&str>) -> Result<()> {
     println!("\nsystem-wide freshness check (distro packages behind upstream):");
 
     let repology = crate::index::repology::RepologySource::new("repology");
@@ -146,10 +153,7 @@ fn check_distro_outdated(_args: &UpgradeArgs, _token: Option<&str>) -> Result<()
         outdated.len()
     );
     for pkg in &outdated {
-        let host = pkg
-            .host_version
-            .as_deref()
-            .unwrap_or("?");
+        let host = pkg.host_version.as_deref().unwrap_or("?");
         let newest = pkg.newest.as_deref().unwrap_or("?");
         println!(
             "    {:<20} host: {:<12} → newest: {}",
@@ -157,10 +161,61 @@ fn check_distro_outdated(_args: &UpgradeArgs, _token: Option<&str>) -> Result<()
         );
     }
 
-    println!("\n  to take over management of a package, run `lx install <name>`");
-    println!("  (this replaces the distro version with an lx-built one, tracked for upgrades)");
+    if !args.auto_migrate {
+        println!("\n  to take over management of a package, run `lx install <name>`");
+        println!("  (or re-run with --auto-migrate to apply automatically)");
+        return Ok(());
+    }
 
+    // Auto-migrate: install the lx-built version of each outdated package.
+    println!("\n--auto-migrate: installing lx-built versions...\n");
+    let mut migrated = 0;
+    let mut failed = 0;
+
+    for pkg in &outdated {
+        if migrate_distro_package(&pkg.name, token)? {
+            migrated += 1;
+        } else {
+            failed += 1;
+        }
+    }
+
+    println!("\n  {} migrated, {} failed", migrated, failed);
+    if failed > 0 {
+        bail!("{} distro package(s) failed to migrate", failed);
+    }
     Ok(())
+}
+
+/// Migrate a single distro-managed package to an lx-built one.
+/// Returns true on success, false on failure.
+fn migrate_distro_package(package: &str, token: Option<&str>) -> Result<bool> {
+    println!("  ↓ migrating {package} to lx-built version");
+
+    // Install via the lx install backend (downloads from latest-debs org).
+    match crate::install::run(
+        crate::install::InstallArgs {
+            package: package.to_string(),
+            version: None,
+            arch: None,
+            distribution: None,
+            download_only: None,
+            no_verify: false,
+            allow_unverified: true,
+            reinstall: true,
+            yes: true,
+        },
+        token,
+    ) {
+        Ok(()) => {
+            println!("    ✓ {package} migrated (now lx-managed)");
+            Ok(true)
+        }
+        Err(e) => {
+            eprintln!("    ✗ {package} migration failed: {e:#}");
+            Ok(false)
+        }
+    }
 }
 
 /// Returns `Ok(true)` if the package was upgraded, `Ok(false)` if it was

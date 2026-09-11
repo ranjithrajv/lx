@@ -103,7 +103,11 @@ impl RegistrySource for MavenRegistrySource {
 
         // Stage the main jar (not sources/javadoc) into usr/share/java/<artifact>/.
         let files_dir = workdir.path().join("package");
-        let java_dir = files_dir.join("usr").join("share").join("java").join(artifact_id);
+        let java_dir = files_dir
+            .join("usr")
+            .join("share")
+            .join("java")
+            .join(artifact_id);
         std::fs::create_dir_all(&java_dir)?;
 
         for jar in &jar_files {
@@ -129,10 +133,7 @@ impl RegistrySource for MavenRegistrySource {
 
 /// Parse Maven coordinates from the package string.
 /// Accepts "groupId:artifactId" or "groupId:artifactId:version".
-fn parse_maven_coordinates(
-    package: &str,
-    version: &str,
-) -> Result<(String, String, String)> {
+fn parse_maven_coordinates(package: &str, version: &str) -> Result<(String, String, String)> {
     let parts: Vec<&str> = package.split(':').collect();
 
     match parts.as_slice() {
@@ -144,11 +145,7 @@ fn parse_maven_coordinates(
             };
             Ok((group.to_string(), artifact.to_string(), v.to_string()))
         }
-        [group, artifact, ver] => Ok((
-            group.to_string(),
-            artifact.to_string(),
-            ver.to_string(),
-        )),
+        [group, artifact, ver] => Ok((group.to_string(), artifact.to_string(), ver.to_string())),
         _ => bail!(
             "maven: expected 'groupId:artifactId' or 'groupId:artifactId:version', got '{package}'"
         ),

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::forge::{get_forge_source, forge_source_names};
+use lx_lib::plugins::forge::{forge_source_names, get_forge_source};
 
 #[test]
 fn github_sync_is_registered_and_parses_github_urls() {

@@ -11,7 +11,6 @@
 //! or tools that only publish to crates.io without GitHub releases.
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
@@ -99,7 +98,7 @@ impl RegistrySource for CargoRegistrySource {
 }
 
 /// Read the installed version from cargo's metadata.
-fn extract_cargo_version(package: &str, install_root: &PathBuf) -> String {
+fn extract_cargo_version(package: &str, install_root: &std::path::Path) -> String {
     // cargo install creates a .crates.toml or .crates2.json in the root.
     let crates_file = install_root.join(".crates2.json");
     if crates_file.exists() {

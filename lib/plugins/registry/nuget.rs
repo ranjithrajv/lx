@@ -11,7 +11,6 @@
 //! assets is usually better.
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
@@ -78,7 +77,7 @@ impl RegistrySource for NugetRegistrySource {
             package_dir
         } else {
             // Fallback: find the only directory in download_dir.
-            let entries: Vec<PathBuf> = std::fs::read_dir(&download_dir)?
+            let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&download_dir)?
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p.is_dir())
                 .collect();
@@ -104,7 +103,7 @@ impl RegistrySource for NugetRegistrySource {
 }
 
 /// Read version from the .nupkg file or .nuspec inside the extracted dir.
-fn extract_nuget_version(files_dir: &PathBuf, _package: &str) -> String {
+fn extract_nuget_version(files_dir: &std::path::Path, _package: &str) -> String {
     // Look for .nuspec file which contains metadata.
     if let Ok(entries) = std::fs::read_dir(files_dir) {
         for entry in entries.flatten() {

@@ -77,7 +77,7 @@ git push --no-verify        # skip pre-push hooks
 ## Project Layout
 
 ```
-src/            # Thin binary entrypoint (main.rs, bin/lx-get.rs)
+src/            # Thin binary entrypoint (main.rs)
 lib/            # All logic lives here (lx_lib) — build, forge clients, plugins
 tests/          # Integration tests, mirrors lib/ structure
 utils/          # Helper scripts (coverage, secret scan, covscan)

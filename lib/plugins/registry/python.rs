@@ -163,7 +163,11 @@ fn read_sdist_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> S
             if in_project {
                 if let Some((key, value)) = trimmed.split_once('=') {
                     if key.trim() == "description" {
-                        return value.trim().trim_matches('"').trim_matches('\'').to_string();
+                        return value
+                            .trim()
+                            .trim_matches('"')
+                            .trim_matches('\'')
+                            .to_string();
                     }
                 }
             }
@@ -189,7 +193,11 @@ fn read_sdist_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> S
             let trimmed = line.trim();
             if let Some((key, value)) = trimmed.split_once('=') {
                 if key.trim() == "description" {
-                    let val = value.trim().trim_matches(',').trim_matches('"').trim_matches('\'');
+                    let val = value
+                        .trim()
+                        .trim_matches(',')
+                        .trim_matches('"')
+                        .trim_matches('\'');
                     return val.to_string();
                 }
             }

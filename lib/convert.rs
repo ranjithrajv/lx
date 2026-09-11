@@ -64,6 +64,10 @@ struct SourceMeta {
     description: String,
     depends: String,
     distribution: String,
+    /// Maintainer scripts extracted from the source package, keyed by script
+    /// name (e.g. "preinst", "postinst", "prerm", "postrm" for deb;
+    /// "pre", "post", "preun", "postun" for rpm).
+    scripts: std::collections::BTreeMap<String, String>,
 }
 
 pub fn run(args: ConvertArgs) -> Result<()> {
@@ -144,11 +148,7 @@ pub fn run(args: ConvertArgs) -> Result<()> {
     if args.dry_run {
         println!(
             "would convert: {} {}-{} ({}) → {}",
-            meta.package,
-            meta.version,
-            args.build_version,
-            meta.arch,
-            target
+            meta.package, meta.version, args.build_version, meta.arch, target
         );
         println!("  install tree: {}", install_tree.display());
         return Ok(());
@@ -169,13 +169,8 @@ pub fn run(args: ConvertArgs) -> Result<()> {
         ext_for(&target)
     );
     let final_path = args.output.join(&final_name);
-    fs::copy(&built, &final_path).with_context(|| {
-        format!(
-            "copying {} to {}",
-            built.display(),
-            final_path.display()
-        )
-    })?;
+    fs::copy(&built, &final_path)
+        .with_context(|| format!("copying {} to {}", built.display(), final_path.display()))?;
 
     println!("✓ converted: {}", final_path.display());
     Ok(())
@@ -200,9 +195,10 @@ fn extract_meta(format: &str, input: &Path, tmp: &Path) -> Result<SourceMeta> {
     }
 }
 
-fn extract_deb_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
+fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
     let ctrl = crate::repo::read_control(input)?;
     let get = |k: &str| ctrl.get(k).cloned().unwrap_or_default();
+    let scripts = extract_deb_scripts(input, tmp)?;
     Ok(SourceMeta {
         package: get("Package"),
         version: get("Version"),
@@ -211,7 +207,57 @@ fn extract_deb_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
         description: get("Description"),
         depends: get("Depends"),
         distribution: infer_dist_from_version(&get("Version")),
+        scripts,
     })
+}
+
+/// Extract maintainer scripts (preinst/postinst/prerm/postrm) from a .deb.
+fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, String>> {
+    let mut scripts = BTreeMap::new();
+    let file = std::fs::File::open(input)?;
+    let mut archive = ar::Archive::new(file);
+    while let Some(entry) = archive.next_entry() {
+        let mut entry = entry?;
+        let name = String::from_utf8_lossy(entry.header().identifier()).to_string();
+        if !name.starts_with("control.tar") {
+            continue;
+        }
+        let mut data = Vec::new();
+        std::io::copy(&mut entry, &mut data)?;
+        let text: Vec<u8> = if name.ends_with(".gz") {
+            let mut gz = flate2::read::GzDecoder::new(data.as_slice());
+            let mut out = Vec::new();
+            std::io::copy(&mut gz, &mut out)?;
+            out
+        } else if name.ends_with(".xz") {
+            let mut out = Vec::new();
+            let mut dec = lzma_rust2::XzReader::new(data.as_slice(), true);
+            std::io::copy(&mut dec, &mut out)?;
+            out
+        } else {
+            data
+        };
+        let mut ar = tar::Archive::new(text.as_slice());
+        for member in ar.entries()? {
+            let mut member = member?;
+            let fname = member
+                .path()?
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+            match fname.as_str() {
+                "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates" => {
+                    let mut s = String::new();
+                    std::io::Read::read_to_string(&mut member, &mut s)?;
+                    scripts.insert(fname, s);
+                }
+                _ => {}
+            }
+        }
+        break;
+    }
+    Ok(scripts)
 }
 
 fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
@@ -220,7 +266,12 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         .output()
         .context("rpm not found — install rpm to convert from .rpm")?;
     let version = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{VERSION}-%{RELEASE}", &input.to_string_lossy()])
+        .args([
+            "-qp",
+            "--queryformat",
+            "%{VERSION}-%{RELEASE}",
+            &input.to_string_lossy(),
+        ])
         .output()
         .context("rpm query failed")?;
     let arch = Command::new("rpm")
@@ -228,13 +279,23 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         .output()
         .context("rpm query failed")?;
     let maintainer = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{VENDOR}", &input.to_string_lossy()])
+        .args([
+            "-qp",
+            "--queryformat",
+            "%{VENDOR}",
+            &input.to_string_lossy(),
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
     let description = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{SUMMARY}", &input.to_string_lossy()])
+        .args([
+            "-qp",
+            "--queryformat",
+            "%{SUMMARY}",
+            &input.to_string_lossy(),
+        ])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -244,6 +305,8 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         bail!("rpm query failed for '{}'", input.display());
     }
 
+    let scripts = extract_rpm_scripts(input)?;
+
     Ok(SourceMeta {
         package: String::from_utf8_lossy(&name.stdout).trim().to_string(),
         version: String::from_utf8_lossy(&version.stdout).trim().to_string(),
@@ -252,7 +315,35 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         description: description.trim().to_string(),
         depends: String::new(),
         distribution: "el9".to_string(),
+        scripts,
     })
+}
+
+/// Extract scriptlets from an RPM via `rpm -qp --queryformat`.
+fn extract_rpm_scripts(input: &Path) -> Result<BTreeMap<String, String>> {
+    let mut scripts = BTreeMap::new();
+    for (tag, key) in [
+        ("%{PREIN}", "pre"),
+        ("%{POSTIN}", "post"),
+        ("%{PREUN}", "preun"),
+        ("%{POSTUN}", "postun"),
+        ("%{PRETRANS}", "pretrans"),
+        ("%{POSTTRANS}", "posttrans"),
+        ("%{VERIFYSCRIPT}", "verify"),
+    ] {
+        let out = Command::new("rpm")
+            .args(["-qp", "--queryformat", tag, &input.to_string_lossy()])
+            .output();
+        if let Ok(o) = out {
+            if o.status.success() {
+                let body = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !body.is_empty() && body != "(none)" {
+                    scripts.insert(key.to_string(), body);
+                }
+            }
+        }
+    }
+    Ok(scripts)
 }
 
 fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
@@ -285,6 +376,7 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
         description: get("pkgdesc"),
         depends: String::new(),
         distribution: "arch".to_string(),
+        scripts: BTreeMap::new(),
     })
 }
 
@@ -321,8 +413,9 @@ fn extract_install_tree(format: &str, input: &Path, dest: &Path) -> Result<()> {
                     data
                 };
                 let mut ar = tar::Archive::new(text.as_slice());
-                ar.unpack(dest)
-                    .with_context(|| format!("failed to extract data.tar from '{}'", input.display()))?;
+                ar.unpack(dest).with_context(|| {
+                    format!("failed to extract data.tar from '{}'", input.display())
+                })?;
                 break;
             }
         }
@@ -385,14 +478,18 @@ fn build_target(
     // For deb/rpm, files under usr/bin etc. are already laid out correctly.
     copy_dir_recursive(install_tree, &staging_root)?;
 
-    // Build a minimal config for the plugin.
-    let mut config = crate::config::PackageConfig::default();
-    config.package_name = meta.package.clone();
-    config.version = meta.version.clone();
-    config.description = meta.description.clone();
-    config.maintainer = meta.maintainer.clone();
-    config.depends = meta.depends.clone();
-    config.package_format = target_format.to_string();
+    // Build a minimal config for the plugin, carrying over maintainer scripts
+    // from the source package (mapped to the target format's expected names).
+    let mut config = crate::config::PackageConfig {
+        package_name: meta.package.clone(),
+        version: meta.version.clone(),
+        description: meta.description.clone(),
+        maintainer: meta.maintainer.clone(),
+        depends: meta.depends.clone(),
+        package_format: target_format.to_string(),
+        ..Default::default()
+    };
+    apply_scripts_to_config(&mut config, &meta.scripts, target_format);
 
     let job = crate::build::ResolvedJob {
         dist: if meta.distribution.is_empty() {
@@ -456,4 +553,78 @@ fn infer_dist_from_version(version: &str) -> String {
         .split_once('+')
         .map(|(_, after)| after.to_string())
         .unwrap_or_else(|| "bookworm".to_string())
+}
+
+/// Apply extracted source-package scripts to the target config, mapping
+/// source-format script names to the target format's expected names.
+///
+/// Source deb: preinst, postinst, prerm, postrm
+/// Source rpm: pre, post, preun, postun, pretrans, posttrans, verify
+/// Target deb: preinstall, postinstall, preremove, postremove
+/// Target rpm: preinstall (=pre), postinstall (=post), preremove (=preun),
+///             postremove (=postun), pretrans, posttrans, verify
+fn apply_scripts_to_config(
+    config: &mut crate::config::PackageConfig,
+    scripts: &BTreeMap<String, String>,
+    target_format: &str,
+) {
+    if scripts.is_empty() {
+        return;
+    }
+
+    match target_format {
+        "deb" => {
+            // Map source script names to deb config field names.
+            // deb source → deb target: preinst→preinstall, etc.
+            // rpm source → deb target: pre→preinstall, preun→preremove, etc.
+            if let Some(s) = scripts.get("preinst").or_else(|| scripts.get("pre")) {
+                config.scripts.preinstall = s.clone();
+            }
+            if let Some(s) = scripts.get("postinst").or_else(|| scripts.get("post")) {
+                config.scripts.postinstall = s.clone();
+            }
+            if let Some(s) = scripts.get("prerm").or_else(|| scripts.get("preun")) {
+                config.scripts.preremove = s.clone();
+            }
+            if let Some(s) = scripts.get("postrm").or_else(|| scripts.get("postun")) {
+                config.scripts.postremove = s.clone();
+            }
+            if let Some(s) = scripts.get("pretrans") {
+                config.scripts.pretrans = s.clone();
+            }
+            if let Some(s) = scripts.get("posttrans") {
+                config.scripts.posttrans = s.clone();
+            }
+            if let Some(s) = scripts.get("verify") {
+                config.scripts.verify = s.clone();
+            }
+        }
+        "rpm" => {
+            // Map source script names to rpm config field names.
+            // rpm source → rpm target: pre→preinstall, etc.
+            // deb source → rpm target: preinst→preinstall, etc.
+            if let Some(s) = scripts.get("pre").or_else(|| scripts.get("preinst")) {
+                config.scripts.preinstall = s.clone();
+            }
+            if let Some(s) = scripts.get("post").or_else(|| scripts.get("postinst")) {
+                config.scripts.postinstall = s.clone();
+            }
+            if let Some(s) = scripts.get("preun").or_else(|| scripts.get("prerm")) {
+                config.scripts.preremove = s.clone();
+            }
+            if let Some(s) = scripts.get("postun").or_else(|| scripts.get("postrm")) {
+                config.scripts.postremove = s.clone();
+            }
+            if let Some(s) = scripts.get("pretrans") {
+                config.scripts.pretrans = s.clone();
+            }
+            if let Some(s) = scripts.get("posttrans") {
+                config.scripts.posttrans = s.clone();
+            }
+            if let Some(s) = scripts.get("verify") {
+                config.scripts.verify = s.clone();
+            }
+        }
+        _ => {} // arch: no script carry-over (arch uses .INSTALL, set separately)
+    }
 }
