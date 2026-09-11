@@ -76,7 +76,7 @@ impl ForgeSource for GiteaForgeSource {
 
 pub fn parse_gitea_url(s: &str) -> Option<String> {
     // Gitea default host is codeberg.org, but also supports custom via GITEA_HOST
-    if let Some(repo) = try_parse_for_host(s, lx_lib::constants::DEFAULT_GITEA_HOST) {
+    if let Some(repo) = super::parse_host_url(s, lx_lib::constants::DEFAULT_GITEA_HOST) {
         return Some(repo);
     }
     if let Ok(host) = std::env::var("GITEA_HOST") {
@@ -86,7 +86,7 @@ pub fn parse_gitea_url(s: &str) -> Option<String> {
             .trim_start_matches("http://")
             .trim_end_matches('/');
         if !host.is_empty() && host != lx_lib::constants::DEFAULT_GITEA_HOST {
-            if let Some(repo) = try_parse_for_host(s, host) {
+            if let Some(repo) = super::parse_host_url(s, host) {
                 return Some(repo);
             }
         }
@@ -101,22 +101,6 @@ pub fn parse_gitea_url(s: &str) -> Option<String> {
             if !owner.is_empty() && !repo.is_empty() && !repo.contains('/') {
                 return Some(format!("{owner}/{repo}"));
             }
-        }
-    }
-    None
-}
-
-fn try_parse_for_host(s: &str, host: &str) -> Option<String> {
-    let prefixes = [format!("https://{host}/"), format!("http://{host}/")];
-    for prefix in &prefixes {
-        if let Some(rest) = s.strip_prefix(prefix.as_str()) {
-            let mut parts = rest.trim_end_matches('/').splitn(3, '/');
-            let owner = parts.next()?;
-            let repo = parts.next()?.trim_end_matches(".git");
-            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
-                return None;
-            }
-            return Some(format!("{owner}/{repo}"));
         }
     }
     None
