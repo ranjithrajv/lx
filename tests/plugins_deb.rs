@@ -40,7 +40,7 @@ fn render_control_includes_depends_when_set() {
     };
     let text = render_control(&cfg, &job(), "1.0.0", "1");
     assert!(text.contains("Depends: libatomic1, libgtk-3-0\n"));
-    // Matches the action's Dockerfile, which `>>`-appended Depends
+    // Matches the bash action's image build, which `>>`-appended Depends
     // after the control file (including Description) was rendered.
     assert!(text.trim_end().ends_with("Depends: libatomic1, libgtk-3-0"));
 }

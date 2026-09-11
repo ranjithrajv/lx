@@ -15,7 +15,7 @@ pub struct LintianReport {
 /// `run_lintian_check`.
 ///
 /// - controlled by `--lintian` (default off),
-/// - requires `lintian` on `PATH` -- no Docker fallback. lintian is a
+/// - requires `lintian` on `PATH` -- install it; there is no bundled equivalent. lintian is a
 ///   large, Debian-native Perl tool with no Rust equivalent to reach for,
 ///   so unlike the rest of this pipeline there's nothing to reimplement;
 ///   the fix is to just run it directly rather than route through a

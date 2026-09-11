@@ -33,7 +33,7 @@ pub struct BuildArgs {
     pub architectures: Option<String>,
 
     /// Build only for this machine's own architecture (auto-detected via
-    /// `uname -m`), skipping QEMU emulation entirely. Conflicts with
+    /// `uname -m`), host-native. Conflicts with
     /// --architectures; pass one or the other.
     #[arg(long)]
     pub host: bool,
@@ -117,7 +117,7 @@ pub struct BuildArgs {
     /// Also generate Debian source packages (3.0 quilt: .dsc +
     /// .debian.tar.xz + .orig.tar.xz) for each distribution built,
     /// mirroring the action's build_source_packages. Built natively
-    /// in-process -- no Docker, no dpkg-source subprocess.
+    /// in-process -- no dpkg-source subprocess.
     #[arg(long)]
     pub source: bool,
 
@@ -344,7 +344,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         cfg.version = v.clone();
     }
     // Source-mode builds compile upstream on the host instead of repacking
-    // release assets (bash `build_mode: source` parity, minus Docker).
+    // release assets (bash `build_mode: source` parity, natively).
     if cfg.is_source_mode() {
         return crate::sourcebuild::run(args, &cfg, token);
     }
@@ -530,7 +530,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         let detected = host_arch().ok_or_else(|| {
             anyhow!("could not detect this machine's architecture from `uname -m`; use --architectures instead")
         })?;
-        println!("Building for host architecture: {detected} (--host; no QEMU needed)");
+        println!("Building for host architecture: {detected} (--host; native)");
         archs = vec![detected];
     }
 
@@ -872,7 +872,7 @@ fn run_local(
         let detected = host_arch().ok_or_else(|| {
             anyhow!("could not detect this machine's architecture from `uname -m`; use --architectures instead")
         })?;
-        println!("Building for host architecture: {detected} (--host; no QEMU needed)");
+        println!("Building for host architecture: {detected} (--host; native)");
         archs = vec![detected];
     }
 
@@ -1949,7 +1949,7 @@ pub(crate) fn is_elf(path: &Path) -> Result<bool> {
 
 /// The host's Debian architecture name (`uname -m` mapped to dpkg naming),
 /// or None if it can't be determined. Used both to decide whether a target
-/// architecture needs QEMU emulation, and to resolve `--host`.
+/// architecture needs emulation, and to resolve `--host`.
 pub fn host_arch() -> Option<String> {
     let out = Command::new("uname").arg("-m").output().ok()?;
     let machine = String::from_utf8(out.stdout).ok()?.trim().to_string();

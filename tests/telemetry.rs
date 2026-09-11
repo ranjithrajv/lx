@@ -14,7 +14,7 @@ fn disabled_is_noop() {
     let t = Telemetry::with_dir(false, dir);
     t.init().unwrap();
     t.record_stage("build_initialization").unwrap();
-    t.record_failure("docker_build", "boom", 1).unwrap();
+    t.record_failure("build", "boom", 1).unwrap();
     t.finalize(5).unwrap();
     assert_eq!(t.summary_json(), json!({}));
     assert!(!t.dir.join("metrics.json").exists());

@@ -28,17 +28,16 @@ a warning instead of a silent surprise.
 ## Requirements
 
 - Rust (to build `lx` itself; see [Development](#development)). That's
-  it — **`lx` never uses Docker, for anything:**
-  - `lx build` builds `.deb`s natively (`lib/debarchive.rs`); no
-    `dpkg-deb`, no Debian toolchain, and cross-architecture builds never
-    need QEMU (packaging only copies/`chmod`s the target binary, it's
-    never executed).
-  - `--source` builds source packages (`.dsc`/`.orig.tar.xz`/
-    `.debian.tar.xz`) natively too — no `dpkg-source`.
-  - `--lintian` requires a `lintian` binary on your `PATH` (e.g.
-    `apt-get install lintian` on Debian/Ubuntu). lintian itself has no
-    Rust equivalent to reach for, so this one flag needs it installed —
-    but there's no Docker fallback to reach it through either way.
+  it — **`lx` builds natively on bare metal:**
+  - `lx build` writes `.deb`s in-process (`lib/debarchive.rs`); no
+    `dpkg-deb`, no Debian toolchain, and cross-architecture packaging
+    only copies/`chmod`s the target binary — it's never executed, so any
+    host can package any architecture.
+  - `--source` writes source packages (`.dsc`/`.orig.tar.xz`/
+    `.debian.tar.xz`) in-process too — no `dpkg-source`.
+  - `--lintian` shells out to a `lintian` binary on your `PATH` (e.g.
+    `apt-get install lintian` on Debian/Ubuntu): the one external tool
+    with no Rust equivalent.
 
   See
   [`docs/decisions/2026-08-20-docker-free-deb-build.md`](docs/decisions/2026-08-20-docker-free-deb-build.md)
@@ -54,7 +53,7 @@ Build every architecture a forge release publishes, no config file needed:
 lx build https://github.com/eza-community/eza
 ```
 
-Build for just this machine's own architecture (skips QEMU entirely):
+Build for just this machine's own architecture (native-only):
 
 ```sh
 lx build package.yaml --host
@@ -139,7 +138,7 @@ Run `lx <command> --help` for the full flag reference. A few worth calling
 out:
 
 - **`--host`** (`build`): auto-detects this machine's architecture (`uname
-  -m`) and builds only that one, skipping QEMU. Conflicts with
+  -m`) and builds only that one, natively. Conflicts with
   `--architectures`.
 - **`--local`** (`build`): package a local archive or directory from
   `local_payload:` in package.yaml, skipping the upstream download.

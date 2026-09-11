@@ -75,7 +75,7 @@ runs:
       if: inputs.lintian-check == 'true'
       shell: bash
       run: |
-        # lx's --lintian has no Docker fallback (see
+        # lx's --lintian runs on the host (see
         # docs/decisions/2026-08-20-docker-free-lintian-source.md) -- it
         # requires a real `lintian` binary on PATH, which GitHub-hosted
         # runners don't ship by default.

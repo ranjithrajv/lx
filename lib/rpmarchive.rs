@@ -1,6 +1,6 @@
 //! Build a `.rpm` archive entirely in-process using the `rpm` crate.
 //!
-//! Mirrors `debarchive.rs`'s philosophy: no `rpmbuild`, no Docker, no
+//! Mirrors `debarchive.rs`'s philosophy: no `rpmbuild`, no
 //! subprocess. The output is a genuine RPM that `rpm -qip` / `dnf` accept.
 
 use anyhow::{bail, Context, Result};

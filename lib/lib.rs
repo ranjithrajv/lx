@@ -4,7 +4,7 @@
 //! * [`cache`] — flock-guarded persistent download cache with TTL + checksum.
 //! * [`checksum`] — SHA-256 helpers and pinned-metadata verification.
 //! * [`debarchive`] — build a `.deb` (ar + control.tar.gz + data.tar.gz)
-//!   entirely in-process, no `dpkg-deb` or Docker required.
+//!   entirely in-process, no `dpkg-deb` required.
 //! * [`elfdeps`] — read an ELF binary's `DT_NEEDED` shared-library
 //!   dependencies natively, no `ldd`/`objdump`/`readelf` required.
 //! * [`github`] — octocrab-backed GitHub Releases client with a local JSON

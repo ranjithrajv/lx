@@ -1,7 +1,7 @@
 //! Shared-library dependency scanning: read an ELF binary's `DT_NEEDED`
 //! entries (the same information `ldd`/`readelf -d` report), natively via
 //! the `object` crate -- no `ldd`/`objdump`/`readelf` host-tool dependency,
-//! consistent with the rest of this project's Docker/host-tool-free
+//! consistent with the rest of this project's subprocess-free
 //! packaging pipeline.
 
 use anyhow::{Context, Result};

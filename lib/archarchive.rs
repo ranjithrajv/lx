@@ -1,6 +1,6 @@
 //! Build an Arch Linux `.pkg.tar.zst` pacman package entirely in-process.
 //!
-//! Mirrors `debarchive.rs` / `rpmarchive.rs`: no `makepkg`, no Docker.
+//! Mirrors `debarchive.rs` / `rpmarchive.rs`: no `makepkg`, fully in-process.
 //! An Arch package is a `tar` (optionally `zstd`-compressed) containing
 //! `.PKGINFO` + `.MTREE` + payload. pacman verifies it via `bsdtar`.
 

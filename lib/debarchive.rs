@@ -1,4 +1,4 @@
-//! Build a `.deb` archive entirely in-process -- no `dpkg-deb`, no Docker,
+//! Build a `.deb` archive entirely in-process -- no `dpkg-deb`,
 //! no subprocess at all.
 //!
 //! A `.deb` is just an `ar` container of three members (`debian-binary`,

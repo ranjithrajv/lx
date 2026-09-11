@@ -1,7 +1,7 @@
 //! `build_mode: source` — compile upstream source on the host and wrap the
 //! install tree per suite.
 //!
-//! Bash-action parity (`src/lib/source-build.sh`) minus Docker: for
+//! Bash-action parity (`src/lib/source-build.sh`), built natively: for
 //! upstreams that publish no Linux binaries there is no release asset to
 //! repack, so this path fetches the upstream source tag, configures +
 //! compiles it with cmake on the **host**, installs to a `DESTDIR` stage,

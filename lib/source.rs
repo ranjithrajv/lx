@@ -46,7 +46,7 @@ pub struct Pkg {
 /// the built .debs in `out_dir`, mirroring the action's
 /// `build_source_packages`:
 ///   * architecture-independent, so generated once per dist,
-///   * built entirely in-process (`lx_lib::debarchive`) -- no Docker, no
+///   * built entirely in-process (`lx_lib::debarchive`) -- no
 ///     `dpkg-source`/`dpkg-deb` subprocess,
 ///   * best-effort: on failure, the binary builds still stand.
 pub fn generate(out_dir: &Path, pkg: &Pkg) -> Result<()> {
@@ -320,7 +320,7 @@ fn build_source_package(
 /// Render a `.dsc` matching `dpkg-source -b`'s own field order and
 /// content, verified field-for-field against a real `dpkg-source -b` run
 /// (see `docs/decisions/2026-08-20-docker-free-lintian-source.md`).
-/// Unsigned, matching the previous Docker-based behavior (which never
+/// Unsigned, matching the previous behavior (which never
 /// signed either).
 pub fn render_dsc(pkg: &Pkg, content_version: &str, orig: &DscFile, debian: &DscFile) -> String {
     let homepage = lx_lib::constants::homepage_for_github(&pkg.github_repo);
