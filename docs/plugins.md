@@ -328,14 +328,15 @@ gerrit_host: review.gerrithub.io # optional self-hosted Gerrit
 package_format: deb     # deb | rpm | arch
 build_system: cmake     # cmake | cargo | go | custom (omit = auto-detect)
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
+input_source: npm        # npm | python | gem (language PM input; uses github_repo as package name)
 ```
 
-Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url`. Omit `build_system:` to auto-detect from the source tree after fetch.
+Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url`. Omit `build_system:` to auto-detect from the source tree after fetch. When `input_source` is set, `github_repo` is the registry package name and `source:` is ignored.
 
 ## 9. Wiring
 
-* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|gitlab|gitea|forgejo|bitbucket`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`.
-* `lib/build.rs` resolves `effective_source` → `get_source_plugin`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`.
+* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `input_source: String` (`#[serde(default)]` `""`, `alias = "input_source"`) validated `npm|python|gem`.
+* `lib/build.rs` resolves `effective_source` → `get_source_plugin`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `input_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
 * `lib/sourcebuild.rs` resolves the build system plugin: explicit `build_system:` → `get_build_system()`, else `detect_build_system(src_dir)`, else error. Runs `prebuild_steps`, checks `required_tools()`, then calls `build_sys.build()`.
 * `lib/discovery.rs` (`lx discover --source …`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_source_plugin`.
 * `lib/summary.rs` glob switches `*_*.deb` / `-*.rpm` / `-*.pkg.tar.*` and JSON includes `package_format`.
@@ -371,11 +372,20 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 
 No core pipeline changes – `sourcebuild.rs` is build-system-agnostic; it only calls `build_sys.build()`.
 
+**InputSource (e.g. `cpan`):**
+
+1. `lib/plugins/input/<name>.rs` – `impl InputSource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
+2. Register in `lib/plugins/input/mod.rs` `all_input_sources()`.
+3. Add `input_source = "<name>"` to `lib/config.rs` validation.
+4. Tests: `lib/plugins/input/tests` (registry gains the new name, `fetch` produces expected payload).
+
+No core pipeline changes – `build.rs` routes any non-empty `input_source` through `run_local()` after `fetch()`.
+
 ## 11. Relation to nfpm
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `SourcePlugin` (Source) + `BuildSystem` traits — 3 Package + 6 Source + 4 BuildSystem impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `SourcePlugin` (Source) + `BuildSystem` + `InputSource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 InputSource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | Only `lintian` for `deb`, reproducible `SOURCE_DATE_EPOCH` for all; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, custom) — compiles on host, wraps per-suite |
