@@ -107,7 +107,7 @@ impl InputSource for NpmInputSource {
 }
 
 /// Try to read the description field from package.json in the extracted dir.
-fn read_package_description(files_dir: &PathBuf, cfg: &PackageConfig) -> String {
+fn read_package_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> String {
     if !cfg.description.is_empty() {
         return cfg.description.clone();
     }

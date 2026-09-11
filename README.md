@@ -251,14 +251,49 @@ prefix: ""                   # --from-dir/--from-file: install prefix inside the
 
 depends: ""                   # e.g. "libatomic1, libgtk-3-0"
 recommends: ""                 # e.g. "bash-completion"
+suggests: ""                   # e.g. "eza-legacy"
 conflicts: ""                  # e.g. "eza-legacy"
 replaces: ""                   # e.g. "eza-legacy"
 provides: ""                   # e.g. "eza-cli"
 breaks: ""                     # e.g. "eza-legacy (<< 2.0)"
+predepends: ""                 # e.g. "libc6" (must be fully installed first)
+section: ""                    # deb Section (default: "utils")
+priority: ""                   # deb Priority (default: "optional")
+arch_variant: ""               # deb arch variant, e.g. "amd64v3"
 
 version: ""                   # pin a specific upstream version (else: latest)
 build_version: "1"            # Debian revision
 epoch: ""                     # e.g. "1" -- for upstream version-numbering resets
+version_schema: semver        # semver (default; strips v-prefix) | none
+umask: ""                     # octal umask for files, e.g. "0o002" (default: inherit)
+packager: ""                  # packager string; rpm: packager header tag, deb: Packager field
+
+template_scripts: false       # enable ERB-like <%= key %> templating in maintainer scripts.
+                              # Available: name, version, maintainer, description, homepage,
+                              # license, arch, dist, iteration, epoch, vendor, packager, prefix
+
+# Maintainer scripts. Paths are in the build environment. For deb they become
+# DEBIAN/{preinst,postinst,prerm,postrm,preupgrade,postupgrade} (mode 0755);
+# for rpm they map to %pre/%post/%preun/%postun/%pretrans/%posttrans/%verify;
+# for arch preupgrade/postupgrade go in .INSTALL.
+scripts:
+  preinstall: ""              # DEBIAN/preinst | %pre | —
+  postinstall: ""             # DEBIAN/postinst | %post | —
+  preremove: ""               # DEBIAN/prerm | %preun | —
+  postremove: ""              # DEBIAN/postrm | %postun | —
+  pretrans: ""                # DEBIAN/preupgrade | %pretrans | —
+  posttrans: ""               # DEBIAN/postupgrade | %posttrans | —
+  verify: ""                  # — | %verify | —
+  preupgrade_script: ""       # DEBIAN/preupgrade | %pretrans | pre_upgrade()
+  postupgrade_script: ""      # DEBIAN/postupgrade | %posttrans | post_upgrade()
+
+# Per-format dependency overrides keyed by package format ("deb"/"rpm"/"arch").
+# An overridden field *replaces* the top-level value for that format.
+overrides:
+  deb:
+    depends: ""               # override depends for deb only
+  rpm:
+    depends: ""               # override depends for rpm only
 
 # Local-only packaging (lx build --local); skips the forge download.
 # Existence is checked at build time. ${VAR} / ${VAR:-default} expand at parse.
@@ -269,6 +304,27 @@ signature:
   key_id: ""                  # optional gpg --local-user
   method: detach              # detach (sibling .sig) | debsign (embedded _gpg{type})
   type: origin                # debsign role: origin | maint | archive
+
+# Debian-specific: debconf, triggers, rules. Ignored by rpm/arch.
+deb:
+  rules: ""                   # path to debian/rules (→ DEBIAN/rules, mode 0755)
+  templates: ""               # path to debconf templates (→ DEBIAN/templates, mode 0644)
+  config: ""                  # path to debconf config script (→ DEBIAN/config, mode 0755)
+  triggers_interest: []       # triggers this package registers interest in
+  triggers_interest_await: [] # interest triggers that wait for the trigger
+  triggers_interest_noawait: [] # interest triggers that don't wait
+  triggers_activate: []       # triggers this package activates
+  triggers_activate_await: [] # activate triggers that wait
+  triggers_activate_noawait: [] # activate triggers that don't wait
+
+# RPM-specific: triggers. Ignored by deb/arch. Each entry is
+# "package: script_path" — the package is the trigger condition (fire when
+# this package is installed/removed), the script runs when it fires.
+rpm:
+  trigger_pre_install: []     # %triggerprein (before another package installs)
+  trigger_post_install: []    # %triggerin (after another package installs)
+  trigger_pre_uninstall: []   # %triggerun (before another package removes)
+  trigger_post_uninstall: []  # %triggerpostun (after another package removes)
 
 # Source builds (build_mode: source): fetch the upstream tag and compile on
 # the host instead of repacking release assets. Requires an explicit
@@ -389,6 +445,19 @@ concepts); `build_depends` names host packages instead.
 If `build_system:` is omitted, `lx` auto-detects from the source tree
 (`CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go). Set it
 explicitly to override or to use `custom`.
+
+**`input_source:`** — fetch from a language package manager instead of a
+forge release. Values: `"npm"`, `"python"`, `"gem"`. When set, the package
+to fetch is taken from `github_repo` (or `package_name`), and the version
+from `version`. Each input source is a plugin implementing the
+`InputSource` trait — adding a new ecosystem (cpan, hex, …) is
+implementing the trait and registering it in `lib/plugins/input/`.
+
+| `input_source` | Fetches via | Required tools |
+|---|---|---|
+| `npm` | `npm pack` + extract | `npm` |
+| `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
+| `gem` | `gem fetch` + extract | `gem` |
 
 **`musl: true`** — produce a musl-static binary with no glibc dependency,
 so the package runs on any Linux regardless of distro age (solves the

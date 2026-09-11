@@ -133,8 +133,8 @@ fn extract_gem_version(file_name: &str) -> Option<&str> {
 
 /// Read gem description from metadata.gz or gemspec.
 fn read_gem_description(
-    extract_dir: &PathBuf,
-    _files_dir: &PathBuf,
+    extract_dir: &std::path::Path,
+    _files_dir: &std::path::Path,
     cfg: &PackageConfig,
 ) -> String {
     if !cfg.description.is_empty() {
@@ -151,9 +151,7 @@ fn read_gem_description(
         Ok(f) => f,
         Err(_) => return String::new(),
     };
-    let gz = match flate2::read::GzDecoder::new(file) {
-        gz => gz,
-    };
+    let gz = flate2::read::GzDecoder::new(file);
     let mut reader = std::io::BufReader::new(gz);
     let mut yaml_text = String::new();
     if std::io::Read::read_to_string(&mut reader, &mut yaml_text).is_err() {

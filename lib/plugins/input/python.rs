@@ -140,7 +140,7 @@ fn extract_sdist_version(file_name: &str) -> Option<&str> {
 }
 
 /// Try to read description from setup.cfg or pyproject.toml in the sdist.
-fn read_sdist_description(files_dir: &PathBuf, cfg: &PackageConfig) -> String {
+fn read_sdist_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> String {
     if !cfg.description.is_empty() {
         return cfg.description.clone();
     }

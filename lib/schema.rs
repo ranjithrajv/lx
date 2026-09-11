@@ -493,6 +493,11 @@ pub fn generate_schema() -> serde_json::Value {
                 "type": "string",
                 "description": "Alias for source"
             },
+            "input_source": {
+                "type": "string",
+                "enum": ["npm", "python", "gem"],
+                "description": "Input source plugin for language package managers (npm, python, gem)"
+            },
             "gitlab_host": {
                 "type": "string",
                 "description": "Self-hosted GitLab host"

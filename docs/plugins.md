@@ -1,10 +1,11 @@
 # Plugin Architecture
 
-**Date:** 2026-08-24 (updated 2026-08-26: plugin types + 5 Source; 2026-09-11: + BuildSystem dimension)  
-**Status:** Implemented — 3 dimensions:
+**Date:** 2026-08-24 (updated 2026-08-26: plugin types + 5 Source; 2026-09-11: + BuildSystem dimension; 2026-09-11: + InputSource dimension)  
+**Status:** Implemented — 4 dimensions:
 * **3× Package:** `deb` + `rpm` + `arch`
-* **6× Source:** `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
+* **7× Source:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
 * **4× BuildSystem:** `cmake` + `cargo` + `go` + `custom`
+* **3× InputSource:** `npm` + `python` + `gem`
 
 `lx` builds Linux packages by repackaging release binaries or compiling source. The original implementation only produced Debian `.deb`s from GitHub. To support RPM/Arch, GitLab, and multiple build systems without forking the core pipeline, the build was refactored into a **format-agnostic core + three-dimensional pluggable system**.
 
@@ -13,6 +14,7 @@ This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at rep
 * **Package plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
 * **Source plugins** (`lib/plugins/source/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover releases/assets
 * **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,custom}.rs`) → compile source tree into install tree
+* **InputSource plugins** (`lib/plugins/input/{npm,python,gem}.rs`) → fetch from language package registries
 
 All are stateless, registered statically, and share the same explicit-registry pattern.
 
@@ -22,7 +24,7 @@ All are stateless, registered statically, and share the same explicit-registry p
 
 `lib/plugins/mod.rs`, `lib/plugins/source/mod.rs`, `lib/plugins/build_system/mod.rs`
 
-Three independent plugin dimensions, each with its own trait and registry:
+Four independent plugin dimensions, each with its own trait and registry:
 
 ```rust
 // Package — lib/plugins/mod.rs
@@ -57,9 +59,23 @@ pub trait BuildSystem: Send + Sync {
     fn build(&self, cfg: &PackageConfig, src_dir: &Path, workdir: &Path) -> Result<PathBuf>;
     fn required_tools(&self) -> Vec<&'static str>; // checked before build
 }
+
+// InputSource — lib/plugins/input/mod.rs
+pub trait InputSource: Send + Sync {
+    fn name(&self) -> &'static str;              // "npm" | "python" | "gem"
+    fn description(&self) -> &'static str;
+    fn required_tools(&self) -> Vec<&'static str>; // checked before fetch (e.g. ["npm"])
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload>;
+}
+
+pub struct InputPayload {
+    pub files_dir: PathBuf,          // extracted files ready for packaging
+    pub resolved_version: String,    // actual version fetched
+    pub description: String,         // detected from package metadata
+}
 ```
 
-Each dimension has its own registry (`all_plugins()`, `all_source_plugins()`, `all_build_systems()`), lookup (`get_*`), and auto-detection where applicable (`detect_build_system()` for BuildSystem, `parse_any_url()` for Source). Adding a new plugin is implementing the trait + one registration line — no core pipeline edits.
+Each dimension has its own registry (`all_plugins()`, `all_source_plugins()`, `all_build_systems()`, `all_input_sources()`), lookup (`get_*`), and auto-detection where applicable (`detect_build_system()` for BuildSystem, `parse_any_url()` for Source). Adding a new plugin is implementing the trait + one registration line — no core pipeline edits.
 
 ## 2. Package Trait
 
@@ -146,6 +162,13 @@ pub fn get_build_system(name: &str) -> Option<Box<dyn BuildSystem>> { /* case-in
 pub fn detect_build_system(src_dir: &Path) -> Option<Box<dyn BuildSystem>> {
     all_build_systems().into_iter().find(|b| b.recognize(src_dir))
 }
+
+// InputSource
+pub fn all_input_sources() -> Vec<Box<dyn InputSource>> {
+    vec![Box::new(npm::NpmInputSource), Box::new(python::PythonInputSource),
+         Box::new(gem::GemInputSource)]
+}
+pub fn get_input_source(name: &str) -> Option<Box<dyn InputSource>> { /* case-insensitive */ }
 ```
 
 No `dlopen`, no feature flags. Adding a format = `impl Plugin` + one line in `all_plugins()`. Adding a source = `impl SourcePlugin` + one line in `all_source_plugins()`. Adding a build system = `impl BuildSystem` + one line in `all_build_systems()`.

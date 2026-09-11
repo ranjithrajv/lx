@@ -77,7 +77,7 @@ contents:
     dst: /usr/share/man/man1/
 ```
 
-### lx — files + forge releases (config + zero-config)
+### lx — files + forge releases + language PMs (config + zero-config)
 
 ```yaml
 # Binary repack from forge release (auto-fetch + verify)
@@ -90,11 +90,29 @@ local_payload: path/to/archive.tar.gz
 # Or source compilation
 build_mode: source
 build_system: cmake
+
+# Or language package manager (input source plugin)
+source: npm            # npm | python | gem
+github_repo: typescript # package name in the registry
+version: latest        # optional version constraint
 ```
+
+**Input source plugins** (`source:` in package.yaml):
+
+| Source | Plugin | Mechanism | Required tools |
+|---|---|---|---|
+| npm | `npm` | `npm pack` + extract | `npm` |
+| pip | `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
+| gem | `gem` | `gem fetch` + extract | `gem` |
+
+Input plugins are modular — each is a separate `InputSource` trait
+implementation registered in `lib/plugins/input/`. Adding a new
+ecosystem (cpan, cargo-registry, hex, …) is implementing the trait and
+registering it.
 
 **Unique to lx:** zero-config URL builds (`lx build https://github.com/owner/repo`),
 auto-discovery of release assets, checksum verification (fail-closed),
-and source-package generation.
+source-package generation, and musl-static builds.
 
 ---
 
@@ -310,6 +328,7 @@ overrides:
 | Musl-static builds | ❌ | ❌ | ✅ `musl: true` |
 | `from-dir`/`from-file` mode | ❌ | ❌ | ✅ `--from-dir`/`--from-file` |
 | `--prefix` custom install path | ✅ `--prefix` | ❌ | ✅ `prefix:` / `--prefix` |
+| **Language PM inputs** | ✅ npm/gem/python/cpan | ❌ | ✅ `source: npm/python/gem` (plugin) |
 
 ---
 
