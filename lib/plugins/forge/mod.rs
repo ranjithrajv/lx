@@ -193,3 +193,22 @@ pub fn parse_any_forge_url(url: &str) -> Option<(String, String)> {
     }
     None
 }
+
+/// Shared URL parser: extract `owner/repo` from a `https://<host>/<owner>/<repo>[.git]` URL.
+///
+/// Used by every forge plugin's `parse_*_url` instead of each duplicating this logic.
+pub fn parse_host_url(s: &str, host: &str) -> Option<String> {
+    let prefixes = [format!("https://{host}/"), format!("http://{host}/")];
+    for prefix in &prefixes {
+        if let Some(rest) = s.strip_prefix(prefix.as_str()) {
+            let mut parts = rest.trim_end_matches('/').splitn(3, '/');
+            let owner = parts.next()?;
+            let repo = parts.next()?.trim_end_matches(".git");
+            if owner.is_empty() || repo.is_empty() || repo.contains('/') {
+                return None;
+            }
+            return Some(format!("{owner}/{repo}"));
+        }
+    }
+    None
+}
