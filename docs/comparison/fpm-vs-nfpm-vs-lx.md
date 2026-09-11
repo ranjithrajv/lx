@@ -91,24 +91,28 @@ local_payload: path/to/archive.tar.gz
 build_mode: source
 build_system: cmake
 
-# Or language package manager (input source plugin)
-source: npm            # npm | python | gem
+# Or language package manager (registry source plugin)
+registry_source: npm  # npm | python | gem | cargo | nuget | maven | composer | cpan
 github_repo: typescript # package name in the registry
 version: latest        # optional version constraint
 ```
 
-**Input source plugins** (`source:` in package.yaml):
+**Registry source plugins** (`registry_source:` in package.yaml):
 
-| Source | Packager | Mechanism | Required tools |
+| Source | Language | Mechanism | Required tools |
 |---|---|---|---|
-| npm | `npm` | `npm pack` + extract | `npm` |
-| pip | `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
-| gem | `gem` | `gem fetch` + extract | `gem` |
+| npm | JavaScript/Node | `npm pack` + extract | `npm` |
+| python | Python | `pip download --no-binary :all:` + extract | `pip`, `python3` |
+| gem | Ruby | `gem fetch` + extract | `gem` |
+| cargo | Rust | `cargo install --root <dir>` | `cargo` |
+| nuget | .NET/C# | `nuget install` + extract | `nuget` |
+| maven | Java/Kotlin/Scala | `mvn dependency:copy-dependencies` | `mvn` |
+| composer | PHP | `composer install` | `composer` |
+| cpan | Perl | `cpanm` + build install tree | `cpanm`, `perl` |
 
-Input plugins are modular — each is a separate `RegistrySource` trait
-implementation registered in `lib/plugins/input/`. Adding a new
-ecosystem (cpan, cargo-registry, hex, …) is implementing the trait and
-registering it.
+Registry source plugins are modular — each is a separate `RegistrySource`
+trait implementation registered in `lib/plugins/registry/`. Adding a new
+ecosystem is implementing the trait and registering it.
 
 **Unique to lx:** zero-config URL builds (`lx build https://github.com/owner/repo`),
 auto-discovery of release assets, checksum verification (fail-closed),
@@ -328,7 +332,7 @@ overrides:
 | Musl-static builds | ❌ | ❌ | ✅ `musl: true` |
 | `from-dir`/`from-file` mode | ❌ | ❌ | ✅ `--from-dir`/`--from-file` |
 | `--prefix` custom install path | ✅ `--prefix` | ❌ | ✅ `prefix:` / `--prefix` |
-| **Language PM inputs** | ✅ npm/gem/python/cpan | ❌ | ✅ `source: npm/python/gem` (plugin) |
+| **Language PM inputs** | ✅ npm/gem/python/cpan/pear | ❌ | ✅ `registry_source: npm/python/gem/cargo/nuget/maven/composer/cpan` (plugin) |
 
 ---
 

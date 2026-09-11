@@ -7,11 +7,10 @@
 //! it (gems are tar archives with data.tar.gz + metadata.gz).
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::registry::{InputPayload, RegistrySource};
+use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct GemRegistrySource;
 
@@ -28,7 +27,7 @@ impl RegistrySource for GemRegistrySource {
         vec!["gem"]
     }
 
-    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload> {
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload> {
         let mut spec = package.to_string();
         if !version.trim().is_empty() {
             spec.push('(');
@@ -96,7 +95,7 @@ impl RegistrySource for GemRegistrySource {
 
             let description = read_gem_description(&extract_dir, &files_dir, cfg);
 
-            Ok(InputPayload {
+            Ok(RegistryPayload {
                 files_dir,
                 resolved_version: version.to_string(),
                 description,
@@ -104,7 +103,7 @@ impl RegistrySource for GemRegistrySource {
         } else {
             // Some gems have a flat structure.
             let description = read_gem_description(&extract_dir, &extract_dir, cfg);
-            Ok(InputPayload {
+            Ok(RegistryPayload {
                 files_dir: extract_dir,
                 resolved_version: version.to_string(),
                 description,

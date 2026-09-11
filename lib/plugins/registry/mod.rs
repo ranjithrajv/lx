@@ -1,23 +1,29 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Input source plugins for language package managers.
+//! Registry source plugins for language package managers.
 //!
-//! Each language ecosystem (npm, pip, gem, …) implements [`RegistrySource`].
-//! The build pipeline is input-agnostic: an input plugin produces a local
-//! directory of files (the "payload"), then the normal packaging pipeline
-//! (format plugins) wraps it into a .deb/.rpm/.arch.
+//! Each language ecosystem (npm, pip, gem, cargo, nuget, maven, composer, …)
+//! implements [`RegistrySource`]. The build pipeline is registry-agnostic: a
+//! plugin produces a local directory of files (the "payload"), then the normal
+//! packaging pipeline wraps it into a .deb/.rpm/.arch.
 //!
 //! Adding a new ecosystem is implementing `RegistrySource` and registering it
-//! in [`all_registry_sources`]. The `source:` field in package.yaml selects
-//! which plugin to use (`source: npm`, `source: python`, `source: gem`).
+//! in [`all_registry_sources`]. The `registry_source:` field in package.yaml
+//! selects which plugin to use.
 //!
 //! These are intentionally separate from [`crate::plugins::forge::ForgeSource`]
-//! (forge release providers). Forge sources fetch prebuilt release assets;
-//! input sources fetch from language package registries. Both produce a
-//! local payload directory, but their resolution mechanisms differ.
+//! (forge release providers). Forge sources discover *what releases and assets
+//! exist*; registry sources fetch *specific files* from language package
+//! registries. Both produce a local payload, but their resolution mechanisms
+//! differ. See `docs/plugins.md` for the full comparison.
 
+pub mod cargo;
+pub mod composer;
+pub mod cpan;
 pub mod gem;
+pub mod maven;
 pub mod npm;
+pub mod nuget;
 pub mod python;
 
 use anyhow::Result;
@@ -25,8 +31,8 @@ use std::path::PathBuf;
 
 use crate::config::PackageConfig;
 
-/// Output of an input source plugin: a local directory ready for packaging.
-pub struct InputPayload {
+/// Output of a registry source plugin: a local directory ready for packaging.
+pub struct RegistryPayload {
     /// Directory containing the files to package. The packaging pipeline
     /// treats this like an extracted release archive (binary_dir).
     pub files_dir: PathBuf,
@@ -36,18 +42,18 @@ pub struct InputPayload {
     pub description: String,
 }
 
-/// An input source plugin: fetches a package from a language registry
+/// A registry source plugin: fetches a package from a language registry
 /// and produces a local directory of files ready for packaging.
 ///
 /// Implementors are stateless; registered once in [`all_registry_sources`].
 pub trait RegistrySource: Send + Sync {
-    /// Canonical name used in `package.yaml` (`source:`).
+    /// Canonical name used in `package.yaml` (`registry_source:`).
     fn name(&self) -> &'static str;
 
     /// Human-readable description.
     fn description(&self) -> &'static str;
 
-    /// Host tools this input source requires on `PATH` (checked before
+    /// Host tools this registry source requires on `PATH` (checked before
     /// fetch). E.g. `vec!["npm"]` for the npm source.
     fn required_tools(&self) -> Vec<&'static str> {
         Vec::new()
@@ -56,27 +62,34 @@ pub trait RegistrySource: Send + Sync {
     /// Fetch the package and produce a local payload directory.
     ///
     /// `package` is the registry package name (npm package name, pip
-    /// requirement, gem name). `version` is the requested version
-    /// constraint, or empty for "latest".
-    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload>;
+    /// requirement, Maven coordinate, composer package). `version` is the
+    /// requested version constraint, or empty for "latest".
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload>;
 }
 
-/// All known input source plugins, in registration order.
+/// All known registry source plugins, in registration order.
 pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
     vec![
-        Box::new(npm::NpmRegistrySource),
-        Box::new(python::PythonRegistrySource),
+        Box::new(cargo::CargoRegistrySource),
+        Box::new(composer::ComposerRegistrySource),
+        Box::new(cpan::CpanRegistrySource),
         Box::new(gem::GemRegistrySource),
+        Box::new(maven::MavenRegistrySource),
+        Box::new(npm::NpmRegistrySource),
+        Box::new(nuget::NugetRegistrySource),
+        Box::new(python::PythonRegistrySource),
     ]
 }
 
-/// Look up an input source by name (case-insensitive). Returns `None` for unknown.
+/// Look up a registry source by name (case-insensitive). Returns `None` for unknown.
 pub fn get_registry_source(name: &str) -> Option<Box<dyn RegistrySource>> {
     let lower = name.to_ascii_lowercase();
-    all_registry_sources().into_iter().find(|p| p.name() == lower)
+    all_registry_sources()
+        .into_iter()
+        .find(|p| p.name() == lower)
 }
 
-/// Available input source names for error messages / help text.
+/// Available registry source names for error messages / help text.
 pub fn registry_source_names() -> Vec<&'static str> {
     all_registry_sources().iter().map(|p| p.name()).collect()
 }

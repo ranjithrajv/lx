@@ -7,11 +7,10 @@
 //! it into a staging directory.
 
 use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::registry::{InputPayload, RegistrySource};
+use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct NpmRegistrySource;
 
@@ -28,7 +27,7 @@ impl RegistrySource for NpmRegistrySource {
         vec!["npm"]
     }
 
-    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload> {
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload> {
         let spec = if version.trim().is_empty() {
             package.to_string()
         } else {
@@ -98,7 +97,7 @@ impl RegistrySource for NpmRegistrySource {
         // Try to read description from package.json.
         let description = read_package_description(&files_dir, cfg);
 
-        Ok(InputPayload {
+        Ok(RegistryPayload {
             files_dir,
             resolved_version: version,
             description,

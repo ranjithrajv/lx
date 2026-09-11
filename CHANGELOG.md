@@ -46,13 +46,14 @@
 - **Suggests + Pre-Depends**: `suggests:` and `predepends:` fields now
   render `Suggests:` and `Pre-Depends:` control lines. Mirrors nfpm.
 
-### Input source plugins (language package managers)
+### Registry source plugins (language package managers)
 
 - New `registry_source:` field in package.yaml selects a language package
-  manager input plugin (`npm`, `python`, `gem`). These fetch from language
-  registries instead of forge releases, producing a local payload directory
-  that flows through the normal packaging pipeline. Each input source is a
-  plugin implementing the `RegistrySource` trait in `lib/plugins/input/` —
+  manager plugin. Initial plugins: `npm`, `python`, `gem`, `cargo`,
+  `nuget`, `maven`, `composer`, `cpan`. These fetch from language registries
+  instead of forge releases, producing a local payload directory that flows
+  through the normal packaging pipeline. Each registry source is a plugin
+  implementing the `RegistrySource` trait in `lib/plugins/registry/` —
   adding a new ecosystem is implementing the trait and registering it.
 
 ### Musl-static builds for old-distro portability

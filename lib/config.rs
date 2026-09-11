@@ -193,6 +193,25 @@ pub struct RpmConfig {
     /// `"package: script_path"`.
     #[serde(default)]
     pub trigger_post_uninstall: Vec<String>,
+    /// RPM payload compression algorithm. One of: `gzip`, `xz`, `lzma`,
+    /// `zstd`, `none`. Default: `gzip` (rpm crate default).
+    /// Mirrors fpm's `--rpm-compression` and nfpm's `rpm.compression`.
+    #[serde(default)]
+    pub compression: String,
+    /// Auto-generate `Provides:` for every file/shared library the package
+    /// installs (rpm's `--auto-provides`). Default: true.
+    #[serde(default = "crate::config::true_default")]
+    pub auto_provides: bool,
+    /// Auto-generate `Requires:` from shared-library dependencies detected
+    /// in the payload (rpm's `--auto-requires`). Default: true.
+    #[serde(default = "crate::config::true_default")]
+    pub auto_requires: bool,
+    /// rpmbuild-style macro definitions (e.g. `_unpackaged_files_terminate_build 0`).
+    /// Each entry is a `"KEY VALUE"` string written to a macro file that
+    /// rpmbuild reads. Best-effort: applied as builder lead macros when the
+    /// rpm crate supports it, else documented for rpmbuild fallback.
+    #[serde(default)]
+    pub defines: Vec<String>,
 }
 
 /// Package signing configuration (`signature:`).
@@ -405,11 +424,11 @@ pub struct PackageConfig {
     #[serde(default = "default_source")]
     #[serde(alias = "source_provider")]
     pub source: String,
-    /// Input source plugin for language package managers. When set, `lx`
+    /// Registry source plugin for language package managers. When set, `lx`
     /// fetches the package from a language registry instead of a forge
-    /// release. Values: "npm", "python", "gem". The package to fetch is
-    /// taken from `github_repo` (or `package_name` if github_repo is
-    /// empty), and the version from `version`.
+    /// release. Values: "npm", "python", "gem", "cargo", "nuget", "maven",
+    /// "composer". The package to fetch is taken from `github_repo` (or
+    /// `package_name` if github_repo is empty), and the version from `version`.
     #[serde(default)]
     #[serde(alias = "registry_source")]
     pub registry_source: String,
@@ -608,6 +627,11 @@ fn default_build_mode() -> String {
 
 fn default_build_system() -> String {
     "cmake".to_string()
+}
+
+/// Serde default for boolean fields that should default to `true`.
+pub fn true_default() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1047,8 +1071,9 @@ impl PackageConfig {
         Ok(())
     }
 
-    /// Effective input source for language package managers ("npm", "python",
-    /// "gem"), or empty when not using an input source plugin.
+    /// Effective registry source for language package managers ("npm", "python",
+    /// "gem", "cargo", "nuget", "maven", "composer"), or empty when not using
+    /// a registry source plugin.
     pub fn effective_registry_source(&self) -> String {
         let s = self.registry_source.trim();
         if s.is_empty() {

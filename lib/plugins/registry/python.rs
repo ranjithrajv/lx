@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::registry::{InputPayload, RegistrySource};
+use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct PythonRegistrySource;
 
@@ -29,7 +29,7 @@ impl RegistrySource for PythonRegistrySource {
         vec!["pip", "python3"]
     }
 
-    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<InputPayload> {
+    fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload> {
         let spec = if version.trim().is_empty() {
             package.to_string()
         } else {
@@ -112,7 +112,7 @@ impl RegistrySource for PythonRegistrySource {
 
         let description = read_sdist_description(&files_dir, cfg);
 
-        Ok(InputPayload {
+        Ok(RegistryPayload {
             files_dir,
             resolved_version: version.to_string(),
             description,

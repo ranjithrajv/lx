@@ -495,8 +495,8 @@ pub fn generate_schema() -> serde_json::Value {
             },
             "registry_source": {
                 "type": "string",
-                "enum": ["npm", "python", "gem"],
-                "description": "Input source plugin for language package managers (npm, python, gem)"
+                "enum": ["npm", "python", "gem", "cargo", "nuget", "maven", "composer"],
+                "description": "Registry source plugin for language package managers (npm, python, gem, cargo, nuget, maven, composer)"
             },
             "gitlab_host": {
                 "type": "string",

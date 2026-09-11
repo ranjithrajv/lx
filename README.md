@@ -27,7 +27,7 @@ editing the core pipeline:
 | **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
 | **Source** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
 | **BuildSystem** | Compile source tree | 4 (cmake, cargo, go, custom) | `build_system:` |
-| **RegistrySource** | Fetch from language registries | 3 (npm, python, gem) | `registry_source:` |
+| **RegistrySource** | Fetch from language registries | 8 (npm, python, gem, cargo, nuget, maven, composer, cpan) | `registry_source:` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
 available* (returns release metadata), RegistrySource fetches *specific
@@ -483,17 +483,21 @@ If `build_system:` is omitted, `lx` auto-detects from the source tree
 explicitly to override or to use `custom`.
 
 **`registry_source:`** — fetch from a language package manager instead of a
-forge release. Values: `"npm"`, `"python"`, `"gem"`. When set, the package
-to fetch is taken from `github_repo` (or `package_name`), and the version
-from `version`. Each input source is a plugin implementing the
-`RegistrySource` trait — adding a new ecosystem (cpan, hex, …) is
-implementing the trait and registering it in `lib/plugins/input/`.
+forge release. When set, the package to fetch is taken from `github_repo`
+(or `package_name`), and the version from `version`. Each registry source
+is a plugin implementing the `RegistrySource` trait — adding a new ecosystem
+is implementing the trait and registering it in `lib/plugins/registry/`.
 
-| `registry_source` | Fetches via | Required tools |
-|---|---|---|
-| `npm` | `npm pack` + extract | `npm` |
-| `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
-| `gem` | `gem fetch` + extract | `gem` |
+| `registry_source` | Language | Fetches via | Required tools |
+|---|---|---|---|
+| `npm` | JavaScript/Node | `npm pack` + extract | `npm` |
+| `python` | Python | `pip download --no-binary :all:` + extract | `pip`, `python3` |
+| `gem` | Ruby | `gem fetch` + extract | `gem` |
+| `cargo` | Rust | `cargo install --root <dir>` | `cargo` |
+| `nuget` | .NET/C# | `nuget install` + extract | `nuget` |
+| `maven` | Java/Kotlin/Scala | `mvn dependency:copy-dependencies` | `mvn` |
+| `composer` | PHP | `composer install` | `composer` |
+| `cpan` | Perl | `cpanm` + build install tree | `cpanm`, `perl` |
 
 **`musl: true`** — produce a musl-static binary with no glibc dependency,
 so the package runs on any Linux regardless of distro age (solves the

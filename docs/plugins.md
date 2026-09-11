@@ -1,11 +1,11 @@
 # Packager Architecture
 
-**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: clarified Source vs RegistrySource)
+**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource)
 **Status:** Implemented — 4 independent plugin dimensions:
 * **3× Packager:** `deb` + `rpm` + `arch`
-* **7× Source:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
+* **7× ForgeSource:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
 * **4× BuildSystem:** `cmake` + `cargo` + `go` + `custom`
-* **3× RegistrySource:** `npm` + `python` + `gem`
+* **8× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `nuget` + `maven` + `composer` + `cpan`
 
 `lx` builds Linux packages from many kinds of upstream. The original
 implementation only produced Debian `.deb`s from GitHub. To support RPM/Arc,
@@ -394,14 +394,14 @@ gerrit_host: review.gerrithub.io # optional self-hosted Gerrit
 package_format: deb     # deb | rpm | arch
 build_system: cmake     # cmake | cargo | go | custom (omit = auto-detect)
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
-registry_source: npm        # npm | python | gem (language PM input; uses github_repo as package name)
+registry_source: npm        # npm | python | gem | cargo | nuget | maven | composer | cpan (uses github_repo as package name)
 ```
 
 Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url`. Omit `build_system:` to auto-detect from the source tree after fetch. When `registry_source` is set, `github_repo` is the registry package name and `source:` is ignored.
 
 ## 9. Wiring
 
-* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem`.
+* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem|cargo|nuget|maven|composer|cpan`.
 * `lib/build.rs` resolves `effective_source` → `get_forge_source`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `registry_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
 * `lib/sourcebuild.rs` resolves the build system plugin: explicit `build_system:` → `get_build_system()`, else `detect_build_system(src_dir)`, else error. Runs `prebuild_steps`, checks `required_tools()`, then calls `build_sys.build()`.
 * `lib/discovery.rs` (`lx discover --source …`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_forge_source`.
