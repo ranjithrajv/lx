@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::build::*;
 
 #[test]
@@ -138,6 +140,10 @@ debian_distributions: [trixie]
         sign_key_id: None,
         sign_method: Some("debsign".into()),
         local: true,
+        from_dir: None,
+        from_file: None,
+        package_name: None,
+        prefix: None,
         overlay: None,
         update_lock: false,
         artifact_cache_dir: None,
@@ -214,6 +220,10 @@ debian_distributions: [trixie]
         sign_key_id: None,
         sign_method: Some("debsign".into()),
         local: true,
+        from_dir: None,
+        from_file: None,
+        package_name: None,
+        prefix: None,
         overlay: None,
         update_lock: false,
         artifact_cache_dir: None,
@@ -286,6 +296,10 @@ debian_distributions: [trixie]
         sign_key_id: None,
         sign_method: Some("debsign".into()),
         local: true,
+        from_dir: None,
+        from_file: None,
+        package_name: None,
+        prefix: None,
         overlay: None,
         update_lock: false,
         artifact_cache_dir: Some(cache_dir),
@@ -299,4 +313,290 @@ debian_distributions: [trixie]
         ..base_args
     };
     run(verify_args, None).expect("rebuild should verify as reproducible against the cache");
+}
+
+// ---------------------------------------------------------------------------
+// "You supply files" mode: --from-dir / --from-file (fpm-style)
+// ---------------------------------------------------------------------------
+
+/// `--from-dir` builds a package from a directory of files you supply, with
+/// no package.yaml at all (metadata via CLI flags).
+#[test]
+fn from_dir_dry_run_builds_matrix_with_cli_metadata() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("mybinary"), b"\x7fELFfake").unwrap();
+    std::fs::write(payload.path().join("README"), b"docs").unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        // No package.yaml exists; use the default config path which won't be
+        // found and falls back to defaults.
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("1.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: false,
+        from_dir: Some(payload.path().to_path_buf()),
+        from_file: None,
+        package_name: Some("myapp".into()),
+        prefix: None,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("--from-dir --dry-run should succeed");
+}
+
+/// `--from-file` builds a package from a single file you supply.
+#[test]
+fn from_file_dry_run_builds_matrix() {
+    let payload = tempfile::tempdir().unwrap();
+    let binary_path = payload.path().join("mybinary");
+    std::fs::write(&binary_path, b"\x7fELFfake").unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("2.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: false,
+        from_dir: None,
+        from_file: Some(binary_path),
+        package_name: Some("myapp".into()),
+        prefix: None,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("--from-file --dry-run should succeed");
+}
+
+/// `--from-dir` with `--prefix` stages files at the custom path.
+#[test]
+fn from_dir_with_prefix_stages_at_custom_path() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("mybinary"), b"\x7fELFfake").unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("1.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: false,
+        from_dir: Some(payload.path().to_path_buf()),
+        from_file: None,
+        package_name: Some("myapp".into()),
+        prefix: Some("/usr/local/bin".into()),
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("--from-dir --prefix --dry-run should succeed");
+}
+
+/// `--from-dir` auto-fills package_name from the directory name when neither
+/// package.yaml nor `--package-name` provides one.
+#[test]
+fn from_dir_auto_fills_package_name_from_dir() {
+    let payload = tempfile::tempdir().unwrap();
+    let sub = payload.path().join("my-cool-app");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("binary"), b"\x7fELFfake").unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("1.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: false,
+        from_dir: Some(sub),
+        from_file: None,
+        package_name: None,
+        prefix: None,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("--from-dir with auto-name should succeed");
+}
+
+/// `--from-dir` with an invalid prefix (relative path) fails validation.
+#[test]
+fn from_dir_rejects_relative_prefix() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("binary"), b"\x7fELFfake").unwrap();
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("1.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: None,
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: true,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        sbom: false,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: Some("debsign".into()),
+        local: false,
+        from_dir: Some(payload.path().to_path_buf()),
+        from_file: None,
+        package_name: Some("myapp".into()),
+        prefix: Some("usr/local/bin".into()), // relative — invalid
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    let err = run(args, None).expect_err("relative prefix should fail validation");
+    assert!(
+        err.to_string().contains("absolute path"),
+        "expected prefix error, got: {err}"
+    );
 }

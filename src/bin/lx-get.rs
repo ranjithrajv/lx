@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx-get` — the thin consumer client (mist spirit): install, upgrade,
 //! and inspect prebuilt packages without any of the build machinery.
 //! Same manifest, same `latest-debs` org, subset of `lx` subcommands.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared plumbing for `install`/`upgrade`/`remove`/`list`: everything that
 //! talks to the `latest-debs` GitHub org or to dpkg on the host, factored
 //! out so it isn't duplicated across those four subcommands.
@@ -33,6 +35,29 @@ pub fn find_asset<'a>(
         .assets
         .iter()
         .find(|a| a.name.starts_with(&prefix) && a.name.ends_with(&suffix))
+}
+
+/// Match a release asset with musl fallback. First tries the
+/// dist-specific asset (`{package}_{version}-{build}+{dist}_{arch}.deb`),
+/// then falls back to a musl-static asset (`+musl_{arch}.deb`). Musl-static
+/// binaries have no glibc dependency and run on any Linux regardless of
+/// distro age — useful when the publisher doesn't ship a build for this
+/// exact distro (e.g. an old Ubuntu release).
+pub fn find_asset_musl<'a>(
+    release: &'a Release,
+    package: &str,
+    arch: &str,
+    dist: &str,
+) -> Option<&'a Asset> {
+    if let Some(asset) = find_asset(release, package, arch, dist) {
+        return Some(asset);
+    }
+    let prefix = format!("{package}_");
+    let musl_suffix = format!("+musl_{arch}.deb");
+    release
+        .assets
+        .iter()
+        .find(|a| a.name.starts_with(&prefix) && a.name.ends_with(&musl_suffix))
 }
 
 /// Recover the Debian `Version` field embedded in an asset filename
@@ -240,7 +265,12 @@ pub fn verify_sidecar_or_require_flag(
 /// `sudo dpkg -i <path>`, falling back to `sudo apt-get install -f -y` when
 /// dpkg reports missing dependencies. Prompts for confirmation unless `yes`.
 pub fn install_deb(path: &Path, yes: bool) -> Result<()> {
-    if !yes && !confirm(&format!("Install {} via `sudo dpkg -i`?", path.display()))? {
+    if !yes
+        && !confirm(
+            &format!("Install {} via `sudo dpkg -i`?", path.display()),
+            false,
+        )?
+    {
         println!("Aborted; package left at {}", path.display());
         return Ok(());
     }
@@ -269,10 +299,13 @@ pub fn install_deb(path: &Path, yes: bool) -> Result<()> {
 pub fn remove_deb(package: &str, purge: bool, yes: bool) -> Result<()> {
     let verb = if purge { "purge" } else { "remove" };
     if !yes
-        && !confirm(&format!(
-            "Run `sudo dpkg -{}` for '{package}'?",
-            if purge { "P" } else { "r" }
-        ))?
+        && !confirm(
+            &format!(
+                "Run `sudo dpkg -{}` for '{package}'?",
+                if purge { "P" } else { "r" }
+            ),
+            false,
+        )?
     {
         println!("Aborted; '{package}' left installed.");
         return Ok(());
@@ -290,7 +323,9 @@ pub fn remove_deb(package: &str, purge: bool, yes: bool) -> Result<()> {
     Ok(())
 }
 
-fn confirm(prompt: &str) -> Result<bool> {
+/// Prompt for a yes/no confirmation via stdin (falls back to "no" on
+/// EOF/non-TTY). `default` is the Enter-key value.
+pub fn confirm(prompt: &str, _default: bool) -> Result<bool> {
     use std::io::Write;
     print!("{prompt} [y/N] ");
     std::io::stdout().flush()?;

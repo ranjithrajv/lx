@@ -1,0 +1,34 @@
+name: adoption-stats
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Collect stats
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .stats
+          OUT=.stats/$(date -u +%F).json
+          REPO=${GITHUB_REPOSITORY}
+          STARS=$(gh api repos/$REPO --jq .stargazers_count)
+          FORKS=$(gh api repos/$REPO --jq .forks_count)
+          # 'uses:' code-search count (public repos only)
+          USES=$(gh api -H Accept:application/vnd.github+json "/search/code?q=uses:+ranjithrajv/lx+extension:yml" --jq .total_count 2>/dev/null || echo 0)
+          DOWNLOADS=$(gh api repos/$REPO/releases --paginate --jq '[.[].assets[].download_count] | add // 0')
+          echo "{\"date\":\"$(date -u +%F)\",\"stars\":$STARS,\"forks\":$FORKS,\"code_uses\":$USES,\"release_downloads\":$DOWNLOADS}" | tee "$OUT"
+          # roll up latest pointer
+          cp "$OUT" .stats/latest.json
+      - name: Commit
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email github-actions[bot]@users.noreply.github.com
+          git add .stats/
+          git commit -m "chore: adoption snapshot $(date -u +%F)" || exit 0
+          git push

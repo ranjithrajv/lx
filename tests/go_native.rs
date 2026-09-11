@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx go-native` parser unit tests: snap/flatpak/nix listings, shell
 //! history URL extraction, and mapping-table spot checks. All pure
 //! functions — no live snap/flatpak/nix required.

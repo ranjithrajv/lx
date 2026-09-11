@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::debarchive::*;
 use std::os::unix::fs::PermissionsExt;
 

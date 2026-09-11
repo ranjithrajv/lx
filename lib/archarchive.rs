@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Build an Arch Linux `.pkg.tar.zst` pacman package entirely in-process.
 //!
 //! Mirrors `debarchive.rs` / `rpmarchive.rs`: no `makepkg`, fully in-process.
@@ -24,12 +26,15 @@ pub struct PackageMeta<'a> {
 ///
 /// `root` is the staged tree (e.g. `root/usr/bin/foo` → `/usr/bin/foo`).
 /// `arch_path` is the output `*.pkg.tar.zst`.
+/// `install_script` is an optional `.INSTALL` file body (pre/post-upgrade
+/// hooks); when non-empty it is added as the `.INSTALL` member.
 pub fn build(
     root: &Path,
     meta: &PackageMeta,
     arch: &str,
     mtime: i64,
     arch_path: &Path,
+    install_script: Option<&str>,
 ) -> Result<()> {
     let pacman_arch = to_pacman_arch(arch);
     let pkgver = format!("{}-{}", meta.version, meta.release);
@@ -52,6 +57,13 @@ pub fn build(
         // MTREE from the same walk and add as regular file.
         let mtree = render_mtree(root, mtime)?;
         append_file_bytes(&mut builder, ".MTREE", mtree.as_bytes(), 0o644, mtime)?;
+
+        // Optional .INSTALL (pre/post-upgrade hooks).
+        if let Some(script) = install_script {
+            if !script.trim().is_empty() {
+                append_file_bytes(&mut builder, ".INSTALL", script.as_bytes(), 0o644, mtime)?;
+            }
+        }
 
         // Payload: recursively add root contents (sorted, normalized).
         append_dir_sorted(&mut builder, root, "", root, mtime)?;
@@ -153,6 +165,39 @@ pub fn render_pkginfo(
          arch = {arch}\n\
          license = {license}\n"
     )
+}
+
+/// Render an Arch `.INSTALL` file from the pre/post-upgrade hooks.
+/// Mirrors nfpm's `archlinux.scripts.preupgrade`/`postupgrade`. Each
+/// non-empty hook becomes a `pre_upgrade()` / `post_upgrade()` function
+/// in the returned string. Returns `None` when neither hook is set, so
+/// the caller can skip the `.INSTALL` member entirely.
+pub fn render_install_script(preupgrade: &str, postupgrade: &str) -> Option<String> {
+    let pre = preupgrade.trim();
+    let post = postupgrade.trim();
+    if pre.is_empty() && post.is_empty() {
+        return None;
+    }
+    let mut out = String::new();
+    if !pre.is_empty() {
+        out.push_str(&format!(
+            "pre_upgrade() {{
+{pre}
+}}
+
+"
+        ));
+    }
+    if !post.is_empty() {
+        out.push_str(&format!(
+            "post_upgrade() {{
+{post}
+}}
+
+"
+        ));
+    }
+    Some(out)
 }
 
 fn render_mtree(root: &Path, mtime: i64) -> Result<String> {

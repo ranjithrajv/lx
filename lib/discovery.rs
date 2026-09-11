@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{anyhow, Result};
 use clap::Args;
 
@@ -37,7 +39,17 @@ pub struct ArchAsset {
 ///
 /// OS filtering: assets that are clearly for Windows/macOS are only used as
 /// a last resort, so a `.exe`/`.dmg` never shadows a Linux build.
+///
+/// When `musl` is true, assets containing `musl` in their name are preferred
+/// over glibc variants (e.g. `*-linux-musl.tar.gz` wins over
+/// `*-linux-gnu.tar.gz`), producing a binary with no glibc dependency that
+/// runs on any Linux regardless of distro age.
 pub fn match_assets(release: &Release) -> Vec<ArchAsset> {
+    match_assets_with_musl(release, false)
+}
+
+/// Like [`match_assets`] but with explicit musl preference control.
+pub fn match_assets_with_musl(release: &Release, musl: bool) -> Vec<ArchAsset> {
     let linux_assets: Vec<&Asset> = release
         .assets
         .iter()
@@ -64,12 +76,34 @@ pub fn match_assets(release: &Release) -> Vec<ArchAsset> {
     let mut matched = Vec::new();
     let mut claimed: Vec<&str> = Vec::new();
     for (debian_arch, aliases) in order {
-        let hit = linux_assets.iter().find(|asset| {
-            if claimed.contains(&asset.name.as_str()) {
-                return false;
-            }
-            asset_matches_arch(&asset.name, debian_arch, aliases)
-        });
+        // When musl is requested, prefer a musl-named asset for this arch if
+        // one exists; fall back to any matching asset otherwise.
+        let hit = linux_assets
+            .iter()
+            .find(|asset| {
+                if claimed.contains(&asset.name.as_str()) {
+                    return false;
+                }
+                if !asset_matches_arch(&asset.name, debian_arch, aliases) {
+                    return false;
+                }
+                // First pass: prefer musl assets when requested.
+                !musl || asset.name.to_ascii_lowercase().contains("musl")
+            })
+            .or_else(|| {
+                if musl {
+                    // No musl asset for this arch — fall back to any match so
+                    // we still produce a package (it just won't be musl).
+                    linux_assets.iter().find(|asset| {
+                        if claimed.contains(&asset.name.as_str()) {
+                            return false;
+                        }
+                        asset_matches_arch(&asset.name, debian_arch, aliases)
+                    })
+                } else {
+                    None
+                }
+            });
         if let Some(asset) = hit {
             matched.push(ArchAsset {
                 arch: debian_arch.to_string(),
@@ -214,7 +248,16 @@ pub fn split_repo(repo: &str) -> Result<(&str, &str)> {
 /// Build a PackageConfig from a release and its matched assets. Used by
 /// zero-config auto-discovery (like the action's --ad flag).
 pub fn config_from_release(repo: &str, release: &Release) -> Result<PackageConfig> {
-    let matched = match_assets(release);
+    config_from_release_with_musl(repo, release, false)
+}
+
+/// Like [`config_from_release`] but with explicit musl preference control.
+pub fn config_from_release_with_musl(
+    repo: &str,
+    release: &Release,
+    musl: bool,
+) -> Result<PackageConfig> {
+    let matched = match_assets_with_musl(release, musl);
     if matched.is_empty() {
         return Err(anyhow!("no assets matched any supported architecture"));
     }

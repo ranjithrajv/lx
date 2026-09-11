@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Plugin architecture for `lx`.
 //!
 //! Each package format (`.deb`, `.rpm`, …) is a plugin implementing the
@@ -10,11 +12,13 @@
 //! [`registry`] / [`all_plugins`].
 
 pub mod arch;
+pub mod build_system;
 pub mod deb;
 pub mod rpm;
 pub mod source;
 
 use anyhow::{Context, Result};
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
@@ -120,12 +124,26 @@ pub fn available_names() -> Vec<&'static str> {
 /// Mirrors the old `build.rs::stage_install_tree` — format-agnostic file
 /// placement logic that every plugin reuses. Handles `bundle` vs flat mode,
 /// `binary_rename`, and ancillary file (man page / license) staging.
+///
+/// When `cfg.prefix` is non-empty (set via `--prefix` for `--from-dir`/
+/// `--from-file` builds), all files are staged flat under `<root><prefix>`
+/// instead of the default `/usr/bin` layout — a simple "put these files
+/// here" mode for fpm-style "you supply files" builds.
 pub fn stage_install_tree(
     cfg: &PackageConfig,
     binary_dir: &Path,
     root: &Path,
     mtime: i64,
 ) -> anyhow::Result<()> {
+    // Custom-prefix mode (fpm-style): dump files at the given absolute path
+    // inside the package, with no ELF detection or ancillary staging.
+    if !cfg.prefix.is_empty() {
+        let dest_dir = root.join(cfg.prefix.trim_start_matches('/'));
+        std::fs::create_dir_all(&dest_dir)?;
+        copy_dir_recursive(binary_dir, &dest_dir)?;
+        return Ok(());
+    }
+
     let usr_bin = root.join("usr").join("bin");
     std::fs::create_dir_all(&usr_bin)?;
 
@@ -147,6 +165,7 @@ pub fn stage_install_tree(
             &format!("/usr/lib/{}", cfg.package_name),
         )?;
     } else {
+        let umask = cfg.effective_umask();
         for entry in std::fs::read_dir(binary_dir)? {
             let entry = entry?;
             let path = entry.path();
@@ -157,8 +176,9 @@ pub fn stage_install_tree(
                 let dest = usr_bin.join(entry.file_name());
                 std::fs::copy(&path, &dest)?;
                 make_executable(&dest)?;
+                apply_umask(&dest, umask)?;
             } else {
-                stage_ancillary_file(&path, root, &cfg.package_name, mtime)?;
+                stage_ancillary_file(&path, root, &cfg.package_name, mtime, umask)?;
             }
         }
     }
@@ -223,11 +243,27 @@ pub(crate) fn is_elf(path: &Path) -> anyhow::Result<bool> {
 }
 
 fn make_executable(path: &Path) -> anyhow::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let mut perms = std::fs::metadata(path)?.permissions();
     perms.set_mode(perms.mode() | lx_lib::constants::EXEC_MODE_MASK);
     std::fs::set_permissions(path, perms)?;
     Ok(())
+}
+
+/// Apply umask to a file's permissions: `mode = mode & !umask`.
+/// When `umask` is `None`, the file's mode is left unchanged.
+fn apply_umask(path: &Path, umask: Option<u32>) -> anyhow::Result<()> {
+    let Some(mask) = umask else {
+        return Ok(());
+    };
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(perms.mode() & !mask);
+    std::fs::set_permissions(path, perms)?;
+    Ok(())
+}
+
+/// Returns true if `s` contains glob meta-characters (`*`, `?`, `[`).
+fn is_glob_pattern(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
 }
 
 fn stage_ancillary_file(
@@ -235,6 +271,7 @@ fn stage_ancillary_file(
     root: &Path,
     pkg_name: &str,
     mtime: i64,
+    umask: Option<u32>,
 ) -> anyhow::Result<()> {
     let name = match path.file_name().and_then(|n| n.to_str()) {
         Some(n) => n,
@@ -244,14 +281,20 @@ fn stage_ancillary_file(
         let man_dir = root.join("usr/share/man").join(format!("man{section}"));
         std::fs::create_dir_all(&man_dir)?;
         if name.ends_with(".gz") {
-            std::fs::copy(path, man_dir.join(name))?;
+            let dest = man_dir.join(name);
+            std::fs::copy(path, &dest)?;
+            apply_umask(&dest, umask)?;
         } else {
-            gzip_file_to(path, &man_dir.join(format!("{name}.gz")), mtime)?;
+            let dest = man_dir.join(format!("{name}.gz"));
+            gzip_file_to(path, &dest, mtime)?;
+            apply_umask(&dest, umask)?;
         }
     } else if is_license_like(name) {
         let doc_dir = root.join("usr/share/doc").join(pkg_name);
         std::fs::create_dir_all(&doc_dir)?;
-        std::fs::copy(path, doc_dir.join(name))?;
+        let dest = doc_dir.join(name);
+        std::fs::copy(path, &dest)?;
+        apply_umask(&dest, umask)?;
     }
     Ok(())
 }
@@ -317,6 +360,7 @@ pub fn apply_contents(
     format: &str,
 ) -> anyhow::Result<Vec<String>> {
     let format = format.trim().to_ascii_lowercase();
+    let umask = cfg.effective_umask();
     let mut conffiles = Vec::new();
     for entry in &cfg.contents {
         let packager = entry.packager.trim().to_ascii_lowercase();
@@ -326,14 +370,35 @@ pub fn apply_contents(
         let dst_abs = safe_join(root, &entry.dst)?;
         match entry.kind.as_str() {
             "" | "file" => {
-                stage_file(Path::new(&entry.src), &dst_abs)?;
+                stage_contents_entry(
+                    Path::new(&entry.src),
+                    &dst_abs,
+                    &entry.kind,
+                    umask,
+                    cfg.disable_globbing,
+                    false,
+                )?;
             }
             "config" | "config|noreplace" | "config|missingok" => {
-                stage_file(Path::new(&entry.src), &dst_abs)?;
+                stage_contents_entry(
+                    Path::new(&entry.src),
+                    &dst_abs,
+                    &entry.kind,
+                    umask,
+                    cfg.disable_globbing,
+                    false,
+                )?;
                 conffiles.push(entry.dst.clone());
             }
             "tree" => {
-                copy_dir_recursive(Path::new(&entry.src), &dst_abs)?;
+                stage_contents_entry(
+                    Path::new(&entry.src),
+                    &dst_abs,
+                    &entry.kind,
+                    umask,
+                    cfg.disable_globbing,
+                    true,
+                )?;
             }
             // nfpm symlink semantics: both src and dst are paths *inside*
             // the package; nothing is read from the build environment.
@@ -358,6 +423,74 @@ pub fn apply_contents(
     }
     conffiles.sort();
     Ok(conffiles)
+}
+
+/// Stage a single contents entry, expanding glob patterns when applicable.
+///
+/// For `file`/`config*` types: if `src` contains glob characters and
+/// `disable_globbing` is false, expand the pattern and stage each matching
+/// file into `dst` (treated as a directory). Otherwise, stage `src` directly
+/// to `dst`.
+///
+/// For `tree` type: if `src` contains glob characters and `disable_globbing`
+/// is false, expand the pattern and copy each matching directory as a tree
+/// into `dst`. Otherwise, copy `src` recursively to `dst`.
+fn stage_contents_entry(
+    src: &Path,
+    dst: &Path,
+    kind: &str,
+    umask: Option<u32>,
+    disable_globbing: bool,
+    is_tree: bool,
+) -> anyhow::Result<()> {
+    let src_str = src.to_string_lossy();
+    let should_glob = !disable_globbing && is_glob_pattern(&src_str);
+
+    if !should_glob {
+        // Non-glob path: original behavior.
+        if is_tree {
+            copy_dir_recursive(src, dst)?;
+        } else {
+            stage_file(src, dst, umask)?;
+        }
+        return Ok(());
+    }
+
+    // Glob expansion path.
+    let is_dir_type = is_tree || kind == "dir";
+    let matches: Vec<_> = glob::glob(&src_str)
+        .with_context(|| format!("invalid glob pattern '{src_str}'"))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    if matches.is_empty() {
+        anyhow::bail!("glob pattern '{src_str}' matched no files");
+    }
+
+    if is_dir_type {
+        // For tree type: copy each matching directory as a subtree.
+        std::fs::create_dir_all(dst)?;
+        for matched in matches {
+            if matched.is_dir() {
+                let name = matched.file_name().ok_or_else(|| {
+                    anyhow::anyhow!("glob match '{}' has no file name", matched.display())
+                })?;
+                copy_dir_recursive(&matched, &dst.join(name))?;
+            }
+        }
+    } else {
+        // For file/config type: stage each matching file into dst (as directory).
+        std::fs::create_dir_all(dst)?;
+        for matched in matches {
+            if matched.is_file() {
+                let name = matched.file_name().ok_or_else(|| {
+                    anyhow::anyhow!("glob match '{}' has no file name", matched.display())
+                })?;
+                stage_file(&matched, &dst.join(name), umask)?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Read the configured maintainer scripts from the build environment and
@@ -388,13 +521,106 @@ pub fn maintainer_script_members(
     Ok(members)
 }
 
-fn stage_file(src: &Path, dst: &Path) -> anyhow::Result<()> {
+/// Read the deb-specific control members from the build environment: debconf
+/// `templates` (mode 0644) and `config` (mode 0755), `rules` (mode 0755),
+/// and the `triggers` file (mode 0644) listing `interest`/`activate`
+/// lines. Mirrors nfpm's `deb.scripts.rules`, `deb.scripts.templates`,
+/// `deb.scripts.config`, and `deb.triggers.{interest,activate}`.
+///
+/// Returns an empty vec when none of these are configured, so callers can
+/// skip this call entirely for non-deb formats.
+pub fn deb_extra_members(
+    cfg: &PackageConfig,
+) -> anyhow::Result<Vec<lx_lib::debarchive::ControlMember>> {
+    let deb = &cfg.deb;
+    let mut members = Vec::new();
+
+    // rules (mode 0755)
+    if !deb.rules.trim().is_empty() {
+        let content = std::fs::read(&deb.rules).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read deb rules script '{}': {e}",
+                deb.rules.trim()
+            )
+        })?;
+        members.push(lx_lib::debarchive::ControlMember {
+            name: "rules".to_string(),
+            content,
+            mode: 0o755,
+        });
+    }
+
+    // debconf templates (mode 0644)
+    if !deb.templates.trim().is_empty() {
+        let content = std::fs::read(&deb.templates).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read debconf templates '{}': {e}",
+                deb.templates.trim()
+            )
+        })?;
+        members.push(lx_lib::debarchive::ControlMember {
+            name: "templates".to_string(),
+            content,
+            mode: 0o644,
+        });
+    }
+
+    // debconf config (mode 0755)
+    if !deb.config.trim().is_empty() {
+        let content = std::fs::read(&deb.config).map_err(|e| {
+            anyhow::anyhow!(
+                "failed to read debconf config script '{}': {e}",
+                deb.config.trim()
+            )
+        })?;
+        members.push(lx_lib::debarchive::ControlMember {
+            name: "config".to_string(),
+            content,
+            mode: 0o755,
+        });
+    }
+
+    // triggers (mode 0644)
+    let mut trigger_lines: Vec<String> = Vec::new();
+    for t in &deb.triggers_interest {
+        trigger_lines.push(format!("interest {}", t.trim()));
+    }
+    for t in &deb.triggers_interest_await {
+        trigger_lines.push(format!("interest_await {}", t.trim()));
+    }
+    for t in &deb.triggers_interest_noawait {
+        trigger_lines.push(format!("interest_noawait {}", t.trim()));
+    }
+    for t in &deb.triggers_activate {
+        trigger_lines.push(format!("activate {}", t.trim()));
+    }
+    for t in &deb.triggers_activate_await {
+        trigger_lines.push(format!("activate_await {}", t.trim()));
+    }
+    for t in &deb.triggers_activate_noawait {
+        trigger_lines.push(format!("activate_noawait {}", t.trim()));
+    }
+    if !trigger_lines.is_empty() {
+        trigger_lines.push(String::new()); // trailing newline
+        members.push(lx_lib::debarchive::ControlMember {
+            name: "triggers".to_string(),
+            content: trigger_lines.join("\n").into_bytes(),
+            mode: 0o644,
+        });
+    }
+
+    Ok(members)
+}
+
+fn stage_file(src: &Path, dst: &Path, umask: Option<u32>) -> anyhow::Result<()> {
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent)?;
     }
     std::fs::copy(src, dst)
         .map(|_| ())
-        .with_context(|| format!("failed to copy '{}' to '{}'", src.display(), dst.display()))
+        .with_context(|| format!("failed to copy '{}' to '{}'", src.display(), dst.display()))?;
+    apply_umask(dst, umask)?;
+    Ok(())
 }
 
 /// Join an absolute installed path onto the staging root, rejecting any

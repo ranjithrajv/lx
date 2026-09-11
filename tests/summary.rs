@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::summary::*;
 use std::time::Instant;
 

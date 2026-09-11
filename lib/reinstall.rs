@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx reinstall` — reinstall the current version of an lx-managed package.
 
 use anyhow::{bail, Result};

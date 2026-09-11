@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use std::path::PathBuf;
@@ -89,18 +91,28 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
         })?,
     };
 
-    let asset = debs::find_asset(&release, &args.package, &arch, &dist).ok_or_else(|| {
-        anyhow!(
-            "no .deb for {arch}/{dist} in release '{}'. Available:\n  {}",
-            release.tag_name,
-            release
-                .assets
-                .iter()
-                .map(|a| a.name.as_str())
-                .collect::<Vec<_>>()
-                .join("\n  ")
-        )
-    })?;
+    let dist_specific = debs::find_asset(&release, &args.package, &arch, &dist);
+    let (asset, is_musl_fallback) = match dist_specific {
+        Some(a) => (a, false),
+        None => {
+            let Some(a) = debs::find_asset_musl(&release, &args.package, &arch, &dist) else {
+                return Err(anyhow!(
+                    "no .deb for {arch}/{dist} (or musl fallback) in release '{}'. Available:\n  {}",
+                    release.tag_name,
+                    release
+                        .assets
+                        .iter()
+                        .map(|a| a.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n  ")
+                ));
+            };
+            (a, true)
+        }
+    };
+    if is_musl_fallback {
+        println!("  (no {dist}-specific build; using musl-static binary — runs on any Linux)");
+    }
     let control_version =
         debs::control_version(&asset.name, &args.package, &arch).ok_or_else(|| {
             anyhow!(

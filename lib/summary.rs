@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Result;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};

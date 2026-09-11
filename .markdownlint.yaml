@@ -1,0 +1,17 @@
+# markdownlint configuration for lx documentation.
+# https://github.com/DavidAnson/markdownlint
+
+# MD013: Line length — disabled because long lines in tables (e.g., URLs)
+# are common and reflowing them hurts readability.
+"MD013" = false
+
+# MD033: Inline HTML — allowed for badges and complex layouts.
+"MD033" = false
+
+# MD041: First line in file should be a top-level heading — disabled for
+# files like CHANGELOG sections that start with a version line.
+"MD041" = false
+
+# MD024: Multiple headings with the same content — allowed for repeated
+# section patterns (e.g., "Example" across multiple features).
+"MD024" = false

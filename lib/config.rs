@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -51,10 +53,20 @@ pub struct FormatOverrides {
     pub predepends: Option<String>,
 }
 
-/// Maintainer scripts (`scripts:`), mirroring nfpm's pre/post-install and
-/// pre/post-remove names. Paths are in the build environment; for deb they
-/// become `DEBIAN/{preinst,postinst,prerm,postrm}` (mode 0755); for rpm
-/// they map to `%pre`/`%post`/`%preun`/`%postun` scriptlets.
+/// Maintainer scripts (`scripts:`), mirroring nfpm's script names across
+/// formats. Paths are in the build environment.
+///
+/// - **deb**: `preinstall`→`DEBIAN/preinst`, `postinstall`→`DEBIAN/postinst`,
+///   `preremove`→`DEBIAN/prerm`, `postremove`→`DEBIAN/postrm` (all mode
+///   0755).
+/// - **rpm**: `preinstall`→`%pre`, `postinstall`→`%post`,
+///   `preremove`→`%preun`, `postremove`→`%postun`, `pretrans`→`%pretrans`,
+///   `posttrans`→`%posttrans`, `verify`→`%verify`.
+/// - **arch**: `preupgrade`→`pre_upgrade()`, `postupgrade`→`postupgrade()`
+///   inside a `.INSTALL` file.
+///
+/// Fields not relevant to a given format are silently ignored by that
+/// format's plugin.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Scripts {
@@ -66,6 +78,72 @@ pub struct Scripts {
     pub preremove: String,
     #[serde(default)]
     pub postremove: String,
+    /// RPM `%pretrans` scriptlet (transaction-level, runs before any
+    /// package in the transaction is installed). Ignored by deb/arch.
+    #[serde(default)]
+    pub pretrans: String,
+    /// RPM `%posttrans` scriptlet (runs after the entire transaction
+    /// completes). Ignored by deb/arch.
+    #[serde(default)]
+    pub posttrans: String,
+    /// RPM `%verify` scriptlet (runs when `rpm -V` verifies the package).
+    /// Ignored by deb/arch.
+    #[serde(default)]
+    pub verify: String,
+    /// Arch `pre_upgrade()` hook (inside `.INSTALL`). Ignored by deb/rpm.
+    #[serde(default)]
+    pub preupgrade: String,
+    /// Arch `post_upgrade()` hook (inside `.INSTALL`). Ignored by deb/rpm.
+    #[serde(default)]
+    pub postupgrade: String,
+}
+
+/// Debian-specific configuration (`deb:`), mirroring nfpm's `deb.` block.
+/// Debconf templates/config, maintainer triggers, and `rules` are all
+/// deb-only concepts; rpm/arch ignore this block entirely.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DebConfig {
+    /// Path to a `debian/rules` Makefile. Copied into the package as
+    /// `DEBIAN/rules` (mode 0755). Ignored by rpm/arch.
+    #[serde(default)]
+    pub rules: String,
+    /// Path to a debconf `templates` file. Copied into the package as
+    /// `DEBIAN/templates` (mode 0644). Ignored by rpm/arch.
+    #[serde(default)]
+    pub templates: String,
+    /// Path to a debconf `config` maintainer script. Copied into the
+    /// package as `DEBIAN/config` (mode 0755). Ignored by rpm/arch.
+    #[serde(default)]
+    pub config: String,
+    /// Triggers this package registers interest in (deb `interest`).
+    /// Each entry becomes a `interest <name>` line in `DEBIAN/triggers`.
+    /// Ignored by rpm/arch.
+    #[serde(default)]
+    pub triggers_interest: Vec<String>,
+    /// Triggers this package activates (deb `activate`). Each entry
+    /// becomes an `activate <name>` line in `DEBIAN/triggers`. Ignored
+    /// by rpm/arch.
+    #[serde(default)]
+    pub triggers_activate: Vec<String>,
+    /// Triggers this package registers interest in, waiting for the
+    /// trigger to fire before continuing (deb `interest_await`).
+    /// Ignored by rpm/arch.
+    #[serde(default)]
+    pub triggers_interest_await: Vec<String>,
+    /// Triggers this package registers interest in, without waiting
+    /// (deb `interest_noawait`). Ignored by rpm/arch.
+    #[serde(default)]
+    pub triggers_interest_noawait: Vec<String>,
+    /// Triggers this package activates, waiting for the trigger to
+    /// fire before continuing (deb `activate_await`). Ignored by
+    /// rpm/arch.
+    #[serde(default)]
+    pub triggers_activate_await: Vec<String>,
+    /// Triggers this package activates, without waiting (deb
+    /// `activate_noawait`). Ignored by rpm/arch.
+    #[serde(default)]
+    pub triggers_activate_noawait: Vec<String>,
 }
 
 /// Package signing configuration (`signature:`).
@@ -184,6 +262,35 @@ pub struct PackageConfig {
     /// Debian Priority field (e.g. "optional", "extra"). Defaults to "optional".
     #[serde(default)]
     pub priority: String,
+    /// Debian arch variant (e.g. "amd64v3") for optimized builds. Appended
+    /// to the `Architecture` field as `amd64v3`. Mirrors nfpm's
+    /// `deb.arch_variant`. Ignored by rpm/arch.
+    #[serde(default)]
+    pub arch_variant: String,
+    /// Version schema for parsing the upstream version string. "semver"
+    /// (default) normalizes semver-like versions (strips `v` prefix,
+    /// handles prerelease/metadata); "none" uses the version as-is.
+    /// Mirrors nfpm's `version_schema`.
+    #[serde(default = "default_version_schema")]
+    pub version_schema: String,
+    /// Umask applied to files without an explicit `mode` set, mirroring
+    /// nfpm's `umask`. Expressed in octal (e.g. "0o002"). When set, files
+    /// added to the package have their mode masked by this value. Applies
+    /// to all formats.
+    #[serde(default)]
+    pub umask: String,
+    /// Packager string identifying the organization that packaged the
+    /// software (as opposed to the author). For RPM this maps to the
+    /// `packager` header tag; for deb it becomes a `Packager:` control
+    /// field. Mirrors nfpm's `rpm.packager`. Falls back to `maintainer`
+    /// when unset.
+    #[serde(default)]
+    pub packager: String,
+    /// Disables globbing for `contents:` entries. When true, `src`
+    /// patterns are treated as literal paths. Mirrors nfpm's
+    /// `disable_globbing`.
+    #[serde(default)]
+    pub disable_globbing: bool,
     /// Additional arbitrary control fields (e.g. Bugs, Homepage extras).
     /// Mirrors nfpm's `deb.fields`.
     #[serde(default)]
@@ -204,14 +311,23 @@ pub struct PackageConfig {
     /// Maintainer scripts. See [`Scripts`].
     #[serde(default)]
     pub scripts: Scripts,
+    /// Debian-specific configuration (debconf, triggers, rules). See [`DebConfig`].
+    #[serde(default)]
+    pub deb: DebConfig,
     /// Package signing. See [`SignatureConfig`].
     #[serde(default)]
     pub signature: SignatureConfig,
     /// Local payload path (archive or directory) for `--local` builds that
     /// skip the upstream release download. Existence is checked at build
-    /// time, not parse time. Env-expanded at parse (`${VAR}` / `${VAR:-default}`).
+    /// time, not parse time. Env-expanded at parse (`${VAR}` / ${VAR:-default}`).
     #[serde(default)]
     pub local_payload: String,
+    /// Install prefix inside the package for `--from-dir`/`--from-file`
+    /// builds (fpm-style "you supply files" mode). When non-empty, files are
+    /// staged under this absolute path (e.g. "/usr/local/bin") instead of the
+    /// default `/usr/bin` flat-mode layout. Must start with '/'.
+    #[serde(default)]
+    pub prefix: String,
     /// SPDX license identifier.
     #[serde(default)]
     pub license_spdx: String,
@@ -320,6 +436,14 @@ pub struct PackageConfig {
     /// Source-mode tag to fetch. Empty means the resolved `--version`.
     #[serde(default)]
     pub upstream_ref: String,
+    /// Produce a musl-static binary — no glibc dependency, runs on any
+    /// Linux regardless of distro age. For source builds, adjusts each
+    /// build system plugin to compile for musl (cargo: `--target
+    /// x86_64-unknown-linux-musl`; go: `CGO_ENABLED=0`; cmake:
+    /// `musl-gcc`). For binary repacks, prefers musl release assets
+    /// (e.g. `*-linux-musl*`) over glibc variants.
+    #[serde(default)]
+    pub musl: bool,
     /// Extra host packages the compile needs (installed via the host
     /// package manager by the caller/CI; lx itself never apt-gets).
     #[serde(default)]
@@ -386,6 +510,10 @@ pub struct DistributionArchOverride {
 
 fn default_package_format() -> String {
     "deb".to_string()
+}
+
+fn default_version_schema() -> String {
+    "semver".to_string()
 }
 
 fn default_source() -> String {
@@ -582,6 +710,25 @@ impl PackageConfig {
                 self.github_repo
             );
         }
+        self.validate_prefix()?;
+
+        self.validate_shared()
+    }
+
+    /// Validation for "you supply files" builds (`--from-dir`/`--from-file`):
+    /// same as [`validate`] but `github_repo` is not required (there is no
+    /// forge to fetch from).
+    pub fn validate_for_local(&self) -> Result<()> {
+        if self.package_name.trim().is_empty() {
+            bail!("package_name is required (set package_name in package.yaml or pass --package-name)");
+        }
+        self.validate_prefix()?;
+
+        self.validate_shared()
+    }
+
+    /// Shared validation between [`validate`] and [`validate_for_local`].
+    fn validate_shared(&self) -> Result<()> {
         if !self.artifact_format.is_empty() {
             match self.artifact_format.as_str() {
                 "tar.gz" | "tgz" | "zip" | "raw" => {}
@@ -712,14 +859,14 @@ impl PackageConfig {
             }
         }
         match self.build_mode.trim().to_ascii_lowercase().as_str() {
-            "binary" | "source" => {}
+            "" | "binary" | "source" => {}
             other => bail!("unsupported build_mode '{other}' (expected binary or source)"),
         }
         if self.is_source_mode() {
             match self.build_system.trim().to_ascii_lowercase().as_str() {
-                "cmake" | "custom" => {}
+                "" | "cmake" | "cargo" | "go" | "custom" => {}
                 other => bail!(
-                    "build_mode: source supports build_system: cmake or custom (got '{other}')"
+                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, custom)"
                 ),
             }
             if self.effective_build_system() == "custom" && self.install_commands.is_empty() {
@@ -732,6 +879,67 @@ impl PackageConfig {
                     "build_mode: source requires an explicit architectures: list in package.yaml"
                 );
             }
+        }
+        // Deb triggers must not contain empty entries.
+        for t in &self.deb.triggers_interest {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_interest must not contain empty entries");
+            }
+        }
+        for t in &self.deb.triggers_activate {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_activate must not contain empty entries");
+            }
+        }
+        // Deb trigger await/noawait variants must not contain empty entries.
+        for t in &self.deb.triggers_interest_await {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_interest_await must not contain empty entries");
+            }
+        }
+        for t in &self.deb.triggers_interest_noawait {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_interest_noawait must not contain empty entries");
+            }
+        }
+        for t in &self.deb.triggers_activate_await {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_activate_await must not contain empty entries");
+            }
+        }
+        for t in &self.deb.triggers_activate_noawait {
+            if t.trim().is_empty() {
+                bail!("deb.triggers_activate_noawait must not contain empty entries");
+            }
+        }
+        // Version schema must be "semver" or "none".
+        match self.version_schema.trim().to_ascii_lowercase().as_str() {
+            "" | "semver" | "none" => {}
+            other => bail!("unsupported version_schema '{other}' (expected semver or none)"),
+        }
+        // Umask must be a valid octal value if set.
+        if !self.umask.trim().is_empty() && self.effective_umask().is_none() {
+            bail!(
+                "invalid umask '{}' (expected octal, e.g. 0o002)",
+                self.umask.trim()
+            );
+        }
+        Ok(())
+    }
+
+    /// Validate the `prefix:` field (used by `--from-dir`/`--from-file`).
+    fn validate_prefix(&self) -> Result<()> {
+        if self.prefix.is_empty() {
+            return Ok(());
+        }
+        if !self.prefix.starts_with('/') {
+            bail!(
+                "prefix must be an absolute path starting with '/', got '{}'",
+                self.prefix
+            );
+        }
+        if self.prefix.contains("..") {
+            bail!("prefix must not contain '..' components: '{}'", self.prefix);
         }
         Ok(())
     }
@@ -889,6 +1097,49 @@ impl PackageConfig {
             lx_lib::constants::DEFAULT_PRIORITY.to_string()
         } else {
             self.priority.trim().to_string()
+        }
+    }
+
+    /// Effective arch variant (empty when unset). The deb plugin appends
+    /// this to the architecture field.
+    pub fn effective_arch_variant(&self) -> String {
+        self.arch_variant.trim().to_string()
+    }
+
+    /// Effective version schema, normalized to lowercase ("semver" or "none").
+    pub fn effective_version_schema(&self) -> String {
+        let s = self.version_schema.trim().to_ascii_lowercase();
+        if s.is_empty() {
+            "semver".to_string()
+        } else {
+            s
+        }
+    }
+
+    /// Effective umask as a u32 (octal), or None when unset. Mirrors nfpm's
+    /// umask semantics: when set, files without an explicit mode have
+    /// their mode masked by this value.
+    pub fn effective_umask(&self) -> Option<u32> {
+        let s = self.umask.trim();
+        if s.is_empty() {
+            return None;
+        }
+        // Accept "0o002" or "002" octal forms.
+        let stripped = if s.starts_with("0o") || s.starts_with("0O") {
+            &s[2..]
+        } else {
+            s
+        };
+        u32::from_str_radix(stripped, 8).ok()
+    }
+
+    /// Effective packager (falls back to maintainer when unset). Split out
+    /// as a pure function so the precedence is testable.
+    pub fn effective_packager(&self) -> String {
+        if self.packager.trim().is_empty() {
+            self.effective_maintainer()
+        } else {
+            self.packager.trim().to_string()
         }
     }
 

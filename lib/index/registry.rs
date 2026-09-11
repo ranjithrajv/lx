@@ -8,6 +8,7 @@ use std::path::PathBuf;
 
 use super::aur::AurSource;
 use super::lx_community::LxCommunitySource;
+use super::repology::RepologySource;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Registry {
@@ -30,6 +31,8 @@ pub enum SourceKind {
     LxCommunity,
     /// Arch User Repository.
     Aur,
+    /// Repology — cross-distro package metadata (read-only).
+    Repology,
     /// A user-added custom index (git URL + format).
     Custom { url: String },
 }
@@ -66,7 +69,8 @@ impl Registry {
         Ok(())
     }
 
-    /// The default registry ships the LX community index + AUR, both enabled.
+    /// The default registry ships the LX community index, AUR, and the
+    /// repology metadata source — all enabled.
     pub fn with_defaults() -> Self {
         Self {
             sources: vec![
@@ -78,6 +82,11 @@ impl Registry {
                 SourceEntry {
                     name: "aur".into(),
                     kind: SourceKind::Aur,
+                    enabled: true,
+                },
+                SourceEntry {
+                    name: "repology".into(),
+                    kind: SourceKind::Repology,
                     enabled: true,
                 },
             ],
@@ -128,6 +137,9 @@ pub fn active_sources(reg: &Registry) -> Vec<Box<dyn super::IndexSource>> {
             }
             SourceKind::Aur => {
                 Some(Box::new(AurSource::new(&s.name)) as Box<dyn super::IndexSource>)
+            }
+            SourceKind::Repology => {
+                Some(Box::new(RepologySource::new(&s.name)) as Box<dyn super::IndexSource>)
             }
             SourceKind::Custom { url: _ } => {
                 // Custom backends are future work; skip for now.

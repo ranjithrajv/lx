@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Centralized constants for `lx` — hosts, timeouts, TTLs, file modes.
 //! Single source of truth for values previously duplicated across `lib/` and `src/`.
 

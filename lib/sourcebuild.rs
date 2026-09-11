@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `build_mode: source` — compile upstream source on the host and wrap the
 //! install tree per suite.
 //!
@@ -28,6 +30,7 @@ use std::time::Instant;
 
 use crate::build::BuildArgs;
 use crate::config::PackageConfig;
+use crate::plugins::build_system::{self, BuildSystem};
 
 /// Run a source-mode build. `cfg` is the already-loaded config.
 pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<()> {
@@ -83,9 +86,24 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         suites.join(" ")
     );
 
-    // Toolchain + build-dep sanity before any download.
-    require_tool("cmake")?;
-    require_tool("ninja")?;
+    // Resolve the build system plugin: explicit `build_system:` wins, else
+    // auto-detect from the source tree (after fetch), else default to cmake.
+    let explicit_build_system = cfg.effective_build_system();
+    let build_sys_name = if explicit_build_system == "custom" {
+        Some("custom")
+    } else if !cfg.build_system.trim().is_empty() {
+        Some(explicit_build_system.as_str())
+    } else {
+        None // auto-detect after fetch
+    };
+
+    // Toolchain + build-dep sanity before any download. For cmake, verify
+    // cmake + ninja are present; other build systems check their own tools
+    // after resolution (below).
+    if build_sys_name == Some("cmake") {
+        require_tool("cmake")?;
+        require_tool("ninja")?;
+    }
     if !cfg.build_depends.is_empty() {
         let missing = missing_host_packages(&cfg.build_depends);
         if !missing.is_empty() {
@@ -107,15 +125,41 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         workdir.path(),
     )?;
 
-    // Compile once on the host; every suite re-wraps the same tree.
-    let sandbox = Sandbox::new(args.sandbox);
-    let stage = if cfg.effective_build_system() == "custom" {
-        build_custom(cfg, &src_dir, workdir.path(), &sandbox)
+    // Resolve the build system plugin (auto-detect if not explicit).
+    let build_sys: Box<dyn BuildSystem> = if let Some(name) = build_sys_name {
+        build_system::get_build_system(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unsupported build_system '{}' (expected one of: {})",
+                name,
+                build_system::available_names().join(", ")
+            )
+        })?
     } else {
-        // prebuild steps run for cmake builds too (patches, codegen).
-        run_steps(&cfg.prebuild_steps, &src_dir, &[])?;
-        compile_cmake(cfg, &src_dir, workdir.path(), &sandbox)
-    }?;
+        match build_system::detect_build_system(&src_dir) {
+            Some(bs) => {
+                println!(
+                    "build system: auto-detected {} ({})",
+                    bs.name(),
+                    bs.description()
+                );
+                bs
+            }
+            None => bail!(
+                "could not auto-detect build system for {} (set build_system: in package.yaml: cmake, cargo, go, or custom)",
+                cfg.github_repo
+            ),
+        }
+    };
+
+    // Build-system-specific tool checks.
+    for tool in build_sys.required_tools() {
+        require_tool(tool)?;
+    }
+
+    // Compile once on the host; every suite re-wraps the same tree.
+    // prebuild steps run for every build system (patches, codegen).
+    run_steps(&cfg.prebuild_steps, &src_dir, &[])?;
+    let stage = build_sys.build(cfg, &src_dir, workdir.path())?;
 
     // shlibdeps analogue: ELF DT_NEEDED -> owning host packages.
     let depends = compute_depends(&stage, cfg);
@@ -381,66 +425,6 @@ fn extract_tar_gz(tarball: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Opt-in hermetic-ish host compile (item 8): when `--sandbox` is passed,
-/// build steps run under `unshare --map-root-user --mount -n` (no network,
-/// private mount ns) if the kernel permits it, falling back to a direct
-/// run with a warning. Network-dependent builds (cargo/go fetching deps)
-/// should skip it; vendored/offline builds get isolation for free.
-pub struct Sandbox {
-    pub enabled: bool,
-}
-
-impl Sandbox {
-    pub fn new(enabled: bool) -> Self {
-        Self { enabled }
-    }
-
-    /// Run `prog args...` in `dir` with extra env, sandboxed when enabled.
-    pub fn run(&self, prog: &str, args: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
-        if self.enabled && unshare_works() {
-            let mut full = vec![prog.to_string()];
-            full.extend(args.iter().cloned());
-            let mut cmd = Command::new("unshare");
-            cmd.args(["--map-root-user", "--mount", "-n", "--", "env", "-i"]);
-            for (k, v) in env {
-                cmd.arg(format!("{k}={v}"));
-            }
-            // Minimal PATH inside the empty env; callers pass absolute prog
-            // paths or rely on /usr/bin:/bin.
-            cmd.arg("PATH=/usr/bin:/bin");
-            cmd.args(full);
-            cmd.current_dir(dir);
-            let st = cmd.status().context("failed to run sandboxed build step")?;
-            if !st.success() {
-                bail!("sandboxed build step failed: {prog}");
-            }
-            return Ok(());
-        }
-        if self.enabled {
-            eprintln!("⚠ --sandbox requested but unshare is unavailable; running unsandboxed");
-        }
-        let mut cmd = Command::new(prog);
-        cmd.args(args);
-        cmd.current_dir(dir);
-        for (k, v) in env {
-            cmd.env(k, v);
-        }
-        let st = cmd.status().context("failed to run build step")?;
-        if !st.success() {
-            bail!("build step failed: {prog}");
-        }
-        Ok(())
-    }
-}
-
-fn unshare_works() -> bool {
-    Command::new("unshare")
-        .args(["--map-root-user", "--mount", "-n", "--", "true"])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
 /// Run ordered shell steps (`sh -c`) in `dir` with extra env.
 fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
     for step in steps {
@@ -459,103 +443,6 @@ fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// `build_system: custom`: build_commands then install_commands (with
-/// $DESTDIR) instead of cmake. Returns the staging tree.
-fn build_custom(
-    cfg: &PackageConfig,
-    src_dir: &Path,
-    workdir: &Path,
-    sandbox: &Sandbox,
-) -> Result<PathBuf> {
-    let stage = workdir.join("stage");
-    std::fs::create_dir_all(&stage)?;
-    let destdir = stage.to_string_lossy().to_string();
-    run_steps(&cfg.prebuild_steps, src_dir, &[])?;
-    println!(
-        "running {} custom build command(s)",
-        cfg.build_commands.len()
-    );
-    for cmd in &cfg.build_commands {
-        println!("  $ {cmd}");
-        sandbox.run(
-            "sh",
-            &["-c".to_string(), cmd.clone()],
-            src_dir,
-            &[("DESTDIR", destdir.as_str())],
-        )?;
-    }
-    println!(
-        "running {} custom install command(s)",
-        cfg.install_commands.len()
-    );
-    for cmd in &cfg.install_commands {
-        println!("  $ {cmd}");
-        sandbox.run(
-            "sh",
-            &["-c".to_string(), cmd.clone()],
-            src_dir,
-            &[("DESTDIR", destdir.as_str())],
-        )?;
-    }
-    Ok(stage)
-}
-
-/// cmake configure + build + DESTDIR install. Returns the install tree.
-fn compile_cmake(
-    cfg: &PackageConfig,
-    src_dir: &Path,
-    workdir: &Path,
-    sandbox: &Sandbox,
-) -> Result<PathBuf> {
-    let build_dir = workdir.join("build");
-    let stage = workdir.join("stage");
-    std::fs::create_dir_all(&build_dir)?;
-    std::fs::create_dir_all(&stage)?;
-
-    let mut cmd = Command::new("cmake");
-    cmd.args([
-        "-S",
-        &src_dir.to_string_lossy(),
-        "-B",
-        &build_dir.to_string_lossy(),
-        "-G",
-        "Ninja",
-    ]);
-    cmd.arg("-DCMAKE_INSTALL_PREFIX=/usr");
-    cmd.arg("-DCMAKE_BUILD_TYPE=Release");
-    for f in &cfg.cmake_flags {
-        cmd.arg(f);
-    }
-    println!("configuring: cmake {}", cfg.cmake_flags.join(" "));
-    let st = cmd.status().context("failed to run cmake configure")?;
-    if !st.success() {
-        bail!("cmake configure failed");
-    }
-    sandbox
-        .run(
-            "cmake",
-            &[
-                "--build".to_string(),
-                build_dir.to_string_lossy().to_string(),
-            ],
-            workdir,
-            &[],
-        )
-        .context("cmake build failed")?;
-    sandbox
-        .run(
-            "cmake",
-            &[
-                "--install".to_string(),
-                build_dir.to_string_lossy().to_string(),
-            ],
-            workdir,
-            &[("DESTDIR", &stage.to_string_lossy())],
-        )
-        .context("cmake install failed")?;
-    Ok(stage)
 }
 
 /// shlibdeps analogue: staged ELFs' DT_NEEDED sonames resolved to owning
@@ -582,6 +469,10 @@ fn compute_depends(stage: &Path, cfg: &PackageConfig) -> String {
         }
     }
     if pkgs.is_empty() {
+        if cfg.musl {
+            // Musl-static binary: no glibc dependency at all.
+            return String::new();
+        }
         if !cfg.depends.trim().is_empty() {
             return cfg.depends.trim().to_string();
         }

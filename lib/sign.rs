@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Post-build artifact signing.
 //!
 //! Two mechanisms, one request type:

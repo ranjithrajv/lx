@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Arch Linux pacman `.pkg.tar.zst` plugin.
 //!
 //! Implements `Plugin` for Arch packages using `lx_lib::archarchive`.
@@ -54,7 +56,14 @@ impl Plugin for ArchPlugin {
             cfg.package_name, version, release, arch_name
         );
 
-        let out_dir = ctx.staging_root.join("__out");
+        // Sibling of the staging root, not inside it -- the payload is
+        // staged from the whole staging tree, so an in-tree out dir
+        // would package the artifact into itself.
+        let out_dir = ctx
+            .staging_root
+            .parent()
+            .context("staging root has no parent")?
+            .join("__out");
         std::fs::create_dir_all(&out_dir)?;
         let dest = out_dir.join(&file_name);
 
@@ -81,8 +90,19 @@ impl Plugin for ArchPlugin {
             url: &url,
             license,
         };
-        lx_lib::archarchive::build(ctx.staging_root, &meta, &job.arch, ctx.mtime, &dest)
-            .with_context(|| format!("failed to build {}", dest.display()))?;
+        let install_script = lx_lib::archarchive::render_install_script(
+            &cfg.scripts.preupgrade,
+            &cfg.scripts.postupgrade,
+        );
+        lx_lib::archarchive::build(
+            ctx.staging_root,
+            &meta,
+            &job.arch,
+            ctx.mtime,
+            &dest,
+            install_script.as_deref(),
+        )
+        .with_context(|| format!("failed to build {}", dest.display()))?;
 
         Ok(dest)
     }

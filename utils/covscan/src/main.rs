@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use syn::visit::{self, Visit};
 use syn::{ImplItemFn, ItemFn, ItemImpl, ItemMod};
 use std::path::Path;

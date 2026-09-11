@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Every bundled starter template (ported verbatim from
 //! debian-multiarch-builder's templates/) must parse through the same
 //! pipeline a real package.yaml takes, including legacy-key compat.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::repo::read_control;
 
 fn tiny_deb(dir: &std::path::Path, name: &str) -> std::path::PathBuf {

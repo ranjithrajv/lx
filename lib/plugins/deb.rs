@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Debian `.deb` plugin.
 //!
 //! Extracted from the original `build.rs` / `debarchive.rs` / `pkgmeta.rs`
@@ -85,6 +87,8 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
     let _ = full_version_epoch; // already in control
 
     let mut extras = super::maintainer_script_members(cfg)?;
+    // Deb-specific extras: debconf templates/config, rules, triggers.
+    extras.extend(super::deb_extra_members(cfg)?);
     if !conffiles.is_empty() {
         extras.push(lx_lib::debarchive::ControlMember {
             name: "conffiles".to_string(),
@@ -93,9 +97,15 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         });
     }
 
-    // We need a temp out dir for the .deb file; create under staging_root's
-    // parent temp.
-    let out_dir = ctx.staging_root.join("__out");
+    // Temp out dir for the .deb file: a SIBLING of the staging root, not
+    // inside it -- debarchive tars the whole staging tree, so an in-tree
+    // out dir would package the .deb into itself (lintian:
+    // non-standard-toplevel-dir [__out/]).
+    let out_dir = ctx
+        .staging_root
+        .parent()
+        .context("staging root has no parent")?
+        .join("__out");
     std::fs::create_dir_all(&out_dir)?;
     let deb_dest = out_dir.join(&deb_name);
 
@@ -162,12 +172,17 @@ pub fn render_control(
         lx_lib::constants::homepage_for_github(&cfg.github_repo)
     };
     let extra_fields = super::render_extra_fields(&cfg.fields);
+    // Append arch variant to architecture (e.g. "amd64v3") when set.
+    let arch = if cfg.effective_arch_variant().is_empty() {
+        job.arch.to_string()
+    } else {
+        format!("{}{}", job.arch, cfg.effective_arch_variant())
+    };
     format!(
         "Section: {}\nPriority: {}\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: {homepage}\nDescription: {desc}\n{PACKAGED_FROM_LINE}\n{relations}{extra_fields}",
         cfg.effective_section(),
         cfg.effective_priority(),
         pkg = cfg.package_name,
-        arch = job.arch,
         maintainer = cfg.effective_maintainer(),
         desc = cfg.effective_description(),
     )

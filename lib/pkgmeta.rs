@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared Debian package metadata rendering: epoch/version handling,
 //! reproducible-builds-aware timestamps, and the changelog/copyright bodies
 //! used by both a binary `.deb` (`src/build.rs`) and its companion source
@@ -31,6 +33,29 @@ pub fn strip_upstream_prefix(version: &str) -> String {
     version
         .trim_start_matches(|c: char| !c.is_ascii_digit())
         .to_string()
+}
+
+/// Normalize a version string according to the configured schema.
+/// Mirrors nfpm's `version_schema`:
+/// - `"semver"` (default): strips a leading `v`/`V` prefix and any
+///   leading non-digit run, then returns the version. Lenient — accepts
+///   versions with fewer than 3 components (e.g. `1.2`).
+/// - `"none"`: returns the version as-is (after trimming whitespace).
+///
+/// The result always starts with a digit (Debian policy), matching
+/// `strip_upstream_prefix` for the default schema.
+pub fn normalize_version(version: &str, schema: &str) -> String {
+    let v = version.trim();
+    match schema.trim().to_ascii_lowercase().as_str() {
+        "none" => v.to_string(),
+        // Also handles "" (empty) as semver — the default.
+        _ => {
+            // Strip a leading v/V prefix (semver convention) then any
+            // remaining non-digit prefix.
+            let stripped = v.strip_prefix(['v', 'V']).unwrap_or(v);
+            strip_upstream_prefix(stripped)
+        }
+    }
 }
 
 /// Render a `Name: value\n` control-file line for a comma-separated

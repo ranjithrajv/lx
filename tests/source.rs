@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::source::*;
 use sha2::{Digest, Sha256};
 
@@ -112,6 +114,8 @@ fn generate_rpm_writes_srpm_per_dist_and_shares_source_tarball() {
                 summary: "eza, packaged from eza-community/eza",
                 description: "desc",
                 license: "MIT",
+                vendor: None,
+                packager: None,
             },
             "amd64",
             1_735_689_600,
@@ -166,6 +170,7 @@ fn generate_arch_writes_pkgbuild_with_matching_sha256() {
         "amd64",
         1_735_689_600,
         &out_dir.path().join("eza-0.23.5-1.arch-x86_64.pkg.tar.zst"),
+        None,
     )
     .unwrap();
 

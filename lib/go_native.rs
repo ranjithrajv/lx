@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx go-native` — migrate snap / flatpak / nix / `curl | sh` installs
 //! to native packages.
 //!

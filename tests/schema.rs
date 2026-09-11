@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::schema::*;
 
 #[test]
@@ -33,8 +35,35 @@ fn schema_documents_new_features() {
         "scripts",
         "signature",
         "local_payload",
+        "deb",
     ] {
         assert!(s["properties"][key].is_object(), "missing {key}");
+    }
+    // New script fields for nfpm parity.
+    let script_props = &s["properties"]["scripts"]["properties"];
+    for key in [
+        "preinstall",
+        "postinstall",
+        "preremove",
+        "postremove",
+        "pretrans",
+        "posttrans",
+        "verify",
+        "preupgrade",
+        "postupgrade",
+    ] {
+        assert!(script_props[key].is_object(), "missing scripts.{key}");
+    }
+    // Deb-specific extras.
+    let deb_props = &s["properties"]["deb"]["properties"];
+    for key in [
+        "rules",
+        "templates",
+        "config",
+        "triggers_interest",
+        "triggers_activate",
+    ] {
+        assert!(deb_props[key].is_object(), "missing deb.{key}");
     }
     let content_types = s["properties"]["contents"]["items"]["properties"]["type"]["enum"]
         .as_array()

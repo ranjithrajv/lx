@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{bail, Context, Result};
 use clap::Args;
 use std::path::PathBuf;

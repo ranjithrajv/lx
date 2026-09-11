@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::rpmarchive::*;
 
 use std::os::unix::fs::PermissionsExt;
@@ -31,6 +33,8 @@ fn build_produces_valid_rpm() {
             summary: "test package",
             description: "Packaged from upstream",
             license: "MIT",
+            vendor: None,
+            packager: None,
         },
         "amd64",
         1_735_689_600,
@@ -60,6 +64,8 @@ fn same_input_produces_deterministic_output_for_same_mtime() {
                 summary: "test",
                 description: "desc",
                 license: "MIT",
+                vendor: None,
+                packager: None,
             },
             "amd64",
             1_735_689_600,
@@ -82,8 +88,7 @@ fn scriptlets_build_without_error() {
         post_install: Some("echo post"),
         pre_uninstall: None,
         post_uninstall: Some("echo postun"),
-        sign_key_file: None,
-        sign_passphrase: None,
+        ..Default::default()
     };
     build_with_options(
         root.path(),
@@ -94,6 +99,42 @@ fn scriptlets_build_without_error() {
             summary: "test",
             description: "desc",
             license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &opts,
+    )
+    .unwrap();
+    let bytes = std::fs::read(&rpm_path).unwrap();
+    assert_eq!(&bytes[0..4], &[0xED, 0xAB, 0xEE, 0xDB]);
+}
+
+#[test]
+fn transaction_and_verify_scriptlets_build_without_error() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"fake-elf").unwrap();
+    let rpm_path = root.path().join("hello.rpm");
+    let opts = BuildOptions {
+        pre_trans: Some("echo pretrans"),
+        post_trans: Some("echo posttrans"),
+        verify_script: Some("echo verify"),
+        ..Default::default()
+    };
+    build_with_options(
+        root.path(),
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            summary: "test",
+            description: "desc",
+            license: "MIT",
+            vendor: None,
+            packager: None,
         },
         "amd64",
         1_735_689_600,
@@ -177,6 +218,8 @@ fn native_signing_round_trip_with_generated_key() {
             summary: "test",
             description: "desc",
             license: "MIT",
+            vendor: None,
+            packager: None,
         },
         "amd64",
         1_735_689_600,
@@ -209,6 +252,8 @@ fn build_srpm_produces_valid_rpm_with_spec_and_source() {
             summary: "test package",
             description: "Packaged from upstream",
             license: "MIT",
+            vendor: None,
+            packager: None,
         },
         ("hello.spec", b"Name: hello\nVersion: 1.0\n"),
         ("hello-1.0.tar.xz", b"fake-tarball-bytes"),
@@ -258,6 +303,8 @@ fn extract_round_trips_files_dirs_and_symlinks() {
             summary: "test",
             description: "desc",
             license: "MIT",
+            vendor: None,
+            packager: None,
         },
         "amd64",
         1_735_689_600,

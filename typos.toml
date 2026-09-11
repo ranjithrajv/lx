@@ -1,0 +1,24 @@
+# typos configuration — spell checker for the entire repository.
+# https://github.com/crate-ci/typos
+
+[default]
+# Words that look like typos but are intentional.
+extend-ignore-identifiers-re = [
+    # hex strings, hashes
+    "^[0-9a-f]+$",
+]
+
+[default.extend-words]
+# Domain-specific terms that typos flags but are correct.
+"crate" = "crate"       # Rust terminology (often caught as 'crate')
+"crates" = "crates"
+"odec" = "odec"         # abbreviation in crypto contexts
+"indic" = "indic"       # short for indicator
+
+[files]
+extend-exclude = [
+    # Generated file — do not lint.
+    "Cargo.lock",
+    # Test fixtures may contain intentional misspellings.
+    "tests/fixtures/",
+]

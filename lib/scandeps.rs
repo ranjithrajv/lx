@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
@@ -30,6 +32,12 @@ pub struct ScanDepsArgs {
     /// resolvable locally via `dpkg -S`) the Debian package that owns it.
     #[arg(long)]
     pub explain: bool,
+
+    /// Prefer musl-static release assets (e.g. `*-linux-musl*`) over glibc
+    /// variants when scanning. A musl binary has no glibc dependency and
+    /// runs on any Linux regardless of distro age.
+    #[arg(long)]
+    pub prefer_musl: bool,
 }
 
 /// Downloads a release binary and reports its `DT_NEEDED` shared-library
@@ -111,7 +119,11 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
     let arch_assets = if cfg.has_manual_patterns() {
         crate::build::resolve_manual(&cfg, &release)?
     } else {
-        let auto = crate::discovery::config_from_release(&cfg.github_repo, &release)?;
+        let auto = crate::discovery::config_from_release_with_musl(
+            &cfg.github_repo,
+            &release,
+            args.prefer_musl,
+        )?;
         crate::build::resolve_manual(&auto, &release)?
     };
     if arch_assets.is_empty() {

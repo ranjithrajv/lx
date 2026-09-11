@@ -91,6 +91,7 @@ impl IndexSource for AurSource {
                 source: self.name.clone(),
                 installed: crate::debs::dpkg_installed_version(&r.name).is_some(),
                 available: vec!["build-from-pkgbuild".into()],
+                ..Default::default()
             });
         }
         Ok(hits)
@@ -107,6 +108,7 @@ impl IndexSource for AurSource {
                 source: self.name.clone(),
                 installed: crate::debs::dpkg_installed_version(package).is_some(),
                 available: vec!["build-from-pkgbuild".into()],
+                ..Default::default()
             })),
             _ => Ok(None),
         }

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! RPM `.rpm` plugin.
 //!
 //! Implements the `Plugin` trait for RPM packages using `lx_lib::rpmarchive`.
@@ -81,17 +83,37 @@ impl Plugin for RpmPlugin {
             to_rpm_arch(&job.arch)
         );
 
-        let out_dir = ctx.staging_root.join("__out");
+        // Sibling of the staging root, not inside it -- the payload is
+        // staged from the whole staging tree, so an in-tree out dir
+        // would package the artifact into itself.
+        let out_dir = ctx
+            .staging_root
+            .parent()
+            .context("staging root has no parent")?
+            .join("__out");
         std::fs::create_dir_all(&out_dir)?;
         let rpm_dest = out_dir.join(&rpm_name);
 
+        let relations = cfg.effective_relations("rpm");
         let opts = lx_lib::rpmarchive::BuildOptions {
             pre_install: Some(cfg.scripts.preinstall.trim()),
             post_install: Some(cfg.scripts.postinstall.trim()),
             pre_uninstall: Some(cfg.scripts.preremove.trim()),
             post_uninstall: Some(cfg.scripts.postremove.trim()),
+            pre_trans: Some(cfg.scripts.pretrans.trim()),
+            post_trans: Some(cfg.scripts.posttrans.trim()),
+            verify_script: Some(cfg.scripts.verify.trim()),
             sign_key_file: ctx.sign_key,
             sign_passphrase: ctx.sign_passphrase,
+            relations: lx_lib::rpmarchive::parse_rpm_relations(
+                &relations.depends,
+                &relations.recommends,
+                &relations.suggests,
+                &relations.conflicts,
+                &relations.replaces,
+                &relations.provides,
+                &relations.breaks,
+            ),
         };
         let meta = lx_lib::rpmarchive::PackageMeta {
             name: &cfg.package_name,
@@ -100,6 +122,8 @@ impl Plugin for RpmPlugin {
             summary: &summary,
             description: &description,
             license,
+            vendor: None,
+            packager: Some(&cfg.effective_packager()),
         };
         lx_lib::rpmarchive::build_with_options(
             ctx.staging_root,

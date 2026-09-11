@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx repo` — productize the prebuilt binary repository (Prebuilt-MPR
 //! spirit): turn a directory of built `.deb`s into an apt-servable
 //! repository with `Packages`, `Packages.gz`, `Release`, and a clearsigned

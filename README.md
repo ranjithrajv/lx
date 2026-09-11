@@ -59,6 +59,22 @@ Build for just this machine's own architecture (native-only):
 lx build package.yaml --host
 ```
 
+Package files you supply — no forge release, minimal config (fpm-style
+"you supply files" mode):
+
+```sh
+lx build --from-dir ./myapp-dist/ --package-name myapp --version 1.0.0
+lx build --from-file ./myapp --package-name myapp --version 1.0.0
+lx build --from-dir ./dist/ --package-name myapp --version 1.0.0 --prefix /usr/local/bin
+```
+
+With a base `package.yaml` for extra metadata (dependencies, contents,
+signing, etc.):
+
+```sh
+lx build package.yaml --from-dir ./myapp-dist/
+```
+
 Generate a `package.yaml` interactively, with auto-discovered release
 patterns:
 
@@ -78,7 +94,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 
 | Command | Purpose |
 |---|---|
-| `lx build [config]` | Build `.deb`s (and optionally source packages) from a `package.yaml`, or zero-config from a GitHub URL |
+| `lx build [config]` | Build `.deb`s (and optionally source packages) from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`) |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
 | `lx scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
@@ -94,6 +110,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
 | `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`) |
 | `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
+| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, and custom indexes (search/install/info/update/add/remove/list) |
 | `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply) |
 
 `lx-get` is a thin companion binary with the consumer half only —
@@ -143,6 +160,22 @@ out:
 - **`--local`** (`build`): package a local archive or directory from
   `local_payload:` in package.yaml, skipping the upstream download.
   Requires `version:` (or `--version`).
+- **`--from-dir <path>`** (`build`): "you supply files" mode — build a
+  package from a directory of files you supply, with no forge fetch.
+  Requires `--package-name` and `--version` if not given in `package.yaml`.
+  Files are staged into the package (ELF binaries → `/usr/bin`, or
+  `--prefix`). An existing `package.yaml` is loaded as a base for extra
+  metadata (dependencies, contents, signing) but `github_repo` is not
+  required. Conflicts with `--local`.
+- **`--from-file <path>`** (`build`): like `--from-dir` but for a single
+  file. The file is installed to `/usr/bin` (or `--prefix`). Conflicts with
+  `--from-dir`.
+- **`--package-name <name>`** (`build`): override or set the package name
+  for `--from-dir`/`--from-file` builds (and zero-config builds).
+- **`--prefix <path>`** (`build`): install prefix inside the package for
+  `--from-dir`/`--from-file` (e.g. `"/usr/local/bin"`, `"/opt/myapp"`).
+  Files are staged under this absolute path instead of the default
+  `/usr/bin`. Must start with `/`.
 - **`--sign-key` / `--sign-method`** (`build`): sign built packages.
   Method `detach` (default) writes a sibling `.sig`; `debsign` embeds
   `_gpgorigin` inside the `.deb` (debsigs / nfpm-compatible). RPM embeds
@@ -202,7 +235,7 @@ the sole source of truth for what's on your system.
 
 ```yaml
 package_name: eza          # required
-github_repo: eza-community/eza   # required, "owner/repo"
+github_repo: eza-community/eza   # required (--from-dir/--from-file omit this)
 
 artifact_format: tar.gz     # tar.gz | tgz | zip | raw (guessed if omitted)
 description: "A modern replacement for ls"
@@ -214,6 +247,7 @@ debian_distributions: [bookworm, trixie, forky, sid]   # default: all five suite
 binary_path: ""              # path to the binary within the extracted archive
 binary_rename: ""            # rename the single installed binary to this name
 bundle: false                 # see below
+prefix: ""                   # --from-dir/--from-file: install prefix inside the package (e.g. "/usr/local/bin")
 
 depends: ""                   # e.g. "libatomic1, libgtk-3-0"
 recommends: ""                 # e.g. "bash-completion"
@@ -240,7 +274,8 @@ signature:
 # the host instead of repacking release assets. Requires an explicit
 # architectures: list (all entries must equal the host arch — native only).
 build_mode: source            # binary (default) | source
-build_system: cmake           # cmake (default) | custom
+build_system: cmake           # cmake (default) | cargo | go | custom (omit = auto-detect)
+musl: false                    # musl-static binary: no glibc dep, runs on any Linux
 upstream_url: ""              # tarball root; default: github <repo>/archive
 upstream_ref: ""              # tag to fetch; default: resolved version
 build_depends: []             # host packages the compile needs (CI preinstalls; lx never apt-gets)
@@ -331,16 +366,47 @@ is always embedded in the header when `key_file` is set. `${VAR}` /
 
 **`build_mode: source`** — for upstreams that publish no Linux binaries
 (e.g. quickshell). Fetches the source tag, compiles once on the host
-(`cmake -G Ninja -DCMAKE_INSTALL_PREFIX=/usr` + `cmake_flags`, or
-`build_commands`/`install_commands` with `build_system: custom`), computes
-`Depends` from the staged ELFs (`DT_NEEDED` → owning host packages via
-`dpkg -S`, `libc6` fallback), and wraps one `.deb` per suite — natively,
-no containers. Native-arch only: every `architectures:` entry must equal
-the host arch (run once per native host, like one matrix cell per runner).
-The host glibc is the symbol floor, so build on the oldest suite you ship.
+using the selected `build_system` plugin, computes `Depends` from the
+staged ELFs (`DT_NEEDED` → owning host packages via `dpkg -S`, `libc6`
+fallback), and wraps one `.deb` per suite — natively, no containers.
+Native-arch only: every `architectures:` entry must equal the host arch
+(run once per native host, like one matrix cell per runner). The host
+glibc is the symbol floor, so build on the oldest suite you ship.
 `build_depends_suites`/`build_apt_sources` are accepted for
 debian-multiarch-builder config compat but not applied (container-only
 concepts); `build_depends` names host packages instead.
+
+**`build_system:`** — which build system compiles the source. Defaults to
+`cmake` (auto-detected from `CMakeLists.txt` if `build_system:` is omit).
+
+| `build_system` | Plugin | Detects | Build |
+|---|---|---|---|
+| `cmake` | CMake + Ninja | `CMakeLists.txt` | cmake configure → build → DESTDIR install |
+| `cargo` | Cargo (Rust) | `Cargo.toml` | `cargo install --path . --root <DESTDIR>` |
+| `go` | Go | `go.mod` | `go build -trimpath` → `<DESTDIR>/bin/<name>` |
+| `custom` | User commands | (explicit-only) | `build_commands` / `install_commands` with `$DESTDIR` |
+
+If `build_system:` is omitted, `lx` auto-detects from the source tree
+(`CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go). Set it
+explicitly to override or to use `custom`.
+
+**`musl: true`** — produce a musl-static binary with no glibc dependency,
+so the package runs on any Linux regardless of distro age (solves the
+"binary built on new Ubuntu won't run on old Ubuntu" problem). For source
+builds, each build system plugin adjusts its compile flags:
+
+| `build_system` | Musl mechanism |
+|---|---|
+| `cargo` | `--target x86_64-unknown-linux-musl` (auto-installed via rustup) |
+| `go` | `CGO_ENABLED=0` (fully static, no C dependencies) |
+| `cmake` | `musl-gcc`/`musl-g++` + `-static` (requires `musl-tools`) |
+| `custom` | user's responsibility via `build_commands` |
+
+For binary repacks (`build_mode: binary`, the default), `musl: true`
+prefers musl-named release assets (e.g. `*-linux-musl.tar.gz`) over glibc
+variants during auto-discovery. `compute_depends()` omits the `libc6`
+fallback for musl binaries. The consumer client (`lx-get install`) falls
+back to a `+musl_{arch}.deb` asset when no distro-specific build exists.
 
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter
 `package.yaml` (makedeb-orphan migration path). Guesses are commented for
@@ -386,6 +452,21 @@ rather than shelled-out `tar`/`jq`/`yq`/`dpkg-*` in a container. Since this
 repo has no published binary releases yet, the action builds `lx` from
 source (cached via `Swatinem/rust-cache`).
 
+### Attribution & telemetry
+
+Pin an exact, greppable ref so usage is attributable via code search
+(`uses: ranjithrajv/lx@v1`):
+
+```yaml
+- uses: ranjithrajv/lx@v1   # keep major tag moving; cite full version in issues
+```
+
+Anonymous run telemetry is opt-out (`telemetry-enabled: 'true'` default):
+one POST per run with `action ref, arch, job status, runner arch` only —
+no repo, user, or PII. It fires only when the `LX_TELEMETRY_URL` repo
+Variable is set (your collector endpoint), so forks/private users emit
+nothing by default. Set `telemetry-enabled: 'false'` to disable entirely.
+
 ## Reproducible builds
 
 Builds are reproducible per
@@ -401,6 +482,63 @@ walking their contents in sorted order with normalized mtime/owner/group.
 Both respect the standard `SOURCE_DATE_EPOCH` environment variable if you
 want to pin an exact value.
 
+## Package indexes (`lx index`)
+
+A unified index manager: one command, many upstream indexes. `lx index` fans
+out across every *enabled* source — the
+[LX community index](https://github.com/ranjithrajv/lx-index) (recipes +
+prebuilt binaries), the [AUR](https://aur.archlinux.org/) (builds PKGBUILDs
+into native packages), and any custom index you register. New sources are
+**plugins**: implement the `IndexSource` trait and add one line to the registry
+— no fork, no recompile of core.
+
+```sh
+lx index search eza           # full-text across ALL enabled indexes
+lx index install eza          # prebuilt first (LX index), build if no match
+lx index info eza             # details from every index that has it
+lx index update               # pull latest recipes + prebuilts
+
+lx index list                 # show configured indexes
+lx index add copr <url>       # register a custom index
+lx index remove copr          # drop it
+```
+
+The registry lives in `~/.config/lx/indexes.yaml` and ships with the LX
+community index, AUR, and the repology metadata source enabled by default.
+The LX community index caches to `~/.cache/lx/index/` (a shallow git clone,
+auto-refreshed; works offline on a stale cache with a warning). The repology
+source caches to `~/.cache/lx/repology/` (JSON files refreshed via the
+repology API on `lx index update`). `lx search` merges index results with the
+`latest-debs` org and embedded templates; `--local` keeps it offline-only.
+
+### Distro metadata (repology)
+
+The repology source tracks what version of each project ships in 200+ distro
+repositories. It is metadata-only — it cannot install anything, but it enriches
+search results with cross-distro context:
+
+```sh
+lx index update               # refresh the repology cache from the API
+lx search --distro eza        # show distro versions alongside org results
+lx index status               # show host distro's repology identity
+lx index outdated             # list packages where host distro lags upstream
+```
+
+With `--distro`, search results show the host distro's version, the newest
+known version, and how many repos carry the package:
+
+```
+eza    A modern, maintained replacement for ls [latest-debs] — host: 0.18.0 (newest 0.20.0) [37 repos]
+```
+
+`lx index outdated` produces a gap list — packages where your distro ships an
+older version than upstream — which is exactly the set the LX community recipe
+index can fill.
+
+The LX index runs `lx build` + `--sbom` on every merged recipe in CI, so
+community contributions ship prebuilt binaries without the contributor
+running their own release infra.
+
 ## Development
 
 ```sh
@@ -410,14 +548,18 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 ```
 
-Pre-commit hooks (`.pre-commit-config.yaml`) run fmt/clippy/shellcheck/a
-secret scan on every commit, and the fuller `cargo test` + coverage gate +
-`cargo audit` on push:
+Pre-commit hooks (`.pre-commit-config.yaml`) run fmt/clippy/shellcheck/
+secret scan/license check/typos on every commit, and the fuller
+`cargo test` + coverage gate + `cargo deny` + doc lint on push:
 
 ```sh
+make dev-setup                              # install hook binaries (idempotent)
 pre-commit install
 pre-commit install --hook-type pre-push
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup guide, hook
+reference, and project layout.
 
 `docs/decisions/` records the non-obvious calls made while porting from the
 bash action (library choices, config-format decisions, investigation

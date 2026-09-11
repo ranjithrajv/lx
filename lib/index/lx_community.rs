@@ -184,6 +184,7 @@ impl IndexSource for LxCommunitySource {
                 source: self.name.clone(),
                 installed,
                 available: tags,
+                ..Default::default()
             });
         }
         Ok(hits)
@@ -202,6 +203,7 @@ impl IndexSource for LxCommunitySource {
             source: self.name.clone(),
             installed: crate::debs::dpkg_installed_version(package).is_some(),
             available: tags,
+            ..Default::default()
         }))
     }
 

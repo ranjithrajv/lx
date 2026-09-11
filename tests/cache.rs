@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Result;
 use lx_lib::cache::*;
 use std::path::Path;

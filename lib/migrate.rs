@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx migrate` — carry the installed base across the `lpt` → `lx` rename.
 //!
 //! Always runs the local state migration (idempotent): moves the install

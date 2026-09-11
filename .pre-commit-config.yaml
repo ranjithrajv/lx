@@ -14,6 +14,14 @@ repos:
         language: system
         pass_filenames: false
 
+      - id: cargo-locked
+        name: cargo check --locked
+        # Fails if Cargo.lock is out of sync with Catl — catches
+        # `cargo add` without committing the lockfile.
+        entry: cargo check --locked --all-targets
+        language: system
+        pass_filenames: false
+
       - id: shellcheck
         name: shellcheck
         entry: shellcheck
@@ -25,6 +33,26 @@ repos:
         entry: ./utils/secret-scan.sh
         language: system
         pass_filenames: false
+
+      - id: license-check
+        name: license header check (GPL-3.0 SPDX)
+        entry: ./utils/license-check.sh
+        language: system
+        types: [rust]
+        pass_filenames: false
+
+      - id: typos
+        name: typos (spell check)
+        entry: typos
+        language: system
+        types_or: [rust, markdown, toml, yaml, shell]
+        pass_filenames: false
+
+      - id: taplo-fmt
+        name: taplo fmt (auto-fix TOML)
+        entry: taplo format
+        language: system
+        types: [toml]
 
       # --- pre-push tier: slower, needs `pre-commit install --hook-type pre-push` ---
       - id: cargo-test
@@ -41,14 +69,30 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: cargo-audit
-        name: cargo audit
-        # RUSTSEC-2023-0071 (rsa/Marvin Attack, via octocrab's JWT feature) is
-        # a documented, accepted exception -- see
-        # docs/decisions/2026-08-14-octocrab.md. This cargo-audit version
-        # (0.22.2) has no config-file auto-discovery, so the ignore has to be
-        # a CLI flag rather than an audit.toml.
-        entry: cargo audit --ignore RUSTSEC-2023-0071
+      - id: cargo-deny
+        name: cargo deny (licenses + advisories + bans)
+        # Replaces cargo-audit with a richer policy: license compliance,
+        # duplicate crate detection, and explicit crate bans. Config in
+        # deny.toml.
+        entry: cargo deny --all-features check
         language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: cargo-doc
+        name: cargo doc (deny warnings)
+        # Catches broken intra-doc links, missing docs, and rustdoc
+        # warnings before they hit CI/docs.rs. RUSTDOCFLAGS is set
+        # inline because pre-commit doesn't inherit shell env.
+        entry: bash -c 'RUSTDOCFLAGS="--deny warnings" cargo doc --no-deps --all-features'
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: markdownlint
+        name: markdownlint (docs lint)
+        entry: markdownlint
+        language: system
+        types: [markdown]
         pass_filenames: false
         stages: [pre-push]

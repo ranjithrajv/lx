@@ -1,5 +1,5 @@
 name: 'lx: Latest Package Tool'
-description: 'Build Debian packages for multiple architectures from upstream forge releases (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit). Drop-in replacement for ranjithrajv/debian-multiarch-builder: same inputs/outputs, backed by the lx Rust CLI instead of the bash implementation.'
+description: 'Build Debian packages from upstream releases for multiple architectures'
 author: 'ranjithrajv'
 
 branding:
@@ -46,6 +46,18 @@ inputs:
     default: 'dist'
   github-token:
     description: 'GitHub token for API requests (raises the anonymous rate limit). Defaults to the workflow-provided token.'
+    required: false
+    default: ''
+  allow-unverified:
+    description: 'Pass --allow-unverified to lpt build (build without checksum sidecar). Defaults to true for bash-action parity; set false for fail-closed builds.'
+    required: false
+    default: 'true'
+  telemetry-url:
+    description: 'Collector URL for the anonymous attribution ping. Empty (default) skips the ping. (vars context is unavailable inside composite actions, so this is an input, not a repo Variable.)'
+    required: false
+    default: ''
+  lintian-suppress:
+    description: 'Comma-separated lintian tags to suppress (bash-action suppress_tags parity). Empty by default.'
     required: false
     default: ''
 
@@ -149,11 +161,23 @@ runs:
         fi
         pin_flag=()
         if [ -n "${{ inputs.pinned-metadata }}" ]; then
-          pin_flag=(--pinned-metadata "${{ inputs.pinned-metadata }}")
+          if [ -f "${{ inputs.pinned-metadata }}" ]; then
+            pin_flag=(--pinned-metadata "${{ inputs.pinned-metadata }}")
+          else
+            echo "::warning::Pinned metadata not found at ${{ inputs.pinned-metadata }}; building without provenance pin (bash-action parity)"
+          fi
         fi
         baseline_flag=()
         if [ "${{ inputs.save-baseline }}" = "true" ]; then
           baseline_flag=(--save-baseline)
+        fi
+        unverified_flag=()
+        if [ "${{ inputs.allow-unverified }}" = "true" ]; then
+          unverified_flag=(--allow-unverified)
+        fi
+        suppress_flag=()
+        if [ -n "${{ inputs.lintian-suppress }}" ]; then
+          suppress_flag=(--lintian-suppress "${{ inputs.lintian-suppress }}")
         fi
 
         # --source: debian-multiarch-builder always generated source
@@ -168,7 +192,7 @@ runs:
           --summary \
           --cache-dir "$HOME/.cache/lx/downloads" \
           --api-cache-dir "$HOME/.cache/lx/api" \
-          "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}" "${baseline_flag[@]}"
+          "${arch_flag[@]}" "${lintian_flag[@]}" "${telemetry_flag[@]}" "${pin_flag[@]}" "${baseline_flag[@]}" "${unverified_flag[@]}" "${suppress_flag[@]}"
 
         cd "${{ inputs.output-dir }}"
         packages=$(ls -- *.deb 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
@@ -180,6 +204,20 @@ runs:
         echo "Generated source packages: $source_packages"
 
         echo "summary-path=${{ inputs.output-dir }}/build-summary.json" >> "$GITHUB_OUTPUT"
+
+    - name: Attribution telemetry ping
+      if: inputs.telemetry-enabled == 'true'
+      shell: bash
+      env:
+        LX_TELEMETRY_URL: ${{ inputs.telemetry-url }}
+      run: |
+        # Anonymous, opt-out via telemetry-enabled: 'false'. Sends only
+        # action ref, arch, success — no repo/user/PII. Set the
+        # telemetry-url input to your collector; skipped when unset.
+        if [ -z "$LX_TELEMETRY_URL" ]; then exit 0; fi
+        curl -sS --max-time 5 -X POST "$LX_TELEMETRY_URL" \
+          -H 'Content-Type: application/json' \
+          -d "{\"action\":\"${GITHUB_ACTION_REPOSITORY:-local}@${GITHUB_ACTION_REF:-dev}\",\"arch\":\"${{ inputs.architecture }}\",\"job_status\":\"${{ job.status }}\",\"runner_arch\":\"$(uname -m)\"}" || true
 
     - name: Upload failed build logs
       if: failure() || cancelled()

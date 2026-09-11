@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{Context, Result};
 
 /// Shared HTTP client factory — DRY for `github`/`gitlab`/`gitea`/etc.

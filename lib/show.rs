@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx show` — deb-get `show` parity: everything known about one package.
 
 use anyhow::{bail, Result};

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Shared-library dependency scanning: read an ELF binary's `DT_NEEDED`
 //! entries (the same information `ldd`/`readelf -d` report), natively via
 //! the `object` crate -- no `ldd`/`objdump`/`readelf` host-tool dependency,

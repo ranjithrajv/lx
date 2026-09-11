@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::sbom::{collect_artifacts, emit, Artifact, Material};
 
 fn unverified_material() -> Material {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `package.lock` — a committable pin of exactly which release asset each
 //! architecture resolved to on a known-good build, so a build refuses to
 //! silently ship a different binary than last time (upstream re-tagging or

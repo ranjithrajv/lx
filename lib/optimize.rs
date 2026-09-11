@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Resource-aware build optimization, mirroring the action's
 //! `ci-optimization.sh` (dynamic parallelism) and `resource-pool.sh`
 //! (graceful degradation). On CI runners the action caps parallelism from

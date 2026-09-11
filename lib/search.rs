@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! `lx search` — deb-get `search` parity plus `apt search` behavior:
 //! regex over the curated index, full-text match against installed
 //! packages' dpkg descriptions, installed/candidate versions per hit, and
@@ -30,13 +32,26 @@ pub struct SearchArgs {
     #[arg(long, conflicts_with = "installed")]
     pub not_installed: bool,
 
-    /// Print bare package names, one per line (for scripting).
-    #[arg(long)]
-    pub raw: bool,
-
     /// Search the bundled recipe index (embedded templates/) instead of
     /// the latest-debs org over the network. Offline; useful for
     /// bootstrapping new packages from starter configs.
+    #[arg(long)]
+    pub raw: bool,
+
+    /// Include the community recipe index (lx-index) in results.
+    #[arg(long)]
+    pub index: bool,
+
+    /// Search only the community index (skip the latest-debs org).
+    #[arg(long, conflicts_with = "local")]
+    pub index_only: bool,
+
+    /// Enrich results with distro metadata (repology) — which distros
+    /// carry the package and whether the host distro is outdated.
+    #[arg(long)]
+    pub distro: bool,
+
+    /// Print bare package names, one per line (for scripting).
     #[arg(long)]
     pub local: bool,
 }
@@ -83,13 +98,20 @@ fn org_repos(org: &str, token: Option<&str>) -> Result<Vec<OrgRepo>> {
 /// One search hit: display name, blurb, install state, and versions.
 /// `candidate` is the manifest-recorded version when lx manages the
 /// package (per-package latest-release lookup would cost one API call per
-/// hit, so the index itself carries no versions).
+/// hit, so the index itself carries no versions). The `distro_*` fields
+/// are populated when `--distro` is passed and repology data is available.
 struct Hit {
     name: String,
     desc: String,
     installed: bool,
     installed_version: Option<String>,
     candidate: Option<String>,
+    /// Distro metadata from repology (populated with --distro).
+    distro_newest: Option<String>,
+    distro_repos: usize,
+    distro_outdated: usize,
+    host_version: Option<String>,
+    host_status: Option<String>,
 }
 
 fn print_hits(hits: &[Hit], raw: bool, empty_msg: &str, pattern: Option<&str>) {
@@ -132,10 +154,33 @@ fn print_hits(hits: &[Hit], raw: bool, empty_msg: &str, pattern: Option<&str>) {
         };
         // Long dpkg descriptions collapse to their first line for the list.
         let blurb: String = h.desc.lines().next().unwrap_or_default().to_string();
-        if blurb.is_empty() {
-            println!("{:<pad$}{tag}", h.name);
+        // Distro metadata line (repology, --distro only).
+        let distro = if h.distro_repos > 0 {
+            let host = match &h.host_status {
+                Some(s) if s == "outdated" || s == "legacy" => {
+                    let newest = h.distro_newest.as_deref().unwrap_or("?");
+                    let hv = h.host_version.as_deref().unwrap_or("?");
+                    format!(" — host: {hv} (newest {newest})")
+                }
+                Some(s) => {
+                    let hv = h.host_version.as_deref().unwrap_or("?");
+                    format!(" — host: {hv} ({s})")
+                }
+                None => String::new(),
+            };
+            let repos = if h.distro_outdated > 0 {
+                format!(" [{}/{} repos outdated]", h.distro_outdated, h.distro_repos)
+            } else {
+                format!(" [{} repos]", h.distro_repos)
+            };
+            format!("{host}{repos}")
         } else {
-            println!("{:<pad$}  {blurb}{tag}", h.name);
+            String::new()
+        };
+        if blurb.is_empty() {
+            println!("{:<pad$}{tag}{distro}", h.name);
+        } else {
+            println!("{:<pad$}  {blurb}{tag}{distro}", h.name);
         }
     }
 }
@@ -189,6 +234,11 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
                 installed,
                 installed_version,
                 candidate: None,
+                distro_newest: None,
+                distro_repos: 0,
+                distro_outdated: 0,
+                host_version: None,
+                host_status: None,
             });
         }
         print_hits(
@@ -240,8 +290,31 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
             installed,
             installed_version,
             candidate,
+            distro_newest: None,
+            distro_repos: 0,
+            distro_outdated: 0,
+            host_version: None,
+            host_status: None,
         });
     }
+
+    // Optionally enrich with repology distro metadata.
+    if args.distro {
+        use crate::index::repology::RepologySource;
+        let rep = RepologySource::new("repology");
+        for hit in &mut hits {
+            if let Ok(Some(proj)) = rep.lookup_project(&hit.name) {
+                let (newest, repos, outdated, _vulnerable) = RepologySource::distro_summary(&proj);
+                let host = RepologySource::host_version(&proj);
+                hit.distro_newest = newest;
+                hit.distro_repos = repos;
+                hit.distro_outdated = outdated;
+                hit.host_version = host.clone().map(|(v, _)| v);
+                hit.host_status = host.map(|(_, s)| s);
+            }
+        }
+    }
+
     print_hits(
         &hits,
         args.raw,

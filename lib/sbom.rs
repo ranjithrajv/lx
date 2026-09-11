@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Supply-chain attestations: SPDX SBOM + SLSA provenance per build.
 //!
 //! Nobody in the deb-get/makedeb/multiarch-builder space emits these; lx

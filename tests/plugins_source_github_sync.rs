@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use lx_lib::plugins::source::{get_source_plugin, source_available_names};
 
 #[test]

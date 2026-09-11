@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Build a `.rpm` archive entirely in-process using the `rpm` crate.
 //!
 //! Mirrors `debarchive.rs`'s philosophy: no `rpmbuild`, no
@@ -17,6 +19,11 @@ pub struct PackageMeta<'a> {
     pub summary: &'a str,
     pub description: &'a str,
     pub license: &'a str,
+    /// RPM `vendor` header tag (e.g. "Fedora Project"). Optional.
+    pub vendor: Option<&'a str>,
+    /// RPM `packager` header tag (e.g. "Jane Doe <jane@example.com>").
+    /// Optional; falls back to maintainer-style identity when unset.
+    pub packager: Option<&'a str>,
 }
 
 /// Build an `.rpm` from a staged filesystem tree.
@@ -35,8 +42,70 @@ pub fn build(
     build_with_options(root, meta, arch, mtime, rpm_path, &BuildOptions::default())
 }
 
+/// RPM relation fields (requires, provides, conflicts, obsoletes,
+/// recommends, suggests) parsed from the package config's comma-separated
+/// relation strings. Each entry is a name-only `Dependency::any(name)`.
+///
+/// Note: `rpm::Dependency` does not implement `Clone`, so this struct
+/// manually reconstructs dependencies from its public fields where needed.
+#[derive(Debug, Default)]
+pub struct RpmRelations {
+    pub requires: Vec<rpm::Dependency>,
+    pub provides: Vec<rpm::Dependency>,
+    pub conflicts: Vec<rpm::Dependency>,
+    pub obsoletes: Vec<rpm::Dependency>,
+    pub recommends: Vec<rpm::Dependency>,
+    pub suggests: Vec<rpm::Dependency>,
+}
+
+impl RpmRelations {
+    /// Rebuild a `Dependency` from its public fields (the type does not
+    /// implement `Clone`).
+    fn rebuild(dep: &rpm::Dependency) -> rpm::Dependency {
+        rpm::Dependency {
+            name: dep.name.clone(),
+            flags: dep.flags,
+            version: dep.version.clone(),
+        }
+    }
+}
+
+/// Parse comma-separated relation strings into [`RpmRelations`]. Each
+/// non-empty, trimmed entry becomes a `Dependency::any(name)`. Empty or
+/// whitespace-only strings yield empty vectors.
+pub fn parse_rpm_relations(
+    depends: &str,
+    recommends: &str,
+    suggests: &str,
+    conflicts: &str,
+    replaces: &str,
+    provides: &str,
+    breaks: &str,
+) -> RpmRelations {
+    fn parse_list(s: &str) -> Vec<rpm::Dependency> {
+        s.split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(rpm::Dependency::any)
+            .collect()
+    }
+
+    // Debian `Breaks` has no direct RPM equivalent; fold it into conflicts.
+    let mut conflicts = parse_list(conflicts);
+    conflicts.extend(parse_list(breaks));
+
+    RpmRelations {
+        requires: parse_list(depends),
+        recommends: parse_list(recommends),
+        suggests: parse_list(suggests),
+        conflicts,
+        obsoletes: parse_list(replaces),
+        provides: parse_list(provides),
+    }
+}
+
 /// Optional scriptlets and signing for [`build_with_options`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct BuildOptions<'a> {
     /// `%pre` scriptlet body (`scripts.preinstall`).
     pub pre_install: Option<&'a str>,
@@ -46,11 +115,23 @@ pub struct BuildOptions<'a> {
     pub pre_uninstall: Option<&'a str>,
     /// `%postun` scriptlet body (`scripts.postremove`).
     pub post_uninstall: Option<&'a str>,
+    /// `%pretrans` scriptlet body (`scripts.pretrans`). Transaction-level
+    /// scriptlet that runs before any package in the transaction.
+    pub pre_trans: Option<&'a str>,
+    /// `%posttrans` scriptlet body (`scripts.posttrans`). Transaction-level
+    /// scriptlet that runs after the entire transaction completes.
+    pub post_trans: Option<&'a str>,
+    /// `%verify` scriptlet body (`scripts.verify`). Runs when `rpm -V`
+    /// verifies the package.
+    pub verify_script: Option<&'a str>,
     /// When set, an armored secret key is loaded natively and the PGP
     /// signature is embedded in the RPM header (`rpm -K` verifiable).
     pub sign_key_file: Option<&'a Path>,
     /// Passphrase for the signing key, if any.
     pub sign_passphrase: Option<&'a str>,
+    /// RPM relation fields (requires, provides, conflicts, obsoletes,
+    /// recommends, suggests).
+    pub relations: RpmRelations,
 }
 
 /// Like [`build`] plus scriptlets (`%pre`/`%post`/`%preun`/`%postun`) and
@@ -87,6 +168,45 @@ pub fn build_with_options(
     }
     if let Some(s) = opts.post_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
         builder = builder.post_uninstall_script(s);
+    }
+    if let Some(s) = opts.pre_trans.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_trans_script(s);
+    }
+    if let Some(s) = opts.post_trans.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_trans_script(s);
+    }
+    if let Some(s) = opts.verify_script.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.verify_script(s);
+    }
+
+    // Apply relation fields (requires, provides, conflicts, obsoletes,
+    // recommends, suggests). `rpm::Dependency` does not implement `Clone`,
+    // so rebuild each from its public fields.
+    for dep in &opts.relations.requires {
+        builder = builder.requires(RpmRelations::rebuild(dep));
+    }
+    for dep in &opts.relations.provides {
+        builder = builder.provides(RpmRelations::rebuild(dep));
+    }
+    for dep in &opts.relations.conflicts {
+        builder = builder.conflicts(RpmRelations::rebuild(dep));
+    }
+    for dep in &opts.relations.obsoletes {
+        builder = builder.obsoletes(RpmRelations::rebuild(dep));
+    }
+    for dep in &opts.relations.recommends {
+        builder = builder.recommends(RpmRelations::rebuild(dep));
+    }
+    for dep in &opts.relations.suggests {
+        builder = builder.suggests(RpmRelations::rebuild(dep));
+    }
+
+    // Apply vendor and packager header tags when present.
+    if let Some(v) = meta.vendor.filter(|v| !v.trim().is_empty()) {
+        builder = builder.vendor(v);
+    }
+    if let Some(p) = meta.packager.filter(|p| !p.trim().is_empty()) {
+        builder = builder.packager(p);
     }
 
     // Walk staged tree in sorted order for reproducibility, adding each

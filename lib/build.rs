@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::io::Read;
@@ -5,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::discovery::{config_from_release, guess_format, match_assets};
+use crate::discovery::guess_format;
 use lx_lib::github::Asset;
 
 #[derive(Debug, Clone, Args)]
@@ -178,6 +180,30 @@ pub struct BuildArgs {
     #[arg(long)]
     pub local: bool,
 
+    /// "You supply files" mode (fpm-style): build a package from a directory
+    /// of files you supply, with no forge release fetch. Requires
+    /// `--package-name` and `--version` if not given in package.yaml. The
+    /// directory's files are staged into the package (ELF binaries →
+    /// /usr/bin, or `--prefix`). Conflicts with `--local`.
+    #[arg(long, value_name = "PATH", conflicts_with = "local")]
+    pub from_dir: Option<PathBuf>,
+
+    /// Like `--from-dir` but for a single file. The file is installed to
+    /// /usr/bin (or `--prefix`). Conflicts with `--from-dir`.
+    #[arg(long, value_name = "PATH", conflicts_with = "from_dir")]
+    pub from_file: Option<PathBuf>,
+
+    /// Package name for `--from-dir`/`--from-file` builds (overrides
+    /// package.yaml). Required if no package.yaml is present.
+    #[arg(long, value_name = "NAME")]
+    pub package_name: Option<String>,
+
+    /// Install prefix inside the package for `--from-dir`/`--from-file`
+    /// (e.g. "/usr/local/bin", "/opt/myapp"). Files are staged under this
+    /// absolute path instead of the default /usr/bin. Must start with '/'.
+    #[arg(long, value_name = "PATH")]
+    pub prefix: Option<String>,
+
     /// Apply a delta package.yaml over the base config before building: its
     /// top-level keys replace the base's. Lets an org share one base
     /// package.yaml and fork only what differs per target instead of
@@ -331,6 +357,10 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 };
                 cfg.validate()?;
                 cfg
+            } else if args.from_dir.is_some() || args.from_file.is_some() {
+                // "You supply files" mode: package.yaml is optional. Load it
+                // as a base if it exists, else start from defaults.
+                PackageConfig::load(&args.config).unwrap_or_default()
             } else {
                 PackageConfig::load(&args.config)?
             }
@@ -342,6 +372,37 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     }
     if let Some(v) = &args.version {
         cfg.version = v.clone();
+    }
+    // "You supply files" mode (fpm-style): a directory or file you supply is
+    // the payload. Apply CLI overrides, point local_payload at it, and route
+    // through run_local with relaxed validation (no github_repo needed).
+    if args.from_dir.is_some() || args.from_file.is_some() {
+        let path = args
+            .from_dir
+            .as_ref()
+            .or(args.from_file.as_ref())
+            .unwrap()
+            .clone();
+        if let Some(name) = &args.package_name {
+            cfg.package_name = name.clone();
+        }
+        if let Some(prefix) = &args.prefix {
+            cfg.prefix = prefix.clone();
+        }
+        if cfg.package_name.trim().is_empty() {
+            // Default the package name to the source's file/dir name.
+            cfg.package_name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("package")
+                .to_string();
+        }
+        cfg.local_payload = path.to_string_lossy().to_string();
+        // Directory or single file: treat as already-extracted raw payload.
+        cfg.artifact_format = "raw".to_string();
+        cfg.validate_for_local()?;
+        // Fall through to the local routing below (effective_format etc.
+        // still need resolving first).
     }
     // Source-mode builds compile upstream on the host instead of repacking
     // release assets (bash `build_mode: source` parity, natively).
@@ -388,8 +449,12 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         other => bail!("unsupported --sign-method '{other}' (expected detach or debsign)"),
     }
 
-    if args.local {
-        println!("source: local (skipping upstream download)");
+    if args.local || args.from_dir.is_some() || args.from_file.is_some() {
+        if args.from_dir.is_some() || args.from_file.is_some() {
+            println!("source: files you supplied (no forge fetch)");
+        } else {
+            println!("source: local (skipping upstream download)");
+        }
         return run_local(
             args,
             cfg,
@@ -565,7 +630,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     } else if cfg.has_manual_patterns() {
         resolve_manual(&cfg, &release)?
     } else {
-        let auto = config_from_release(&cfg.github_repo, &release)?;
+        let auto =
+            crate::discovery::config_from_release_with_musl(&cfg.github_repo, &release, cfg.musl)?;
         resolve_manual(&auto, &release)?
     };
 
@@ -1199,7 +1265,7 @@ pub(crate) fn resolve_manual(
         out.insert(arch.clone(), asset);
     }
     // Auto-discovery fallback for any archs without a pattern.
-    let matched = match_assets(release);
+    let matched = crate::discovery::match_assets_with_musl(release, cfg.musl);
     for m in matched {
         out.entry(m.arch)
             .or_insert(asset_from_name(release, &m.asset));
@@ -1451,7 +1517,7 @@ fn build_one(
     } = *inputs;
 
     // 1. Resolve the payload: local path, or download the asset once per name.
-    let asset_path = if args.local {
+    let asset_path = if args.local || args.from_dir.is_some() || args.from_file.is_some() {
         let p = PathBuf::from(cfg.local_payload.trim());
         if !p.exists() {
             bail!("local_payload '{}' does not exist", p.display());
@@ -1676,11 +1742,13 @@ fn build_one(
             format
         )
     })?;
-    let debian_version = lx_lib::pkgmeta::strip_upstream_prefix(if cfg.version.is_empty() {
-        &job.tag
+    let raw_version = if cfg.version.is_empty() {
+        job.tag.clone()
     } else {
-        &cfg.version
-    });
+        cfg.version.clone()
+    };
+    let debian_version =
+        lx_lib::pkgmeta::normalize_version(&raw_version, &cfg.effective_version_schema());
     let mtime = lx_lib::pkgmeta::reproducible_epoch(job.published_at);
     let staging_root = tmp.join(format!(
         "{}-{}-root-{}",

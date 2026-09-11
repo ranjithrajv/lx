@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Result;
 use clap::Args;
 use serde_json::json;
@@ -260,6 +262,27 @@ pub fn generate_schema() -> serde_json::Value {
                 "enum": ["required", "important", "standard", "optional", "extra"],
                 "description": "Debian Priority field (default: optional)"
             },
+            "arch_variant": {
+                "type": "string",
+                "description": "Debian arch variant appended to Architecture (e.g. amd64v3). Mirrors nfpm deb.arch_variant."
+            },
+            "version_schema": {
+                "type": "string",
+                "enum": ["semver", "none"],
+                "description": "Version parsing schema (default: semver). semver strips v-prefix and normalizes; none uses as-is. Mirrors nfpm version_schema."
+            },
+            "umask": {
+                "type": "string",
+                "description": "Octal umask applied to files without explicit mode (e.g. 0o002). Mirrors nfpm umask."
+            },
+            "packager": {
+                "type": "string",
+                "description": "Packager string (org/person packaging the software). RPM: packager header tag; deb: Packager control field. Falls back to maintainer. Mirrors nfpm rpm.packager."
+            },
+            "disable_globbing": {
+                "type": "boolean",
+                "description": "Disable glob expansion in contents: src patterns. Mirrors nfpm disable_globbing."
+            },
             "fields": {
                 "type": "object",
                 "additionalProperties": {"type": "string"},
@@ -325,12 +348,57 @@ pub fn generate_schema() -> serde_json::Value {
             "scripts": {
                 "type": "object",
                 "additionalProperties": false,
-                "description": "Maintainer scripts from the build environment (deb: DEBIAN/{preinst,postinst,prerm,postrm}; rpm: %pre/%post/%preun/%postun)",
+                "description": "Maintainer scripts from the build environment. deb: preinstall→DEBIAN/preinst, postinstall→DEBIAN/postinst, preremove→DEBIAN/prerm, postremove→DEBIAN/postrm (all mode 0755). rpm: preinstall→%pre, postinstall→%post, preremove→%preun, postremove→%postun, pretrans→%pretrans, posttrans→%posttrans, verify→%verify. arch: preupgrade→pre_upgrade(), postupgrade→post_upgrade() in .INSTALL.",
                 "properties": {
-                    "preinstall": {"type": "string"},
-                    "postinstall": {"type": "string"},
-                    "preremove": {"type": "string"},
-                    "postremove": {"type": "string"}
+                    "preinstall": {"type": "string", "description": "preinstall script path (deb: DEBIAN/preinst; rpm: %pre)"},
+                    "postinstall": {"type": "string", "description": "postinstall script path (deb: DEBIAN/postinst; rpm: %post)"},
+                    "preremove": {"type": "string", "description": "preremove script path (deb: DEBIAN/prerm; rpm: %preun)"},
+                    "postremove": {"type": "string", "description": "postremove script path (deb: DEBIAN/postrm; rpm: %postun)"},
+                    "pretrans": {"type": "string", "description": "RPM %pretrans transaction script path (ignored by deb/arch)"},
+                    "posttrans": {"type": "string", "description": "RPM %posttrans transaction script path (ignored by deb/arch)"},
+                    "verify": {"type": "string", "description": "RPM %verify script path (ignored by deb/arch)"},
+                    "preupgrade": {"type": "string", "description": "Arch pre_upgrade() hook path (ignored by deb/rpm)"},
+                    "postupgrade": {"type": "string", "description": "Arch post_upgrade() hook path (ignored by deb/rpm)"}
+                }
+            },
+            "deb": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "Debian-specific configuration: debconf templates/config, maintainer triggers, and rules. Ignored by rpm/arch.",
+                "properties": {
+                    "rules": {"type": "string", "description": "Path to debian/rules Makefile (copied as DEBIAN/rules, mode 0755)"},
+                    "templates": {"type": "string", "description": "Path to debconf templates file (copied as DEBIAN/templates, mode 0644)"},
+                    "config": {"type": "string", "description": "Path to debconf config script (copied as DEBIAN/config, mode 0755)"},
+                    "triggers_interest": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package registers interest in (interest lines in DEBIAN/triggers)"
+                    },
+                    "triggers_activate": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package activates (activate lines in DEBIAN/triggers)"
+                    },
+                    "triggers_interest_await": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package registers interest in, waiting for the trigger (interest_await lines in DEBIAN/triggers)"
+                    },
+                    "triggers_interest_noawait": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package registers interest in, without waiting (interest_noawait lines in DEBIAN/triggers)"
+                    },
+                    "triggers_activate_await": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package activates, waiting for the trigger (activate_await lines in DEBIAN/triggers)"
+                    },
+                    "triggers_activate_noawait": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Triggers this package activates, without waiting (activate_noawait lines in DEBIAN/triggers)"
+                    }
                 }
             },
             "signature": {

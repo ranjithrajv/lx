@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use crate::plugins::PACKAGED_FROM_LINE;
 use anyhow::{Context, Result};
 use sha1::Sha1;
@@ -494,6 +496,8 @@ fn build_srpm_for_dist(
         summary: &summary,
         description: &description,
         license,
+        vendor: None,
+        packager: Some(&pkg.maintainer),
     };
     let spec_name = format!("{}.spec", pkg.name);
     let spec = render_rpm_spec(

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Result;
 use serde_json::json;
 use std::collections::HashMap;

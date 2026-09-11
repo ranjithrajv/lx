@@ -10,22 +10,40 @@
 pub mod aur;
 pub mod lx_community;
 pub mod registry;
+pub mod repology;
 
 // Re-export key types for ergonomic `crate::index::Registry` access.
 pub use registry::Registry;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
 /// One search hit from any source.
-#[derive(Debug, Clone)]
+///
+/// The `newest`/`repos`/`outdated`/`vulnerable`/`host_*` fields are
+/// populated by metadata-only sources (repology). Recipe/prebuilt sources
+/// (lx-community, aur) leave them at their defaults.
+#[derive(Debug, Clone, Default)]
 pub struct IndexHit {
     pub name: String,
     pub description: String,
     pub source: String,
     pub installed: bool,
     pub available: Vec<String>,
+    // --- repology metadata (optional) ---
+    /// Newest known version across all repos.
+    pub newest: Option<String>,
+    /// Total number of repos (families) carrying this project.
+    pub repos: usize,
+    /// How many repos have an outdated version.
+    pub outdated: usize,
+    /// How many repos have a vulnerable version.
+    pub vulnerable: usize,
+    /// The version in the host's own distro, if tracked.
+    pub host_version: Option<String>,
+    /// Status of the host distro's version (newest/outdated/vulnerable/…).
+    pub host_status: Option<String>,
 }
 
 /// What any package index must implement. New backends (COPR, custom apt, …)
@@ -130,6 +148,10 @@ pub enum IndexCommands {
     Add(AddOpts),
     /// Remove an index from the registry
     Remove(RemoveOpts),
+    /// Show packages where the host distro lags behind upstream
+    Outdated(OutdatedOpts),
+    /// Show the host distro's repology identity and tracked repo count
+    Status,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -137,6 +159,16 @@ pub struct SearchOpts {
     pub pattern: Option<String>,
     #[arg(long)]
     pub raw: bool,
+    /// Include distro metadata (repology) in results
+    #[arg(long)]
+    pub distro: bool,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct OutdatedOpts {
+    /// Limit output to N results
+    #[arg(long, default_value = "50")]
+    pub limit: usize,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -182,6 +214,8 @@ pub fn run(args: IndexArgs, token: Option<&str>) -> Result<()> {
         IndexCommands::List => run_list(),
         IndexCommands::Add(o) => run_add(o),
         IndexCommands::Remove(o) => run_remove(o),
+        IndexCommands::Outdated(o) => run_outdated(o),
+        IndexCommands::Status => run_status(),
     }
 }
 
@@ -215,11 +249,39 @@ fn run_search(opts: SearchOpts) -> Result<()> {
         } else {
             format!(" ({})", h.available.join(", "))
         };
+        // Repology hits carry richer metadata — render an extra distro line.
+        let distro_info = if h.repos > 0 {
+            let host = match &h.host_status {
+                Some(s) if s == "outdated" || s == "legacy" => {
+                    let newest = h.newest.as_deref().unwrap_or("?");
+                    let hv = h.host_version.as_deref().unwrap_or("?");
+                    format!(" ◆ distro: {hv} (newest {newest})")
+                }
+                Some(s) if s == "vulnerable" => {
+                    let hv = h.host_version.as_deref().unwrap_or("?");
+                    let vuln = h.vulnerable;
+                    format!(" ◆ distro: {hv} ({vuln} vulnerable)")
+                }
+                Some(s) => {
+                    let hv = h.host_version.as_deref().unwrap_or("?");
+                    format!(" ◆ distro: {hv} ({s})")
+                }
+                None => String::new(),
+            };
+            let outdated_info = if h.outdated > 0 {
+                format!(" [{}/{} repos outdated]", h.outdated, h.repos)
+            } else {
+                format!(" [{} repos]", h.repos)
+            };
+            format!("{host}{outdated_info}")
+        } else {
+            String::new()
+        };
         if h.description.is_empty() {
-            println!("{:<pad$}  {}{tag}", h.name, h.source);
+            println!("{:<pad$}  {}{tag}{distro_info}", h.name, h.source);
         } else {
             println!(
-                "{:<pad$}  {} [{source}]{avail}{tag}",
+                "{:<pad$}  {} [{source}]{avail}{tag}{distro_info}",
                 h.name,
                 h.description,
                 source = h.source
@@ -288,6 +350,23 @@ fn run_info(opts: InfoOpts) -> Result<()> {
                 if !h.available.is_empty() {
                     println!("  available: {}", h.available.join(", "));
                 }
+                // Repology metadata.
+                if h.repos > 0 {
+                    println!("  distros: {} repos", h.repos);
+                    if let Some(v) = &h.newest {
+                        println!("  newest: {v}");
+                    }
+                    if let Some(v) = &h.host_version {
+                        let status = h.host_status.as_deref().unwrap_or("unknown");
+                        println!("  host distro: {v} ({status})");
+                    }
+                    if h.outdated > 0 {
+                        println!("  outdated in: {} repos", h.outdated);
+                    }
+                    if h.vulnerable > 0 {
+                        println!("  vulnerable in: {} repos", h.vulnerable);
+                    }
+                }
             }
             Ok(None) => {}
             Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
@@ -310,9 +389,74 @@ fn run_list() -> Result<()> {
         let kind = match &s.kind {
             registry::SourceKind::LxCommunity => "lx-community".to_string(),
             registry::SourceKind::Aur => "aur".to_string(),
+            registry::SourceKind::Repology => "repology".to_string(),
             registry::SourceKind::Custom { url } => format!("custom ({url})"),
         };
         println!("{:<16} {:<14} {}", s.name, kind, state);
+    }
+    Ok(())
+}
+
+fn run_outdated(opts: OutdatedOpts) -> Result<()> {
+    let reg = registry::Registry::ensure_exists()?;
+    // Find the repology source.
+    let rep = reg
+        .sources
+        .iter()
+        .find(|s| matches!(s.kind, registry::SourceKind::Repology) && s.enabled)
+        .context("repology index not enabled; run `lx index update` first")?;
+    let src = repology::RepologySource::new(&rep.name);
+    let cache = src.load_cache()?;
+    if cache.is_empty() {
+        println!("no repology data cached. Run `lx index update` first.");
+        return Ok(());
+    }
+    let outdated = repology::RepologySource::count_outdated(&cache);
+    if outdated.is_empty() {
+        println!("no outdated packages detected on this host distro.");
+        return Ok(());
+    }
+    println!(
+        "packages where host distro lags behind newest upstream (showing {} of {}):",
+        opts.limit.min(outdated.len()),
+        outdated.len()
+    );
+    let pad = outdated.iter().map(|(n, _, _)| n.len()).max().unwrap_or(0);
+    for (name, host_ver, newest_ver) in outdated.iter().take(opts.limit) {
+        println!(
+            "  {:<pad$}  host: {host_ver}  →  newest: {newest_ver}",
+            name
+        );
+    }
+    Ok(())
+}
+
+fn run_status() -> Result<()> {
+    let reg = registry::Registry::ensure_exists()?;
+    println!("host distro information (repology):");
+    if let Some(repo) = repology::RepologySource::host_repo_name() {
+        println!("  repology repo: {repo}");
+    } else {
+        println!("  repology repo: unknown (could not detect host distro)");
+    }
+    // Count cached projects.
+    if let Some(rep) = reg
+        .sources
+        .iter()
+        .find(|s| matches!(s.kind, registry::SourceKind::Repology))
+    {
+        let src = repology::RepologySource::new(&rep.name);
+        let cache = src.load_cache()?;
+        println!("  cached projects: {}", cache.len());
+        let stale = src.stale();
+        println!(
+            "  cache state: {}",
+            if stale {
+                "stale (run `lx index update`)"
+            } else {
+                "fresh"
+            }
+        );
     }
     Ok(())
 }
@@ -344,9 +488,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     #[test]
-    fn registry_defaults_include_lx_community_and_aur() {
+    fn registry_defaults_include_lx_community_aur_and_repology() {
         let reg = Registry::with_defaults();
-        assert_eq!(reg.sources.len(), 2);
+        assert_eq!(reg.sources.len(), 3);
         assert!(reg.sources.iter().all(|s| s.enabled));
     }
 
@@ -357,9 +501,9 @@ mod tests {
         std::fs::create_dir_all(&cfg).unwrap();
         std::env::set_var("XDG_CONFIG_HOME", dir.path());
 
-        // Fresh registry seeds defaults.
+        // Fresh registry seeds defaults (lx-community, aur, repology).
         let reg = Registry::ensure_exists().unwrap();
-        assert_eq!(reg.sources.len(), 2);
+        assert_eq!(reg.sources.len(), 3);
 
         // Direct load/save round-trip.
         let path = Registry::config_path().unwrap();
@@ -375,17 +519,17 @@ mod tests {
                 },
             )
             .unwrap();
-            assert_eq!(r.sources.len(), 3);
+            assert_eq!(r.sources.len(), 4);
         }
         {
             let mut r = Registry::load().unwrap();
-            assert_eq!(r.sources.len(), 3);
+            assert_eq!(r.sources.len(), 4);
             r.remove("custom").unwrap();
-            assert_eq!(r.sources.len(), 2);
+            assert_eq!(r.sources.len(), 3);
         }
         {
             let r = Registry::load().unwrap();
-            assert_eq!(r.sources.len(), 2);
+            assert_eq!(r.sources.len(), 3);
         }
 
         // Duplicate add errors.

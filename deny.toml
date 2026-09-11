@@ -1,0 +1,63 @@
+# cargo-deny configuration for lx
+# License policy, advisory database, and duplicate crate detection.
+# Used by the `cargo-deny` pre-push hook in .pre-commit-config.yaml.
+
+[licenses]
+# GPL-3.0-or-later is the project license. Only allow licenses compatible
+# with GPL-3.0 distribution. Deny everything else by default.
+unlicensed = "deny"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "Zlib",
+    "BSL-1.0",
+]
+deny = [
+    "GPL-2.0",
+    "AGPL-3.0",
+]
+copyleft = "allow"
+allow-osi-fsf-free = "both"
+default = "deny"
+confidence-threshold = 0.8
+
+[advisories]
+# Advisory database is fetched from osv.dev (RustSec mirror).
+ignore = [
+    # RUSTSEC-2023-0071 (rsa/Marvin Attack) is an accepted exception.
+    # See docs/decisions/2026-08-14-octocrab.md and the cargo-audit hook
+    # in .pre-commit-config.yaml for the rationale.
+    "RUSTSEC-2023-0071",
+]
+yanked = "warn"
+git-fetch-with-cli = true
+
+[bans]
+# Disallow multiple versions of the same crate where avoidable.
+# Some duplicates are inherent to the ecosystem (e.g., regex families,
+# rustls forks); this flags them so they can be reviewed.
+multiple-versions = "warn"
+wildcards = "allow"
+deny = [
+    # The vulnerable Rust `rsa` crate (RUSTSEC-2023-0071) must never be
+    # pulled in directly. octocrab uses jwt-aws-lc-rs (BoringSSL C) as
+    # its RSA backend, not this crate.
+    { name = "rsa" },
+    # Unmaintained, replaced by `ignore` crate.
+    { name = "walkdir" },
+]
+skip = []
+skip-tree = []
+
+[sources]
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
