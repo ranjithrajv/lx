@@ -206,11 +206,11 @@ pub fn run(args: InitArgs) -> Result<()> {
         true,
     );
     if auto {
-        let src_plugin = crate::plugins::source::get_source_plugin(&source).ok_or_else(|| {
+        let src_plugin = crate::plugins::forge::get_forge_source(&source).ok_or_else(|| {
             anyhow::anyhow!(
                 "unsupported source '{}' (expected one of: {})",
                 source,
-                crate::plugins::source::source_available_names().join(", ")
+                crate::plugins::forge::forge_source_names().join(", ")
             )
         })?;
         match src_plugin.latest_release(&cfg.github_repo, None, None) {

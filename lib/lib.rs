@@ -52,6 +52,7 @@ pub mod checksum;
 pub mod cli;
 pub mod config;
 pub mod constants;
+pub mod convert;
 pub mod debarchive;
 pub mod debs;
 pub mod discovery;

@@ -5,11 +5,11 @@ use std::path::Path;
 
 use lx_lib::github::{Release, ReleaseMeta};
 
-use super::SourcePlugin;
+use super::ForgeSource;
 
-pub struct GitlabSourcePlugin;
+pub struct GitlabForgeSource;
 
-impl SourcePlugin for GitlabSourcePlugin {
+impl ForgeSource for GitlabForgeSource {
     fn name(&self) -> &'static str {
         "gitlab"
     }

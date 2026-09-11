@@ -14,9 +14,9 @@
 pub mod arch;
 pub mod build_system;
 pub mod deb;
-pub mod input;
+pub mod forge;
+pub mod registry;
 pub mod rpm;
-pub mod source;
 
 use anyhow::{Context, Result};
 use std::os::unix::fs::PermissionsExt;

@@ -10,8 +10,8 @@
 //!
 //! Data comes from the repology API (`/api/v1/project/{name}`) and is
 //! cached as JSON under `~/.cache/lx/repology/`. The `update` command
-//! fetches the first page of projects on a 1.1 s cadence to respect
-//! repology's 1 req/s rate limit.
+//! fetches multiple pages (see `PAGES_TO_FETCH`) with a 1.1 s delay between
+//! requests to respect repology's 1 req/s rate limit.
 
 use anyhow::{bail, Context, Result};
 use regex::Regex;
@@ -24,6 +24,11 @@ use crate::index::{IndexHit, IndexSource, InstallOpts};
 const API_BASE: &str = "https://repology.org/api/v1";
 const PROJECTS_PAGE: &str = "projects/";
 const STALE_HOURS: u64 = 24;
+/// Number of pages to fetch on update. Repology returns ~200 projects per
+/// page; 5 pages ≈ 1000 projects. At 1 req/s this adds ~5 s to `lx index update`.
+const PAGES_TO_FETCH: usize = 5;
+/// Delay between paginated requests to respect repology's 1 req/s rate limit.
+const PAGE_FETCH_DELAY_MS: u64 = 1100;
 
 pub struct RepologySource {
     name: String,
@@ -325,6 +330,27 @@ impl RepologySource {
         }
         outdated
     }
+
+    /// Return a list of packages where the host distro lags upstream, as
+    /// IndexHit structs suitable for display by `lx upgrade --all`.
+    pub fn outdated_packages(&self) -> Vec<IndexHit> {
+        let projects = match self.load_cache() {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+        let outdated = Self::count_outdated(&projects);
+        outdated
+            .into_iter()
+            .map(|(name, host_version, newest)| IndexHit {
+                name: name.clone(),
+                source: "repology".to_string(),
+                host_version: Some(host_version),
+                newest: Some(newest),
+                installed: crate::debs::dpkg_installed_version(&name).is_some(),
+                ..Default::default()
+            })
+            .collect()
+    }
 }
 
 impl IndexSource for RepologySource {
@@ -436,34 +462,56 @@ impl IndexSource for RepologySource {
     }
 
     fn update(&self) -> Result<bool> {
-        // Fetch the first page of projects from repology's bulk API.
-        // This respects the 1 req/s rate limit. We cache the result locally.
-        let body = self.api_get(PROJECTS_PAGE)?;
-        let raw: serde_json::Value = serde_json::from_str(&body)?;
-
-        // The projects endpoint returns { "project_name": [packages] }.
-        let obj = raw
-            .as_object()
-            .context("repology projects response is not an object")?;
+        // Fetch multiple pages of projects from repology's bulk API,
+        // paginating by the last project name of each page. Respects the
+        // 1 req/s rate limit with a delay between requests.
         let mut projects: BTreeMap<String, RepologyProject> = BTreeMap::new();
+        let mut page_url = Some(PROJECTS_PAGE.to_string());
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
 
-        for (name, packages_raw) in obj {
-            if let Ok(packages) =
-                serde_json::from_value::<Vec<RepologyPackage>>(packages_raw.clone())
-            {
-                if !packages.is_empty() {
-                    projects.insert(
-                        name.clone(),
-                        RepologyProject {
-                            packages,
-                            last_updated: now,
-                        },
-                    );
+        for page_num in 0..PAGES_TO_FETCH {
+            let url = match &page_url {
+                Some(u) => u.clone(),
+                None => break,
+            };
+            let body = self.api_get(&url)?;
+            let raw: serde_json::Value = serde_json::from_str(&body)?;
+
+            let obj = raw
+                .as_object()
+                .context("repology projects response is not an object")?;
+
+            if obj.is_empty() {
+                break; // No more pages.
+            }
+
+            let mut last_name = String::new();
+            for (name, packages_raw) in obj {
+                last_name = name.clone();
+                if let Ok(packages) =
+                    serde_json::from_value::<Vec<RepologyPackage>>(packages_raw.clone())
+                {
+                    if !packages.is_empty() {
+                        projects.insert(
+                            name.clone(),
+                            RepologyProject {
+                                packages,
+                                last_updated: now,
+                            },
+                        );
+                    }
                 }
+            }
+
+            // Next page starts after the last project name (inclusive).
+            // Repology's convention: /api/v1/projects/{last_name}/ returns the
+            // page starting at that name.
+            if page_num < PAGES_TO_FETCH - 1 {
+                page_url = Some(format!("projects/{last_name}/"));
+                std::thread::sleep(std::time::Duration::from_millis(PAGE_FETCH_DELAY_MS));
             }
         }
 

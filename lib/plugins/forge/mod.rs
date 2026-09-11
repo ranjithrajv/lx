@@ -2,7 +2,7 @@
 
 //! Source provider plugins for auto-discovery.
 //!
-//! Each source (GitHub, GitLab, …) implements `SourcePlugin`. The discovery
+//! Each source (GitHub, GitLab, …) implements `ForgeSource`. The discovery
 //! and build pipelines are source-agnostic: they resolve a `Release` (list of
 //! assets) via the selected plugin, then reuse the same `match_assets` /
 //! checksum / download logic regardless of provider.
@@ -25,14 +25,14 @@ use lx_lib::github::{Release, ReleaseMeta, RepoLicense};
 ///
 /// Implementors are stateless; constructed per-call with the caller's
 /// `token` and `cache_dir` so the trait stays `Send+Sync` and testable.
-pub trait SourcePlugin: Send + Sync {
+pub trait ForgeSource: Send + Sync {
     /// Canonical name: "github" | "gitlab"
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
 
     /// Env var holding this provider's auth token (e.g. "GITLAB_TOKEN").
     /// `None` when the provider needs no token.
-    /// Used by `resolve_source_token` so config/build stay OCP — adding a
+    /// Used by `resolve_forge_token` so config/build stay OCP — adding a
     /// provider never requires editing them, only this method.
     fn token_env(&self) -> Option<&'static str>;
 
@@ -115,28 +115,28 @@ pub trait SourcePlugin: Send + Sync {
 }
 
 /// All known source plugins.
-pub fn all_source_plugins() -> Vec<Box<dyn SourcePlugin>> {
+pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
     vec![
-        Box::new(github::GithubSourcePlugin),
-        Box::new(github_sync::GithubSyncSourcePlugin),
-        Box::new(gitlab::GitlabSourcePlugin),
-        Box::new(gitea::GiteaSourcePlugin),
-        Box::new(forgejo::ForgejoSourcePlugin),
-        Box::new(bitbucket::BitbucketSourcePlugin),
-        Box::new(custom::CustomSourcePlugin),
-        Box::new(gerrit::GerritSourcePlugin),
+        Box::new(github::GithubForgeSource),
+        Box::new(github_sync::GithubSyncForgeSource),
+        Box::new(gitlab::GitlabForgeSource),
+        Box::new(gitea::GiteaForgeSource),
+        Box::new(forgejo::ForgejoForgeSource),
+        Box::new(bitbucket::BitbucketForgeSource),
+        Box::new(custom::CustomForgeSource),
+        Box::new(gerrit::GerritForgeSource),
     ]
 }
 
 /// Lookup source plugin by name (case-insensitive).
-pub fn get_source_plugin(name: &str) -> Option<Box<dyn SourcePlugin>> {
+pub fn get_forge_source(name: &str) -> Option<Box<dyn ForgeSource>> {
     let lower = name.to_ascii_lowercase();
-    all_source_plugins().into_iter().find(|p| p.name() == lower)
+    all_forge_sources().into_iter().find(|p| p.name() == lower)
 }
 
 /// Available source names for error messages.
-pub fn source_available_names() -> Vec<&'static str> {
-    all_source_plugins().iter().map(|p| p.name()).collect()
+pub fn forge_source_names() -> Vec<&'static str> {
+    all_forge_sources().iter().map(|p| p.name()).collect()
 }
 
 /// Apply the provider's host override from config to its env var, so
@@ -144,7 +144,7 @@ pub fn source_available_names() -> Vec<&'static str> {
 /// `host_config_key` — adding a provider requires no edits at call sites.
 /// Lives here (not in `build.rs`) because host/token resolution is
 /// provider-domain logic (SRP).
-pub fn apply_source_host(source: &dyn SourcePlugin, cfg: &crate::config::PackageConfig) {
+pub fn apply_forge_host(source: &dyn ForgeSource, cfg: &crate::config::PackageConfig) {
     let Some(key) = source.host_config_key() else {
         return;
     };
@@ -169,7 +169,7 @@ fn cfg_host<'a>(cfg: &'a crate::config::PackageConfig, key: &str) -> Option<&'a 
 /// Resolve the auth token for a provider: its `token_env()` first, then the
 /// CLI `--token`. Data-driven via the plugin — call sites never enumerate
 /// providers.
-pub fn resolve_source_token(source: &dyn SourcePlugin, cli_token: Option<&str>) -> Option<String> {
+pub fn resolve_forge_token(source: &dyn ForgeSource, cli_token: Option<&str>) -> Option<String> {
     if let Some(env_name) = source.token_env() {
         if let Ok(t) = std::env::var(env_name) {
             if !t.trim().is_empty() {
@@ -185,8 +185,8 @@ pub fn resolve_source_token(source: &dyn SourcePlugin, cli_token: Option<&str>) 
 
 /// Parse any supported provider URL into `owner/repo`. Tries each plugin's
 /// `parse_url` in registry order (github first).
-pub fn parse_any_url(url: &str) -> Option<(String, String)> {
-    for p in all_source_plugins() {
+pub fn parse_any_forge_url(url: &str) -> Option<(String, String)> {
+    for p in all_forge_sources() {
         if let Some(repo) = p.parse_url(url) {
             return Some((p.name().to_string(), repo));
         }

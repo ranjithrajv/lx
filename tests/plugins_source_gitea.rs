@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::source::gitea::*;
+use lx_lib::plugins::forge::gitea::*;
 
 #[test]
 fn parses_gitea_url() {

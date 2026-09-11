@@ -47,7 +47,7 @@ pub struct ScanDepsArgs {
 /// deliberately skips checksum verification -- the downloaded bytes are
 /// only ever inspected locally, never trusted onto the system.
 pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
-    let mut cfg = match crate::plugins::source::parse_any_url(&args.config.to_string_lossy()) {
+    let mut cfg = match crate::plugins::forge::parse_any_forge_url(&args.config.to_string_lossy()) {
         Some((source, repo)) => {
             println!("Zero-config scan of {source}:{repo} (no package.yaml)");
             let cfg = PackageConfig {
@@ -81,16 +81,16 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
         cfg.version = v.clone();
     }
 
-    let source_name = cfg.effective_source();
-    let source = crate::plugins::source::get_source_plugin(&source_name).ok_or_else(|| {
+    let source_name = cfg.effective_forge_source();
+    let source = crate::plugins::forge::get_forge_source(&source_name).ok_or_else(|| {
         anyhow!(
             "unsupported source '{}' (expected one of: {})",
             source_name,
-            crate::plugins::source::source_available_names().join(", ")
+            crate::plugins::forge::forge_source_names().join(", ")
         )
     })?;
-    crate::plugins::source::apply_source_host(source.as_ref(), &cfg);
-    let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
+    crate::plugins::forge::apply_forge_host(source.as_ref(), &cfg);
+    let token_for_source = crate::plugins::forge::resolve_forge_token(source.as_ref(), token);
 
     let release = if !cfg.version.is_empty() {
         match source.release_by_tag(
@@ -286,7 +286,7 @@ fn print_why_depends(cfg: &PackageConfig, non_essential: &[&String]) {
 /// -- left to the caller to report and move on to the next architecture
 /// rather than aborting the whole scan.
 fn scan_one_arch(
-    source: &dyn crate::plugins::source::SourcePlugin,
+    source: &dyn crate::plugins::forge::ForgeSource,
     token: Option<&str>,
     cfg: &PackageConfig,
     arch: &str,

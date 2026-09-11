@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::input::{InputPayload, InputSource};
+use crate::plugins::registry::{InputPayload, RegistrySource};
 
-pub struct NpmInputSource;
+pub struct NpmRegistrySource;
 
-impl InputSource for NpmInputSource {
+impl RegistrySource for NpmRegistrySource {
     fn name(&self) -> &'static str {
         "npm"
     }

@@ -173,11 +173,11 @@ pub fn run(args: DiscoverArgs, token: Option<&str>) -> Result<()> {
         .as_deref()
         .unwrap_or("github")
         .to_ascii_lowercase();
-    let source = crate::plugins::source::get_source_plugin(&source_name).ok_or_else(|| {
+    let source = crate::plugins::forge::get_forge_source(&source_name).ok_or_else(|| {
         anyhow!(
             "unsupported source '{}' (expected one of: {})",
             source_name,
-            crate::plugins::source::source_available_names().join(", ")
+            crate::plugins::forge::forge_source_names().join(", ")
         )
     })?;
 

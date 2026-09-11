@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::source::forgejo::*;
+use lx_lib::plugins::forge::forgejo::*;
 
 #[test]
 fn parses_forgejo_url() {

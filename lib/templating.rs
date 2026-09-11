@@ -82,7 +82,7 @@ pub fn build_context(
 
 /// Resolve the homepage URL for the package based on its source provider.
 fn homepage_for(cfg: &crate::config::PackageConfig) -> String {
-    if cfg.effective_source() == "gitlab" {
+    if cfg.effective_forge_source() == "gitlab" {
         lx_lib::constants::homepage_for_gitlab(
             &cfg.github_repo,
             cfg.gitlab_host.as_deref().unwrap_or(""),

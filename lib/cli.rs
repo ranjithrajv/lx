@@ -34,6 +34,8 @@ pub struct Cli {
 pub enum Commands {
     /// Build .deb packages from a package.yaml config
     Build(crate::build::BuildArgs),
+    /// Convert a built package from one format to another (deb↔rpm↔arch)
+    Convert(crate::convert::ConvertArgs),
     /// Validate a package.yaml config and check release availability (no build)
     Validate(crate::validate::ValidateArgs),
     /// Auto-discover release patterns from a GitHub repo and print a config
@@ -86,6 +88,7 @@ pub fn run(cli: Cli) -> Result<()> {
             crate::build::write_failed_build_log(&format!("{e:#}"));
             e
         }),
+        Commands::Convert(args) => crate::convert::run(args),
         Commands::Validate(args) => crate::validate::run(args, cli.token.as_deref()),
         Commands::Discover(args) => crate::discovery::run(args, cli.token.as_deref()),
         Commands::Init(args) => crate::wizard::run(args),

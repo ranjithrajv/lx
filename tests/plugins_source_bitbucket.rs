@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::source::bitbucket::*;
+use lx_lib::plugins::forge::bitbucket::*;
 
 #[test]
 fn parses_bitbucket_url() {

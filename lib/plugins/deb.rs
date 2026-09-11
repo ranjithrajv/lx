@@ -163,7 +163,7 @@ pub fn render_control(
     );
     // Per-format overrides applied for "deb".
     let relations = cfg.effective_relations("deb").render();
-    let homepage = if cfg.effective_source() == "gitlab" {
+    let homepage = if cfg.effective_forge_source() == "gitlab" {
         lx_lib::constants::homepage_for_gitlab(
             &cfg.github_repo,
             cfg.gitlab_host.as_deref().unwrap_or(""),

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::source::gerrit::*;
+use lx_lib::plugins::forge::gerrit::*;
 
 #[test]
 fn parses_gerrit_url() {

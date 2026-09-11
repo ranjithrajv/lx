@@ -12,11 +12,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::input::{InputPayload, InputSource};
+use crate::plugins::registry::{InputPayload, RegistrySource};
 
-pub struct PythonInputSource;
+pub struct PythonRegistrySource;
 
-impl InputSource for PythonInputSource {
+impl RegistrySource for PythonRegistrySource {
     fn name(&self) -> &'static str {
         "python"
     }

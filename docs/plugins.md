@@ -1,22 +1,88 @@
 # Plugin Architecture
 
-**Date:** 2026-08-24 (updated 2026-08-26: plugin types + 5 Source; 2026-09-11: + BuildSystem dimension; 2026-09-11: + InputSource dimension)  
-**Status:** Implemented — 4 dimensions:
+**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: clarified Source vs RegistrySource)
+**Status:** Implemented — 4 independent plugin dimensions:
 * **3× Package:** `deb` + `rpm` + `arch`
 * **7× Source:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
 * **4× BuildSystem:** `cmake` + `cargo` + `go` + `custom`
-* **3× InputSource:** `npm` + `python` + `gem`
+* **3× RegistrySource:** `npm` + `python` + `gem`
 
-`lx` builds Linux packages by repackaging release binaries or compiling source. The original implementation only produced Debian `.deb`s from GitHub. To support RPM/Arch, GitLab, and multiple build systems without forking the core pipeline, the build was refactored into a **format-agnostic core + three-dimensional pluggable system**.
+`lx` builds Linux packages from many kinds of upstream. The original
+implementation only produced Debian `.deb`s from GitHub. To support RPM/Arc,
+multiple forges, source compilation, and language package managers without
+forking the core pipeline, the build was refactored into a **format-agnostic
+core + four-dimensional pluggable system**.
 
-This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at repo root, but adds two more dimensions:
+This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at
+repo root, but adds three more dimensions:
 
 * **Package plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
-* **Source plugins** (`lib/plugins/source/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover releases/assets
+* **Source plugins** (`lib/plugins/source/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover **what** is available (releases, assets, versions)
 * **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,custom}.rs`) → compile source tree into install tree
-* **InputSource plugins** (`lib/plugins/input/{npm,python,gem}.rs`) → fetch from language package registries
+* **RegistrySource plugins** (`lib/plugins/input/{npm,python,gem}.rs`) → fetch **specific files** from language package registries
 
-All are stateless, registered statically, and share the same explicit-registry pattern.
+All are stateless, registered statically, and share the same
+explicit-registry pattern.
+
+## How the dimensions relate
+
+```
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │                          lx build                                       │
+ │                                                                         │
+ │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
+ │  │  RegistrySource  │ or │   Source     │ →  │  BuildSystem │ (source mode) │
+ │  │  (registry)   │    │  (forge)     │    │  (compile)   │               │
+ │  └──────┬───────┘    └──────┬───────┘    └──────┬───────┘               │
+ │         │                   │                   │                        │
+ │         └─────────┬─────────┴─────────┬─────────┘                        │
+ │                   ▼                   ▼                                  │
+ │            ┌─────────────┐    ┌─────────────┐                           │
+ │            │ payload dir │    │  (download  │                           │
+ │            │ (extracted) │    │   assets)   │                           │
+ │            └──────┬──────┘    └──────┬──────┘                           │
+ │                   └─────────┬─────────┘                                  │
+ │                             ▼                                            │
+ │                      ┌──────────────┐                                    │
+ │                      │   Package    │                                    │
+ │                      │ (deb/rpm/arch)│                                   │
+ │                      └──────────────┘                                    │
+ └─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Source vs RegistrySource — why two plugin types?**
+
+Both answer "where does the package come from?" but they operate at
+different levels of abstraction and return different things:
+
+| | Source | RegistrySource |
+|---|---|---|
+| **Question it answers** | "What releases/assets exist?" | "Give me these files." |
+| **Returns** | `Release` — metadata + asset list (per-architecture) | `InputPayload` — a local directory of files |
+| **Trait surface** | 11 methods (discovery: `parse_url`, `latest_release`, `repo_license`, `releases`, …) | 4 methods (fetch: `name`, `required_tools`, `fetch`) |
+| **Selection** | `--source` flag / zero-config URL sniffing | `registry_source:` field (explicit) |
+| **Package identity** | `github_repo` = "owner/repo" | `github_repo` = bare package name |
+| **Versioning** | Tags, semver, "latest release" | Registry version constraints |
+| **Multi-arch** | Yes — each asset maps to an architecture | No — single payload (one arch at a time) |
+
+They are **not merged** because:
+
+1. **Different return types.** `Source` returns metadata (the pipeline
+   still needs to download and match assets per-arch). `RegistrySource`
+   returns files ready to package. Merging forces an enum wrapper and
+   a `match` at every call site.
+2. **Different trait surfaces.** A merged trait has 11 methods where 7
+   are `unimplemented!()` for inputs, or 4 methods where 7 forge
+   capabilities are lost. Neither is acceptable.
+3. **Different selection mechanisms.** Sources are discovered via URL
+   sniffing (`parse_any_url`); inputs are explicitly configured.
+4. **Different identity semantics.** The same `github_repo` field means
+   "owner/repo" for sources and "package name" for inputs — merging
+   forces implicit interpretation.
+
+The pipeline routes them separately: `Source` → download assets → package;
+`RegistrySource` → `fetch()` → `run_local()` (skip asset download, the
+files are already on disk). Both feed into the same `Package` plugins.
 
 ---
 
@@ -38,7 +104,7 @@ pub trait Plugin: Send + Sync {
 }
 
 // Source — lib/plugins/source/mod.rs
-pub trait SourcePlugin: Send + Sync {
+pub trait ForgeSource: Send + Sync {
     fn name(&self) -> &'static str; // "github" | "gitlab" | …
     fn description(&self) -> &'static str;
     fn parse_url(&self, url: &str) -> Option<String>;
@@ -60,8 +126,8 @@ pub trait BuildSystem: Send + Sync {
     fn required_tools(&self) -> Vec<&'static str>; // checked before build
 }
 
-// InputSource — lib/plugins/input/mod.rs
-pub trait InputSource: Send + Sync {
+// RegistrySource — lib/plugins/input/mod.rs
+pub trait RegistrySource: Send + Sync {
     fn name(&self) -> &'static str;              // "npm" | "python" | "gem"
     fn description(&self) -> &'static str;
     fn required_tools(&self) -> Vec<&'static str>; // checked before fetch (e.g. ["npm"])
@@ -75,7 +141,7 @@ pub struct InputPayload {
 }
 ```
 
-Each dimension has its own registry (`all_plugins()`, `all_source_plugins()`, `all_build_systems()`, `all_input_sources()`), lookup (`get_*`), and auto-detection where applicable (`detect_build_system()` for BuildSystem, `parse_any_url()` for Source). Adding a new plugin is implementing the trait + one registration line — no core pipeline edits.
+Each dimension has its own registry (`all_plugins()`, `all_forge_sources()`, `all_build_systems()`, `all_registry_sources()`), lookup (`get_*`), and auto-detection where applicable (`detect_build_system()` for BuildSystem, `parse_any_url()` for Source). Adding a new plugin is implementing the trait + one registration line — no core pipeline edits.
 
 ## 2. Package Trait
 
@@ -114,7 +180,7 @@ Plugins are **stateless** – one instance per format, shared across threads.
 `lib/plugins/source/mod.rs`
 
 ```rust
-pub trait SourcePlugin: Send + Sync {
+pub trait ForgeSource: Send + Sync {
     fn name(&self) -> &'static str; // "github" | "gitlab"
     fn description(&self) -> &'static str;
     fn parse_url(&self, url: &str) -> Option<String>; // https://… → "owner/repo"
@@ -144,12 +210,12 @@ pub fn all_plugins() -> Vec<Box<dyn Plugin>> {
 pub fn get_plugin(name: &str) -> Option<Box<dyn Plugin>> { /* case-insensitive */ }
 
 // Source
-pub fn all_source_plugins() -> Vec<Box<dyn SourcePlugin>> {
-    vec![Box::new(github::GithubSourcePlugin), Box::new(gitlab::GitlabSourcePlugin), …]
+pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
+    vec![Box::new(github::GithubForgeSource), Box::new(gitlab::GitlabForgeSource), …]
 }
-pub fn get_source_plugin(name: &str) -> Option<Box<dyn SourcePlugin>> { /* case-insensitive */ }
+pub fn get_forge_source(name: &str) -> Option<Box<dyn ForgeSource>> { /* case-insensitive */ }
 pub fn parse_any_url(url: &str) -> Option<(String,String)> { // (source, repo)
-    for p in all_source_plugins() { if let Some(repo)=p.parse_url(url) { return Some((p.name().into(), repo)) } }
+    for p in all_forge_sources() { if let Some(repo)=p.parse_url(url) { return Some((p.name().into(), repo)) } }
     None
 }
 
@@ -163,21 +229,21 @@ pub fn detect_build_system(src_dir: &Path) -> Option<Box<dyn BuildSystem>> {
     all_build_systems().into_iter().find(|b| b.recognize(src_dir))
 }
 
-// InputSource
-pub fn all_input_sources() -> Vec<Box<dyn InputSource>> {
-    vec![Box::new(npm::NpmInputSource), Box::new(python::PythonInputSource),
-         Box::new(gem::GemInputSource)]
+// RegistrySource
+pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
+    vec![Box::new(npm::NpmRegistrySource), Box::new(python::PythonRegistrySource),
+         Box::new(gem::GemRegistrySource)]
 }
-pub fn get_input_source(name: &str) -> Option<Box<dyn InputSource>> { /* case-insensitive */ }
+pub fn get_registry_source(name: &str) -> Option<Box<dyn RegistrySource>> { /* case-insensitive */ }
 ```
 
-No `dlopen`, no feature flags. Adding a format = `impl Plugin` + one line in `all_plugins()`. Adding a source = `impl SourcePlugin` + one line in `all_source_plugins()`. Adding a build system = `impl BuildSystem` + one line in `all_build_systems()`.
+No `dlopen`, no feature flags. Adding a format = `impl Plugin` + one line in `all_plugins()`. Adding a source = `impl ForgeSource` + one line in `all_forge_sources()`. Adding a build system = `impl BuildSystem` + one line in `all_build_systems()`.
 
 Selection in `lib/build.rs` / `lib/discovery.rs` / `lib/validate.rs`:
 
 ```
 --format flag  >  package.yaml `package_format`  >  default "deb"   → Plugin
---source flag  >  package.yaml `source`         >  default "github" → SourcePlugin
+--source flag  >  package.yaml `source`         >  default "github" → ForgeSource
 --plus zero-config URL host sniffing: `parse_any_url("https://gitlab.com/…") → ("gitlab","owner/repo")`
 ```
 
@@ -187,15 +253,15 @@ BuildSystem selection in `lib/sourcebuild.rs`:
 build_system: in package.yaml  >  auto-detect from source tree  >  error if none recognized
 ```
 
-InputSource selection in `lib/build.rs`:
+RegistrySource selection in `lib/build.rs`:
 
 ```
-input_source: in package.yaml  >  empty (forge release mode)
+registry_source: in package.yaml  >  empty (forge release mode)
 ```
 
 Auto-detection checks `recognize()` in registry order: `CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go. `custom` never auto-detects (explicit-only).
 
-`cfg.effective_package_format()`, `cfg.effective_source()`, and `cfg.effective_input_source()` normalise; `cfg.effective_distributions_for(format)` picks per-plugin defaults.
+`cfg.effective_package_format()`, `cfg.effective_source()`, and `cfg.effective_registry_source()` normalise; `cfg.effective_distributions_for(format)` picks per-plugin defaults.
 
 ## 5. Shared Staging
 
@@ -314,7 +380,7 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * `release_by_tag` → same as `latest_release` (tag ignored, `match_assets` filters by asset name).
 * `parse_url` → `parse_bitbucket_url` (`https://bitbucket.org/{workspace}/{repo}` or `https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}`).
 
-Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lx_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`SourcePlugin::raw_get` → `RawGetter`).
+Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lx_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`ForgeSource::raw_get` → `RawGetter`).
 
 Config `lib/config.rs`:
 
@@ -328,17 +394,17 @@ gerrit_host: review.gerrithub.io # optional self-hosted Gerrit
 package_format: deb     # deb | rpm | arch
 build_system: cmake     # cmake | cargo | go | custom (omit = auto-detect)
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
-input_source: npm        # npm | python | gem (language PM input; uses github_repo as package name)
+registry_source: npm        # npm | python | gem (language PM input; uses github_repo as package name)
 ```
 
-Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url`. Omit `build_system:` to auto-detect from the source tree after fetch. When `input_source` is set, `github_repo` is the registry package name and `source:` is ignored.
+Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` + `github_repo=owner/repo` via `parse_any_url`. Omit `build_system:` to auto-detect from the source tree after fetch. When `registry_source` is set, `github_repo` is the registry package name and `source:` is ignored.
 
 ## 9. Wiring
 
-* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `input_source: String` (`#[serde(default)]` `""`, `alias = "input_source"`) validated `npm|python|gem`.
-* `lib/build.rs` resolves `effective_source` → `get_source_plugin`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `input_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
+* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem`.
+* `lib/build.rs` resolves `effective_source` → `get_forge_source`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `registry_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
 * `lib/sourcebuild.rs` resolves the build system plugin: explicit `build_system:` → `get_build_system()`, else `detect_build_system(src_dir)`, else error. Runs `prebuild_steps`, checks `required_tools()`, then calls `build_sys.build()`.
-* `lib/discovery.rs` (`lx discover --source …`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_source_plugin`.
+* `lib/discovery.rs` (`lx discover --source …`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_forge_source`.
 * `lib/summary.rs` glob switches `*_*.deb` / `-*.rpm` / `-*.pkg.tar.*` and JSON includes `package_format`.
 * `lib/source.rs` generates deb source packages (`generate`), RPM source packages (`generate_rpm`), and Arch `PKGBUILD`s (`generate_arch`).
 * `lib/checksum.rs` generic over `RawGetter`; `lib/debs.rs` `download`/`verify_sidecar_or_require_flag` also generic (`&dyn RawGetter`).
@@ -358,7 +424,7 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 1. `lib/<provider>.rs` – `struct Client { http, base_url, token, cache_dir }` with `latest_release/release_by_tag/releases/repo_license/repo_root/repo_file_text/raw_get` (see `lib/gitlab.rs` for REST mapping and `lib/gitea.rs` for Gitea/Forgejo, `lib/bitbucket.rs` for downloads-as-release).
 2. Add `DEFAULT_<PROVIDER>_HOST/API_URL` to `lib/constants.rs` and `homepage_for_<provider>()` helper.
 3. Implement `lx_lib::checksum::RawGetter for Client`.
-4. `lib/plugins/source/<provider>.rs` – `impl SourcePlugin` delegating to `lib::<provider>::Client` (see `lib/plugins/source/gitlab.rs`/`gitea.rs`).
+4. `lib/plugins/source/<provider>.rs` – `impl ForgeSource` delegating to `lib::<provider>::Client` (see `lib/plugins/source/gitlab.rs`/`gitea.rs`).
 5. Register in `lib/plugins/source/mod.rs` + `parse_url` for `https://{host}/owner/repo`.
 6. Add `source = "<provider>"` to `lib/config.rs` + `*_host: Option<String>` + `resolve_source_token` in `lib/build.rs` + `host` env handling.
 7. Tests: `lib/<provider>::tests` (release mapping, `parse_*_url`), `lib/plugins/source/tests` (`parse_any_url` dispatch, registry gains the new name).
@@ -372,20 +438,20 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 
 No core pipeline changes – `sourcebuild.rs` is build-system-agnostic; it only calls `build_sys.build()`.
 
-**InputSource (e.g. `cpan`):**
+**RegistrySource (e.g. `cpan`):**
 
-1. `lib/plugins/input/<name>.rs` – `impl InputSource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
-2. Register in `lib/plugins/input/mod.rs` `all_input_sources()`.
-3. Add `input_source = "<name>"` to `lib/config.rs` validation.
+1. `lib/plugins/input/<name>.rs` – `impl RegistrySource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
+2. Register in `lib/plugins/input/mod.rs` `all_registry_sources()`.
+3. Add `registry_source = "<name>"` to `lib/config.rs` validation.
 4. Tests: `lib/plugins/input/tests` (registry gains the new name, `fetch` produces expected payload).
 
-No core pipeline changes – `build.rs` routes any non-empty `input_source` through `run_local()` after `fetch()`.
+No core pipeline changes – `build.rs` routes any non-empty `registry_source` through `run_local()` after `fetch()`.
 
 ## 11. Relation to nfpm
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `SourcePlugin` (Source) + `BuildSystem` + `InputSource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 InputSource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | Only `lintian` for `deb`, reproducible `SOURCE_DATE_EPOCH` for all; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, custom) — compiles on host, wraps per-suite |

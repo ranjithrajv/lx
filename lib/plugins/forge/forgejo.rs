@@ -5,11 +5,11 @@ use std::path::Path;
 
 use lx_lib::github::{Release, ReleaseMeta};
 
-use super::SourcePlugin;
+use super::ForgeSource;
 
-pub struct ForgejoSourcePlugin;
+pub struct ForgejoForgeSource;
 
-impl SourcePlugin for ForgejoSourcePlugin {
+impl ForgeSource for ForgejoForgeSource {
     fn name(&self) -> &'static str {
         "forgejo"
     }
@@ -109,7 +109,7 @@ pub fn parse_forgejo_url(s: &str) -> Option<String> {
     // Also accept codeberg.org for forgejo (since codeberg now runs forgejo)
     if let Some(repo) = try_parse_for_host(s, "codeberg.org") {
         // Only claim codeberg for forgejo if gitea didn't already claim it?
-        // For parse_any_url, gitea is tried before forgejo, so codeberg will be gitea first.
+        // For parse_any_forge_url, gitea is tried before forgejo, so codeberg will be gitea first.
         // We still handle it here for direct --source forgejo with codeberg URL.
         return Some(repo);
     }

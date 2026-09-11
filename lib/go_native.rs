@@ -11,8 +11,10 @@
 //! 3. **plan** (default): print the migration plan + `missingnative` report;
 //!    **apply** (`--yes`): `lx install` each mapped package, then remove the
 //!    source (`snap remove` / `flatpak uninstall` / `nix profile remove`)
-//!    unless `--keep-source`. `curl | sh` orphans are never auto-deleted —
-//!    the plan prints manual cleanup commands instead.
+//!    unless `--keep-source`. `curl | sh` orphans are removed when
+//!    `--cleanup-sh` is passed (otherwise the plan prints manual cleanup
+//!    commands). Orphan removals are recorded in a side-manifest
+//!    (`~/.local/share/lx/sh_orphans.json`).
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -491,6 +493,13 @@ pub struct GoNativeArgs {
     #[arg(long)]
     pub skip_sh: bool,
 
+    /// Auto-delete `curl | sh` orphans after successful native install
+    /// (default: off, print manual cleanup commands). Orphans are recorded
+    /// in a side-manifest (~/.local/share/lx/sh_orphans.json) so they can be
+    /// tracked and removed without a package database.
+    #[arg(long)]
+    pub cleanup_sh: bool,
+
     /// Only consider packages whose id contains one of these substrings.
     pub filter: Vec<String>,
 }
@@ -629,7 +638,26 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         println!("\n--keep-source: leaving all snap/flatpak/nix packages installed");
     }
 
-    print_sh_cleanup(&plan);
+    // Handle curl|sh orphans: auto-delete if --cleanup_sh, else print manual cleanup.
+    let sh_installed: Vec<&PlanEntry> = installed
+        .iter()
+        .filter(|e| e.detected.source == Source::Sh)
+        .copied()
+        .collect();
+    if !sh_installed.is_empty() {
+        if args.cleanup_sh {
+            for e in &sh_installed {
+                if let Err(err) = remove_sh_orphan(&e.detected.id) {
+                    eprintln!("  ⚠ could not remove orphan {}: {err:#}", e.detected.id);
+                }
+            }
+            // Record cleaned orphans in the side-manifest.
+            record_sh_cleanup(&sh_installed)?;
+        } else {
+            print_sh_cleanup(&plan);
+        }
+    }
+
     remove_managers(&args, &installed)?;
 
     if !failed.is_empty() {
@@ -982,6 +1010,96 @@ fn print_sh_cleanup(plan: &[PlanEntry]) {
     println!("\nmanual cleanup for curl|sh orphans (review, then run yourself):");
     for e in &orphans {
         println!("  rm {}", e.detected.id);
+    }
+}
+
+/// Remove a `curl | sh` orphan binary (and its parent directory if under /opt).
+/// Records the removal in the side-manifest for audit.
+fn remove_sh_orphan(path: &str) -> Result<()> {
+    let p = Path::new(path);
+    if !p.exists() {
+        println!("  = orphan '{}' already gone", path);
+        return Ok(());
+    }
+    // Remove the binary itself.
+    std::fs::remove_file(p)
+        .with_context(|| format!("failed to remove orphan binary '{}'", path))?;
+    println!("  ✓ removed orphan {}", path);
+
+    // If the binary was under /opt/<tool>/bin/, try to remove the empty parent tree.
+    if let Some(parent) = p.parent() {
+        if parent.starts_with("/opt") {
+            // Remove the bin dir, then try to remove the tool dir if empty.
+            if let Some(tool_dir) = parent.parent() {
+                let _ = std::fs::remove_dir(parent); // bin dir
+                // Only remove tool_dir if empty (don't rm -rf other people's files).
+                if std::fs::read_dir(tool_dir)
+                    .map(|mut d| d.next().is_none())
+                    .unwrap_or(false)
+                {
+                    let _ = std::fs::remove_dir(tool_dir);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Record cleaned `curl | sh` orphans in the side-manifest for audit trail.
+fn record_sh_cleanup(installed: &[&PlanEntry]) -> Result<()> {
+    let mut manifest = ShOrphanManifest::load()?;
+    for e in installed {
+        manifest.removed.push(ShOrphanRecord {
+            path: e.detected.id.clone(),
+            native_package: e.native.clone(),
+            removed_at: debs::now_rfc3339(),
+        });
+    }
+    manifest.save()?;
+    println!("  (recorded {} orphan removal(s) in sh_orphans.json)", installed.len());
+    Ok(())
+}
+
+/// Side-manifest tracking `curl | sh` orphans that have been removed.
+/// Lives alongside the main manifest but is independent of dpkg.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct ShOrphanManifest {
+    #[serde(default)]
+    pub removed: Vec<ShOrphanRecord>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ShOrphanRecord {
+    pub path: String,
+    pub native_package: String,
+    pub removed_at: String,
+}
+
+impl ShOrphanManifest {
+    fn path() -> Result<PathBuf> {
+        let dir = dirs::data_local_dir()
+            .ok_or_else(|| anyhow::anyhow!("could not determine a local data directory"))?
+            .join("lx");
+        Ok(dir.join("sh_orphans.json"))
+    }
+
+    fn load() -> Result<Self> {
+        let path = Self::path()?;
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            return Ok(Self::default());
+        };
+        Ok(serde_json::from_str(&text).unwrap_or_default())
+    }
+
+    fn save(&self) -> Result<()> {
+        let path = Self::path()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create '{}'", parent.display()))?;
+        }
+        let json = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, json)
+            .with_context(|| format!("failed to write '{}'", path.display()))
     }
 }
 

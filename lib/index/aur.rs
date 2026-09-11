@@ -5,6 +5,7 @@
 //! become native `.deb`s on a Debian host.
 
 use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 
 use crate::index::{IndexHit, IndexSource, InstallOpts};
 
@@ -42,15 +43,24 @@ impl AurSource {
     }
 }
 
+/// Deserialize a field that may be an explicit JSON null as an empty string.
+fn null_to_default<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    Ok(opt.unwrap_or_default())
+}
+
 #[derive(serde::Deserialize)]
 struct RpcResult {
     #[serde(default, rename = "Name")]
     name: String,
-    #[serde(default, rename = "Description")]
+    #[serde(default, rename = "Description", deserialize_with = "null_to_default")]
     description: String,
     #[serde(default, rename = "NumVotes")]
     votes: u64,
-    #[serde(default, rename = "Maintainer")]
+    #[serde(default, rename = "Maintainer", deserialize_with = "null_to_default")]
     maintainer: String,
 }
 

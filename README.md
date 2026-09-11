@@ -1,16 +1,38 @@
 # lx — build, install, and distribute Linux packages
 
-`lx` builds installable packages from forge release binaries *or* from
-source (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit) across Debian
-suites and architectures (`.deb`), RPM distros (`.rpm`), and Arch
-(`.pkg.tar.zst`), and installs/upgrades/removes the packages it builds — an
-apt-like front end for software that only ships forge releases, plus the
-tooling to run a prebuilt apt repository from its output. It's a Rust
-rewrite of the
+`lx` builds installable packages from many kinds of upstream: forge
+release binaries (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit),
+source compilation, language package registries (npm, pip, gem), or files
+you supply directly. Output is real Debian packages (`.deb`), RPM
+(`.rpm`), or Arch (`.pkg.tar.zst`) — full dependency relations,
+epoch-aware versioning, man pages and license files at their conventional
+FHS paths — built natively on bare metal with no containers, no
+emulation, no Debian host required.
+
+It also installs/upgrades/removes the packages it builds — an apt-like
+front end for software that ships forge releases, plus the tooling to run
+a prebuilt apt repository from its output. It's a Rust rewrite of the
 [debian-multiarch-builder](https://github.com/ranjithrajv/debian-multiarch-builder)
 GitHub Action, usable as a local CLI (`lx`, with the thin `lx-get`
 consumer client), as a GitHub Action (`action.yml`, see below), and as a
 repo publisher (`lx repo`).
+
+## Plugin architecture
+
+`lx` has four independent plugin dimensions, each extensible without
+editing the core pipeline:
+
+| Dimension | Purpose | Count | Selection |
+|---|---|---|---|
+| **Package** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
+| **Source** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
+| **BuildSystem** | Compile source tree | 4 (cmake, cargo, go, custom) | `build_system:` |
+| **RegistrySource** | Fetch from language registries | 3 (npm, python, gem) | `registry_source:` |
+
+Source and RegistrySource are **not merged** — Source discovers *what's
+available* (returns release metadata), RegistrySource fetches *specific
+files* (returns a local directory). See
+[`docs/plugins.md`](docs/plugins.md) for the full architecture.
 
 Every package it produces is a real Debian package, not a thin ZIP-in-an-ar
 wrapper: full dependency relations (`Depends`/`Recommends`/`Conflicts`/
@@ -75,6 +97,20 @@ signing, etc.):
 lx build package.yaml --from-dir ./myapp-dist/
 ```
 
+Package from a language registry (input source plugin), via package.yaml:
+
+```yaml
+# package.yaml — npm example
+package_name: typescript
+registry_source: npm
+github_repo: typescript    # npm package name
+version: latest            # optional
+```
+
+```sh
+lx build package.yaml
+```
+
 Generate a `package.yaml` interactively, with auto-discovered release
 patterns:
 
@@ -110,7 +146,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
 | `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`) |
 | `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
-| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, and custom indexes (search/install/info/update/add/remove/list) |
+| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
 | `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply) |
 
 `lx-get` is a thin companion binary with the consumer half only —
@@ -446,14 +482,14 @@ If `build_system:` is omitted, `lx` auto-detects from the source tree
 (`CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go). Set it
 explicitly to override or to use `custom`.
 
-**`input_source:`** — fetch from a language package manager instead of a
+**`registry_source:`** — fetch from a language package manager instead of a
 forge release. Values: `"npm"`, `"python"`, `"gem"`. When set, the package
 to fetch is taken from `github_repo` (or `package_name`), and the version
 from `version`. Each input source is a plugin implementing the
-`InputSource` trait — adding a new ecosystem (cpan, hex, …) is
+`RegistrySource` trait — adding a new ecosystem (cpan, hex, …) is
 implementing the trait and registering it in `lib/plugins/input/`.
 
-| `input_source` | Fetches via | Required tools |
+| `registry_source` | Fetches via | Required tools |
 |---|---|---|
 | `npm` | `npm pack` + extract | `npm` |
 | `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
@@ -624,6 +660,58 @@ top gap-fillers by repo count (showing 10 of 30):
   node          350 repos
   ...
 ```
+
+### Index enhancements
+
+Beyond the core search/install/info workflow, `lx index` supports several
+output modes and query refinements:
+
+**JSON output** (`--json`) — machine-readable results for scripting, CI, and
+external tools. Emits the full `IndexHit` struct including repology metadata:
+
+```sh
+lx index search --json curl | jq '.[] | select(.source=="repology") | .newest'
+lx index info --json eza          # wraps each source's hit with its index name
+```
+
+**Source filtering** (`--repo <name>`) — scope a query to a single index by
+name (use `lx index list` to see available sources). Errors on unknown names:
+
+```sh
+lx index search --repo repology curl     # metadata only
+lx index search --repo aur curl          # buildable PKGBUILDs only
+lx index search --repo nonexistent x     # → "no enabled index named 'nonexistent'"
+```
+
+**Verbose diagnostics** (`--verbose`) — shows how many indexes were searched
+and the hit count per source. Useful for debugging stale caches or understanding
+why a package isn't found:
+
+```sh
+lx index search --verbose no_such_pkg
+# searched 3 index(es): lx-community:0, aur:0, repology:0
+# no packages matched
+```
+
+**Coverage analysis** — `lx index coverage` now includes locally installed
+packages (dpkg/rpm/pacman) in its "covered" set, so the gap list only contains
+popular projects that are genuinely absent from both the indexes and the host:
+
+```sh
+$ lx index coverage --min-repos 100
+coverage: repology vs. LX (recipe index + latest-debs org)
+  repology projects (≥100 repos): 21
+  covered by LX:                 6 (28%)
+  gap (not yet packaged):        15
+```
+
+**Repology pagination** — `lx index update` now fetches 5 pages (~1000 projects)
+from the repology API (up from 1 page / ~200 projects) with rate-limit-aware
+delays between requests. The fuller cache makes `coverage` and `--distro`
+enrichment more representative.
+
+**AUR robustness** — null fields in the AUR RPC response (e.g. packages with no
+maintainer) are handled gracefully instead of producing parse warnings.
 
 The LX index runs `lx build` + `--sbom` on every merged recipe in CI, so
 community contributions ship prebuilt binaries without the contributor

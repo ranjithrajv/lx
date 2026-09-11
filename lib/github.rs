@@ -455,7 +455,7 @@ struct GitHubLicenseIdRaw {
     spdx_id: Option<String>,
 }
 
-/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+/// Uniform construction for the `ForgeSource` glue (`ClientNew`).
 impl crate::source_client::ClientNew for GitHubSyncClient {
     fn with_cache(
         token: Option<String>,
@@ -538,7 +538,7 @@ impl From<octocrab::models::repos::Asset> for Asset {
     }
 }
 
-/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+/// Uniform construction for the `ForgeSource` glue (`ClientNew`).
 impl crate::source_client::ClientNew for GitHubClient {
     fn with_cache(
         token: Option<String>,

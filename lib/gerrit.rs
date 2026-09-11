@@ -311,7 +311,7 @@ pub struct GerritTagInfo {
     pub tagger_date: Option<String>,
 }
 
-/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+/// Uniform construction for the `ForgeSource` glue (`ClientNew`).
 impl crate::source_client::ClientNew for GerritClient {
     fn with_cache(
         token: Option<String>,

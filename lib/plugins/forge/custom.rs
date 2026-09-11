@@ -5,7 +5,7 @@ use std::path::Path;
 
 use lx_lib::github::{Release, ReleaseMeta, RepoLicense};
 
-use super::SourcePlugin;
+use super::ForgeSource;
 
 /// Direct-URL provider (`source: custom`).
 ///
@@ -19,7 +19,7 @@ use super::SourcePlugin;
 /// Checksum: no sidecar probing (there is no release to probe); verification
 /// is via `--pinned-metadata` / `package.lock` exactly like other providers,
 /// falling back to `--allow-unverified` / `--no-verify`.
-pub struct CustomSourcePlugin;
+pub struct CustomForgeSource;
 
 fn expand_template(template: &str, version: &str, arch: &str, package: &str) -> String {
     template
@@ -79,7 +79,7 @@ pub fn synthetic_release(
     }
 }
 
-impl SourcePlugin for CustomSourcePlugin {
+impl ForgeSource for CustomForgeSource {
     fn name(&self) -> &'static str {
         "custom"
     }

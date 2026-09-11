@@ -5,7 +5,7 @@ use anyhow::Result;
 /// Uniform construction contract shared by every source-provider client
 /// (`github`/`gitlab`/`gitea`/`forgejo`/`bitbucket`/`gerrit`).
 ///
-/// Exists to deduplicate the `SourcePlugin` glue: each plugin method
+/// Exists to deduplicate the `ForgeSource` glue: each plugin method
 /// previously repeated `Client::with_cache(token.map(|s| s.to_string()),
 /// cache_dir.map(|p| p.to_path_buf()))`. With this trait, plugin impls call
 /// [`new_client_for::<C>()`] instead — one line, no per-method boilerplate.

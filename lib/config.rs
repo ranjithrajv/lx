@@ -411,8 +411,8 @@ pub struct PackageConfig {
     /// taken from `github_repo` (or `package_name` if github_repo is
     /// empty), and the version from `version`.
     #[serde(default)]
-    #[serde(alias = "input_source")]
-    pub input_source: String,
+    #[serde(alias = "registry_source")]
+    pub registry_source: String,
     /// Optional GitLab host for self-hosted instances (e.g. "gitlab.example.com").
     /// Only used when `source = "gitlab"`.
     #[serde(default)]
@@ -1049,8 +1049,8 @@ impl PackageConfig {
 
     /// Effective input source for language package managers ("npm", "python",
     /// "gem"), or empty when not using an input source plugin.
-    pub fn effective_input_source(&self) -> String {
-        let s = self.input_source.trim();
+    pub fn effective_registry_source(&self) -> String {
+        let s = self.registry_source.trim();
         if s.is_empty() {
             String::new()
         } else {
@@ -1059,7 +1059,7 @@ impl PackageConfig {
     }
 
     /// Effective source provider, normalized to lowercase ("github" or "gitlab").
-    pub fn effective_source(&self) -> String {
+    pub fn effective_forge_source(&self) -> String {
         if self.source.trim().is_empty() {
             "github".to_string()
         } else {

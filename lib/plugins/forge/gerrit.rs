@@ -5,11 +5,11 @@ use std::path::Path;
 
 use lx_lib::github::{Release, ReleaseMeta};
 
-use super::SourcePlugin;
+use super::ForgeSource;
 
-pub struct GerritSourcePlugin;
+pub struct GerritForgeSource;
 
-impl SourcePlugin for GerritSourcePlugin {
+impl ForgeSource for GerritForgeSource {
     fn name(&self) -> &'static str {
         "gerrit"
     }

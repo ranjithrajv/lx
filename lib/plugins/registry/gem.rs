@@ -11,11 +11,11 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
-use crate::plugins::input::{InputPayload, InputSource};
+use crate::plugins::registry::{InputPayload, RegistrySource};
 
-pub struct GemInputSource;
+pub struct GemRegistrySource;
 
-impl InputSource for GemInputSource {
+impl RegistrySource for GemRegistrySource {
     fn name(&self) -> &'static str {
         "gem"
     }

@@ -67,7 +67,7 @@ impl Plugin for ArchPlugin {
         std::fs::create_dir_all(&out_dir)?;
         let dest = out_dir.join(&file_name);
 
-        let url = if cfg.effective_source() == "gitlab" {
+        let url = if cfg.effective_forge_source() == "gitlab" {
             lx_lib::constants::homepage_for_gitlab(
                 &cfg.github_repo,
                 cfg.gitlab_host.as_deref().unwrap_or(""),

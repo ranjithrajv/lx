@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::source::gitlab::*;
+use lx_lib::plugins::forge::gitlab::*;
 
 #[test]
 fn parses_gitlab_url() {

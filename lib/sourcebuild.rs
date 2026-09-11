@@ -314,12 +314,12 @@ fn resolve_version(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) ->
     if !cfg.version.trim().is_empty() {
         return Ok(cfg.version.clone());
     }
-    let source_name = cfg.effective_source();
-    let source = crate::plugins::source::get_source_plugin(&source_name).ok_or_else(|| {
+    let source_name = cfg.effective_forge_source();
+    let source = crate::plugins::forge::get_forge_source(&source_name).ok_or_else(|| {
         anyhow::anyhow!("unsupported source '{source_name}' for version detection")
     })?;
-    crate::plugins::source::apply_source_host(source.as_ref(), cfg);
-    let tok = crate::plugins::source::resolve_source_token(source.as_ref(), token);
+    crate::plugins::forge::apply_forge_host(source.as_ref(), cfg);
+    let tok = crate::plugins::forge::resolve_forge_token(source.as_ref(), token);
     let latest = source.latest_release(
         &cfg.github_repo,
         tok.as_deref(),

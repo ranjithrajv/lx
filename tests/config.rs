@@ -215,7 +215,7 @@ fn gerrit_source_and_host_parse_and_validate() {
     let yaml = "package_name: foo\ngithub_repo: owner/foo\nsource: gerrit\ngerrit_host: gerrit.example.com\n";
     let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
     cfg.validate().unwrap();
-    assert_eq!(cfg.effective_source(), "gerrit");
+    assert_eq!(cfg.effective_forge_source(), "gerrit");
     assert_eq!(cfg.gerrit_host.as_deref(), Some("gerrit.example.com"));
 }
 

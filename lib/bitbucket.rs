@@ -195,7 +195,7 @@ pub struct BitbucketHref {
     pub href: Option<String>,
 }
 
-/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+/// Uniform construction for the `ForgeSource` glue (`ClientNew`).
 impl crate::source_client::ClientNew for BitbucketClient {
     fn with_cache(
         token: Option<String>,

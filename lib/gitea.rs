@@ -260,7 +260,7 @@ pub struct GiteaAssetRaw {
     pub size: Option<u64>,
 }
 
-/// Uniform construction for the `SourcePlugin` glue (`ClientNew`).
+/// Uniform construction for the `ForgeSource` glue (`ClientNew`).
 impl crate::source_client::ClientNew for GiteaClient {
     fn with_cache(
         token: Option<String>,

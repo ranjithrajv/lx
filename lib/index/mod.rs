@@ -24,7 +24,7 @@ use std::path::PathBuf;
 /// The `newest`/`repos`/`outdated`/`vulnerable`/`host_*` fields are
 /// populated by metadata-only sources (repology). Recipe/prebuilt sources
 /// (lx-community, aur) leave them at their defaults.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct IndexHit {
     pub name: String,
     pub description: String,
@@ -165,6 +165,15 @@ pub struct SearchOpts {
     /// Include distro metadata (repology) in results
     #[arg(long)]
     pub distro: bool,
+    /// Output as JSON (machine-readable)
+    #[arg(long)]
+    pub json: bool,
+    /// Only search this source (matches the index name from `lx index list`)
+    #[arg(long)]
+    pub repo: Option<String>,
+    /// Show which indexes were searched and how many hits each returned
+    #[arg(long)]
+    pub verbose: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -207,6 +216,9 @@ pub struct InstallOptsCli {
 #[derive(Debug, Clone, Args)]
 pub struct InfoOpts {
     pub package: String,
+    /// Output as JSON (machine-readable)
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -238,18 +250,50 @@ pub fn run(args: IndexArgs, token: Option<&str>) -> Result<()> {
 
 fn run_search(opts: SearchOpts) -> Result<()> {
     let reg = registry::Registry::ensure_exists()?;
-    let sources = registry::active_sources(&reg);
+    let mut sources = registry::active_sources(&reg);
+    // --repo filter: keep only the named source.
+    if let Some(ref filter) = opts.repo {
+        sources.retain(|s| s.name() == filter.as_str());
+        if sources.is_empty() {
+            bail!(
+                "no enabled index named '{}'. Run `lx index list` to see available indexes.",
+                filter
+            );
+        }
+    }
     let mut all = Vec::new();
+    let mut per_source_counts: Vec<(&str, usize)> = Vec::new();
     for src in &sources {
         match src.search(opts.pattern.as_deref()) {
-            Ok(hits) => all.extend(hits),
+            Ok(hits) => {
+                let count = hits.len();
+                all.extend(hits);
+                if opts.verbose {
+                    per_source_counts.push((src.name(), count));
+                }
+            }
             Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
         }
+    }
+    if opts.verbose {
+        eprintln!(
+            "searched {} index(es): {}",
+            per_source_counts.len(),
+            per_source_counts
+                .iter()
+                .map(|(n, c)| format!("{n}:{c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
     all.sort_by(|a, b| a.name.cmp(&b.name));
     all.dedup_by(|a, b| a.name == b.name && a.source == b.source);
     if all.is_empty() {
         println!("no packages matched");
+        return Ok(());
+    }
+    if opts.json {
+        println!("{}", serde_json::to_string_pretty(&all)?);
         return Ok(());
     }
     if opts.raw {
@@ -352,47 +396,135 @@ fn run_info(opts: InfoOpts) -> Result<()> {
     let reg = registry::Registry::ensure_exists()?;
     let sources = registry::active_sources(&reg);
     let mut found = false;
+    // Collect all hits for JSON output.
+    let mut all_hits: Vec<(&str, IndexHit)> = Vec::new();
     for src in &sources {
         match src.info(&opts.package) {
             Ok(Some(h)) => {
                 found = true;
-                println!("[{}]", src.name());
-                println!("  package: {}", h.name);
-                if !h.description.is_empty() {
-                    println!("  description: {}", h.description);
-                }
-                if h.installed {
-                    println!("  installed: yes");
-                }
-                if !h.available.is_empty() {
-                    println!("  available: {}", h.available.join(", "));
-                }
-                // Repology metadata.
-                if h.repos > 0 {
-                    println!("  distros: {} repos", h.repos);
-                    if let Some(v) = &h.newest {
-                        println!("  newest: {v}");
-                    }
-                    if let Some(v) = &h.host_version {
-                        let status = h.host_status.as_deref().unwrap_or("unknown");
-                        println!("  host distro: {v} ({status})");
-                    }
-                    if h.outdated > 0 {
-                        println!("  outdated in: {} repos", h.outdated);
-                    }
-                    if h.vulnerable > 0 {
-                        println!("  vulnerable in: {} repos", h.vulnerable);
-                    }
+                if opts.json {
+                    all_hits.push((src.name(), h));
+                } else {
+                    println!("[{}]", src.name());
+                    print_info_hit(&h);
                 }
             }
             Ok(None) => {}
             Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
         }
     }
+    if opts.json {
+        if all_hits.is_empty() {
+            println!("[]");
+        } else {
+            let objects: Vec<serde_json::Value> = all_hits
+                .iter()
+                .map(|(src, h)| {
+                    let mut v = serde_json::to_value(h).unwrap_or_default();
+                    if let serde_json::Value::Object(ref mut m) = v {
+                        m.insert("index".into(), serde_json::Value::String((*src).into()));
+                    }
+                    v
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&objects)?);
+        }
+        return Ok(());
+    }
     if !found {
         println!("'{}' not found in any enabled index", opts.package);
     }
     Ok(())
+}
+
+/// Print a single info hit's human-readable fields.
+fn print_info_hit(h: &IndexHit) {
+    println!("  package: {}", h.name);
+    if !h.description.is_empty() {
+        println!("  description: {}", h.description);
+    }
+    if h.installed {
+        println!("  installed: yes");
+    }
+    if !h.available.is_empty() {
+        println!("  available: {}", h.available.join(", "));
+    }
+    if h.repos > 0 {
+        println!("  distros: {} repos", h.repos);
+        if let Some(v) = &h.newest {
+            println!("  newest: {v}");
+        }
+        if let Some(v) = &h.host_version {
+            let status = h.host_status.as_deref().unwrap_or("unknown");
+            println!("  host distro: {v} ({status})");
+        }
+        if h.outdated > 0 {
+            println!("  outdated in: {} repos", h.outdated);
+        }
+        if h.vulnerable > 0 {
+            println!("  vulnerable in: {} repos", h.vulnerable);
+        }
+    }
+}
+
+/// Return the set of locally installed package names by probing the host's
+/// package manager (dpkg, rpm, or pacman). Used by `lx index coverage` to
+/// avoid flagging already-installed packages as gaps.
+///
+/// Probes each available manager and returns the first one that yields
+/// results — a manager that succeeds but returns nothing (e.g. dpkg-query
+/// installed on an Arch host) is treated as "not the real manager" and we
+/// fall through to the next.
+fn installed_packages() -> Result<Vec<String>> {
+    // dpkg (Debian/Ubuntu)
+    if let Ok(out) = std::process::Command::new("dpkg-query")
+        .args(["-W", "-f=${Package}\n"])
+        .output()
+    {
+        if out.status.success() {
+            let pkgs: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+            if !pkgs.is_empty() {
+                return Ok(pkgs);
+            }
+        }
+    }
+    // rpm (Fedora/RHEL/openSUSE)
+    if let Ok(out) = std::process::Command::new("rpm")
+        .args(["-qa", "--queryformat", "%{NAME}\n"])
+        .output()
+    {
+        if out.status.success() {
+            let pkgs: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+            if !pkgs.is_empty() {
+                return Ok(pkgs);
+            }
+        }
+    }
+    // pacman (Arch)
+    if let Ok(out) = std::process::Command::new("pacman").arg("-Qq").output() {
+        if out.status.success() {
+            let pkgs: Vec<String> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect();
+            if !pkgs.is_empty() {
+                return Ok(pkgs);
+            }
+        }
+    }
+    Ok(Vec::new())
 }
 
 fn run_list() -> Result<()> {
@@ -516,6 +648,14 @@ fn run_coverage(opts: CoverageOpts) -> Result<()> {
             if let Some(pkg) = repo.name.strip_suffix("-debian") {
                 covered.insert(pkg.to_ascii_lowercase());
             }
+        }
+    }
+
+    // Locally installed packages (dpkg/rpm/pacman) — already present on this
+    // host, so they don't need a recipe even if the distro version is stale.
+    if let Ok(installed) = installed_packages() {
+        for pkg in installed {
+            covered.insert(pkg.to_ascii_lowercase());
         }
     }
 
@@ -714,3 +854,5 @@ mod tests {
         let _: BTreeMap<String, String> = BTreeMap::new();
     }
 }
+
+

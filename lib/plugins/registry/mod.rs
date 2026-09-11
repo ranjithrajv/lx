@@ -2,16 +2,16 @@
 
 //! Input source plugins for language package managers.
 //!
-//! Each language ecosystem (npm, pip, gem, …) implements [`InputSource`].
+//! Each language ecosystem (npm, pip, gem, …) implements [`RegistrySource`].
 //! The build pipeline is input-agnostic: an input plugin produces a local
 //! directory of files (the "payload"), then the normal packaging pipeline
 //! (format plugins) wraps it into a .deb/.rpm/.arch.
 //!
-//! Adding a new ecosystem is implementing `InputSource` and registering it
-//! in [`all_input_sources`]. The `source:` field in package.yaml selects
+//! Adding a new ecosystem is implementing `RegistrySource` and registering it
+//! in [`all_registry_sources`]. The `source:` field in package.yaml selects
 //! which plugin to use (`source: npm`, `source: python`, `source: gem`).
 //!
-//! These are intentionally separate from [`crate::plugins::source::SourcePlugin`]
+//! These are intentionally separate from [`crate::plugins::forge::ForgeSource`]
 //! (forge release providers). Forge sources fetch prebuilt release assets;
 //! input sources fetch from language package registries. Both produce a
 //! local payload directory, but their resolution mechanisms differ.
@@ -39,8 +39,8 @@ pub struct InputPayload {
 /// An input source plugin: fetches a package from a language registry
 /// and produces a local directory of files ready for packaging.
 ///
-/// Implementors are stateless; registered once in [`all_input_sources`].
-pub trait InputSource: Send + Sync {
+/// Implementors are stateless; registered once in [`all_registry_sources`].
+pub trait RegistrySource: Send + Sync {
     /// Canonical name used in `package.yaml` (`source:`).
     fn name(&self) -> &'static str;
 
@@ -62,21 +62,21 @@ pub trait InputSource: Send + Sync {
 }
 
 /// All known input source plugins, in registration order.
-pub fn all_input_sources() -> Vec<Box<dyn InputSource>> {
+pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
     vec![
-        Box::new(npm::NpmInputSource),
-        Box::new(python::PythonInputSource),
-        Box::new(gem::GemInputSource),
+        Box::new(npm::NpmRegistrySource),
+        Box::new(python::PythonRegistrySource),
+        Box::new(gem::GemRegistrySource),
     ]
 }
 
 /// Look up an input source by name (case-insensitive). Returns `None` for unknown.
-pub fn get_input_source(name: &str) -> Option<Box<dyn InputSource>> {
+pub fn get_registry_source(name: &str) -> Option<Box<dyn RegistrySource>> {
     let lower = name.to_ascii_lowercase();
-    all_input_sources().into_iter().find(|p| p.name() == lower)
+    all_registry_sources().into_iter().find(|p| p.name() == lower)
 }
 
 /// Available input source names for error messages / help text.
-pub fn input_source_names() -> Vec<&'static str> {
-    all_input_sources().iter().map(|p| p.name()).collect()
+pub fn registry_source_names() -> Vec<&'static str> {
+    all_registry_sources().iter().map(|p| p.name()).collect()
 }

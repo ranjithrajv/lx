@@ -50,16 +50,16 @@ pub fn run(args: ValidateArgs, token: Option<&str>) -> Result<()> {
     }
 
     // Network checks against the source API (github/gitlab).
-    let source_name = cfg.effective_source();
-    let source = crate::plugins::source::get_source_plugin(&source_name).ok_or_else(|| {
+    let source_name = cfg.effective_forge_source();
+    let source = crate::plugins::forge::get_forge_source(&source_name).ok_or_else(|| {
         anyhow::anyhow!(
             "unsupported source '{}' (expected one of: {})",
             source_name,
-            crate::plugins::source::source_available_names().join(", ")
+            crate::plugins::forge::forge_source_names().join(", ")
         )
     })?;
-    crate::plugins::source::apply_source_host(source.as_ref(), &cfg);
-    let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
+    crate::plugins::forge::apply_forge_host(source.as_ref(), &cfg);
+    let token_for_source = crate::plugins::forge::resolve_forge_token(source.as_ref(), token);
 
     let release = match &args.version {
         Some(v) => {

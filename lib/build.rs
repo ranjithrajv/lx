@@ -326,7 +326,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // zero-config build: no manual patterns, every supported architecture,
     // and source packages included (there's no config file to opt out via,
     // so the most useful default wins).
-    let mut cfg = match crate::plugins::source::parse_any_url(&args.config.to_string_lossy()) {
+    let mut cfg = match crate::plugins::forge::parse_any_forge_url(&args.config.to_string_lossy()) {
         Some((source, repo)) => {
             println!("Zero-config build from {source}:{repo} (no package.yaml)");
             args.source = true;
@@ -341,7 +341,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         }
         None => {
             // Fallback for plain package.yaml path; also handle legacy
-            // `parse_github_url` for backward compat (though parse_any_url
+            // `parse_github_url` for backward compat (though parse_any_forge_url
             // already covers it).
             if let Some(github_repo) = parse_github_url(&args.config.to_string_lossy()) {
                 println!("Zero-config build from {github_repo} (no package.yaml)");
@@ -438,14 +438,14 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // Input source plugins (language package managers): npm, python, gem.
     // These fetch from language registries and produce a local payload
     // directory, then flow through the normal packaging pipeline via run_local.
-    let input_source_name = cfg.effective_input_source();
-    if !input_source_name.is_empty() {
+    let registry_source_name = cfg.effective_registry_source();
+    if !registry_source_name.is_empty() {
         let input_plugin =
-            crate::plugins::input::get_input_source(&input_source_name).ok_or_else(|| {
+            crate::plugins::registry::get_registry_source(&registry_source_name).ok_or_else(|| {
                 anyhow!(
                     "unsupported input source '{}' (expected one of: {})",
-                    input_source_name,
-                    crate::plugins::input::input_source_names().join(", ")
+                    registry_source_name,
+                    crate::plugins::registry::registry_source_names().join(", ")
                 )
             })?;
 
@@ -465,7 +465,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
 
         println!(
             "input source: {} ({}) — {}",
-            input_source_name,
+            registry_source_name,
             package_id,
             input_plugin.description()
         );
@@ -495,12 +495,12 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
 
     // Resolve source provider plugin (github vs gitlab) for auto-discovery.
     // Local builds skip the network entirely.
-    let effective_source = args
+    let effective_forge_source = args
         .provider
         .as_deref()
-        .unwrap_or(&cfg.effective_source())
+        .unwrap_or(&cfg.effective_forge_source())
         .to_ascii_lowercase();
-    cfg.source = effective_source.clone();
+    cfg.source = effective_forge_source.clone();
 
     let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
     match sign_method.as_str() {
@@ -523,22 +523,22 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         );
     }
 
-    let source = crate::plugins::source::get_source_plugin(&effective_source).ok_or_else(|| {
+    let source = crate::plugins::forge::get_forge_source(&effective_forge_source).ok_or_else(|| {
         anyhow!(
             "unsupported source '{}' (expected one of: {})",
-            effective_source,
-            crate::plugins::source::source_available_names().join(", ")
+            effective_forge_source,
+            crate::plugins::forge::forge_source_names().join(", ")
         )
     })?;
-    println!("source: {} ({})", effective_source, source.description());
-    crate::plugins::source::apply_source_host(source.as_ref(), &cfg);
+    println!("source: {} ({})", effective_forge_source, source.description());
+    crate::plugins::forge::apply_forge_host(source.as_ref(), &cfg);
     // Token resolution: prefer provider-specific env, fallback to CLI token.
-    let token_for_source = crate::plugins::source::resolve_source_token(source.as_ref(), token);
+    let token_for_source = crate::plugins::forge::resolve_forge_token(source.as_ref(), token);
 
     // Resolve the release: pinned version in config, else a tag/version, else latest.
     // `source: custom` has no forge API: the version (config or --version)
     // is expanded into the upstream_url template, one URL per architecture.
-    let release = if effective_source == "custom" {
+    let release = if effective_forge_source == "custom" {
         let version = cfg.version.clone();
         if version.is_empty() {
             bail!("source 'custom' requires version: in package.yaml or --version (upstream_url template is expanded with it)");
@@ -556,7 +556,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         if custom_archs.is_empty() {
             bail!("source 'custom' requires a non-empty architectures: list in package.yaml (or --architectures)");
         }
-        crate::plugins::source::custom::synthetic_release(
+        crate::plugins::forge::custom::synthetic_release(
             &template,
             &version,
             &cfg.package_name,
@@ -661,7 +661,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // Resolve one asset per architecture. `source: custom` assets are already
     // per-arch (one expanded URL each), keyed by position — no pattern
     // matching, since there is no release listing to match against.
-    let arch_assets = if effective_source == "custom" {
+    let arch_assets = if effective_forge_source == "custom" {
         // Re-expand the template against the final arch list (post --host /
         // --architectures reshaping) so the URLs always match the archs
         // actually being built, regardless of what the synthetic release
@@ -670,7 +670,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         let template = cfg.upstream_url.trim();
         let mut map = std::collections::HashMap::new();
         for arch in &archs {
-            let (name, url) = crate::plugins::source::custom::expand_for_arch(
+            let (name, url) = crate::plugins::forge::custom::expand_for_arch(
                 template,
                 &version,
                 arch,
@@ -787,7 +787,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         &jobs,
         SourceInputs {
             license: license.clone(),
-            source_name: effective_source.clone(),
+            source_name: effective_forge_source.clone(),
             token: token_for_source.clone(),
         },
         progress.as_ref(),
@@ -803,7 +803,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     }
 
     if args.update_lock {
-        write_lock_file(&args.config, &effective_source, &jobs, &provenance)?;
+        write_lock_file(&args.config, &effective_forge_source, &jobs, &provenance)?;
     }
 
     if args.summary {
@@ -822,7 +822,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 telemetry: telemetry.summary_json(),
                 provenance: provenance.clone(),
                 package_format: effective_format.clone(),
-                source: effective_source.clone(),
+                source: effective_forge_source.clone(),
             },
         )?;
     }
@@ -1178,7 +1178,7 @@ fn run_local(
 }
 
 pub(crate) fn suggest_versions_source(
-    source: &dyn crate::plugins::source::SourcePlugin,
+    source: &dyn crate::plugins::forge::ForgeSource,
     repo: &str,
     wanted: &str,
     token: Option<&str>,
@@ -1208,7 +1208,7 @@ pub(crate) fn suggest_versions_source(
 
 /// Fetch the upstream license via source plugin (github/gitlab agnostic).
 fn fetch_upstream_license_source(
-    source: &dyn crate::plugins::source::SourcePlugin,
+    source: &dyn crate::plugins::forge::ForgeSource,
     cfg: &PackageConfig,
     token: Option<&str>,
     cache_dir: Option<&Path>,
@@ -1466,7 +1466,7 @@ fn build_jobs(
                 None
             } else {
                 Some(
-                    crate::plugins::source::get_source_plugin(&source_name)
+                    crate::plugins::forge::get_forge_source(&source_name)
                         .expect("unknown source plugin"),
                 )
             };
@@ -1551,7 +1551,7 @@ fn build_jobs(
 /// group and threaded through every [`build_one`] call in that group.
 #[derive(Clone, Copy)]
 struct BuildInputs<'a> {
-    source: Option<&'a dyn crate::plugins::source::SourcePlugin>,
+    source: Option<&'a dyn crate::plugins::forge::ForgeSource>,
     token: Option<&'a str>,
     license: Option<&'a lx_lib::github::RepoLicense>,
     pin: Option<&'a lx_lib::checksum::PinnedMetadata>,
@@ -1604,7 +1604,7 @@ fn build_one(
                             &path,
                             expected.as_deref(),
                             &|url, out| {
-                                let src = crate::plugins::source::get_source_plugin(&source_cloned)
+                                let src = crate::plugins::forge::get_forge_source(&source_cloned)
                                     .expect("unknown source");
                                 let mut body = src
                                     .raw_get(url, token_cloned.as_deref())
@@ -2024,14 +2024,14 @@ fn verify_sidecar_or_require_flag(
 }
 
 fn verify_sidecar_or_require_flag_source(
-    source: &dyn crate::plugins::source::SourcePlugin,
+    source: &dyn crate::plugins::forge::ForgeSource,
     token: Option<&str>,
     asset: &Asset,
     path: &Path,
     allow_unverified: bool,
 ) -> Result<VerifyMethod> {
     struct Getter<'a> {
-        source: &'a dyn crate::plugins::source::SourcePlugin,
+        source: &'a dyn crate::plugins::forge::ForgeSource,
         token: Option<&'a str>,
     }
     impl lx_lib::checksum::RawGetter for Getter<'_> {

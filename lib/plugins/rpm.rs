@@ -55,7 +55,7 @@ impl Plugin for RpmPlugin {
         // For generic dist strings (fedora/el9), keep as is but replace '+'.
         let release = format!("{}+{}", ctx.build_version, job.dist).replace('+', ".");
         let summary = cfg.effective_description();
-        let homepage = if cfg.effective_source() == "gitlab" {
+        let homepage = if cfg.effective_forge_source() == "gitlab" {
             lx_lib::constants::homepage_for_gitlab(
                 &cfg.github_repo,
                 cfg.gitlab_host.as_deref().unwrap_or(""),

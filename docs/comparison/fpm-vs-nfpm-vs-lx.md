@@ -105,7 +105,7 @@ version: latest        # optional version constraint
 | pip | `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
 | gem | `gem` | `gem fetch` + extract | `gem` |
 
-Input plugins are modular — each is a separate `InputSource` trait
+Input plugins are modular — each is a separate `RegistrySource` trait
 implementation registered in `lib/plugins/input/`. Adding a new
 ecosystem (cpan, cargo-registry, hex, …) is implementing the trait and
 registering it.

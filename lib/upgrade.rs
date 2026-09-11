@@ -12,6 +12,12 @@ pub struct UpgradeArgs {
     /// Package to upgrade (omit to upgrade every lx-managed package).
     pub package: Option<String>,
 
+    /// System-wide freshness check: also flag distro-managed packages that
+    /// are behind upstream (per repology metadata) as migration targets.
+    /// Each flagged package can be taken over by `lx install`.
+    #[arg(long)]
+    pub all: bool,
+
     /// Skip checksum verification against the release's sidecar file (not
     /// recommended).
     #[arg(long)]
@@ -51,7 +57,7 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
         None => manifest.packages.keys().cloned().collect(),
     };
 
-    if targets.is_empty() {
+    if targets.is_empty() && !args.all {
         println!("no lx-managed packages installed");
         return Ok(());
     }
@@ -67,7 +73,7 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
                 keep
             })
             .collect();
-        if kept.is_empty() {
+        if kept.is_empty() && !args.all {
             println!("nothing currently installed to upgrade");
             return Ok(());
         }
@@ -79,18 +85,24 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
     let client = GitHubClient::new(token.map(|s| s.to_string()))?;
     let mut upgraded = 0;
     let mut failed = 0;
+    let mut up_to_date = 0;
 
-    for package in &targets {
-        let entry = manifest.current(package).unwrap().clone();
-        match upgrade_one(&client, package, &entry, &args) {
-            Ok(true) => upgraded += 1,
-            Ok(false) => {}
-            Err(e) => {
-                eprintln!("  ✗ {package}: {e:#}");
-                failed += 1;
-                continue;
+    if !targets.is_empty() {
+        println!("lx-managed packages:");
+        for package in &targets {
+            let entry = manifest.current(package).unwrap().clone();
+            match upgrade_one(&client, package, &entry, &args) {
+                Ok(true) => upgraded += 1,
+                Ok(false) => up_to_date += 1,
+                Err(e) => {
+                    eprintln!("  ✗ {package}: {e:#}");
+                    failed += 1;
+                    continue;
+                }
             }
         }
+    } else {
+        println!("no lx-managed packages to upgrade");
     }
 
     if !args.dry_run && upgraded > 0 {
@@ -101,12 +113,53 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
     }
 
     println!(
-        "{upgraded} upgraded, {failed} failed, {} up to date",
-        targets.len() - upgraded - failed
+        "  {} upgraded, {} failed, {} up to date",
+        upgraded, failed, up_to_date
     );
+
+    // System-wide check: flag distro-managed packages that are behind upstream.
+    if args.all {
+        check_distro_outdated(&args, token)?;
+    }
+
     if failed > 0 {
         bail!("{failed} package(s) failed to upgrade");
     }
+    Ok(())
+}
+
+/// Check for distro-managed packages that are behind upstream (per repology).
+/// These are flagged as migration targets — packages `lx install` could take over.
+fn check_distro_outdated(_args: &UpgradeArgs, _token: Option<&str>) -> Result<()> {
+    println!("\nsystem-wide freshness check (distro packages behind upstream):");
+
+    let repology = crate::index::repology::RepologySource::new("repology");
+    let outdated = repology.outdated_packages();
+
+    if outdated.is_empty() {
+        println!("  all tracked distro packages are up to date (or no repology data)");
+        return Ok(());
+    }
+
+    println!(
+        "  {} package(s) where distro lags upstream:\n",
+        outdated.len()
+    );
+    for pkg in &outdated {
+        let host = pkg
+            .host_version
+            .as_deref()
+            .unwrap_or("?");
+        let newest = pkg.newest.as_deref().unwrap_or("?");
+        println!(
+            "    {:<20} host: {:<12} → newest: {}",
+            pkg.name, host, newest
+        );
+    }
+
+    println!("\n  to take over management of a package, run `lx install <name>`");
+    println!("  (this replaces the distro version with an lx-built one, tracked for upgrades)");
+
     Ok(())
 }
 

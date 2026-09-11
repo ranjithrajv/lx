@@ -48,11 +48,11 @@
 
 ### Input source plugins (language package managers)
 
-- New `input_source:` field in package.yaml selects a language package
+- New `registry_source:` field in package.yaml selects a language package
   manager input plugin (`npm`, `python`, `gem`). These fetch from language
   registries instead of forge releases, producing a local payload directory
   that flows through the normal packaging pipeline. Each input source is a
-  plugin implementing the `InputSource` trait in `lib/plugins/input/` —
+  plugin implementing the `RegistrySource` trait in `lib/plugins/input/` —
   adding a new ecosystem is implementing the trait and registering it.
 
 ### Musl-static builds for old-distro portability
