@@ -187,9 +187,15 @@ BuildSystem selection in `lib/sourcebuild.rs`:
 build_system: in package.yaml  >  auto-detect from source tree  >  error if none recognized
 ```
 
+InputSource selection in `lib/build.rs`:
+
+```
+input_source: in package.yaml  >  empty (forge release mode)
+```
+
 Auto-detection checks `recognize()` in registry order: `CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go. `custom` never auto-detects (explicit-only).
 
-`cfg.effective_package_format()` and `cfg.effective_source()` normalise; `cfg.effective_distributions_for(format)` picks per-plugin defaults.
+`cfg.effective_package_format()`, `cfg.effective_source()`, and `cfg.effective_input_source()` normalise; `cfg.effective_distributions_for(format)` picks per-plugin defaults.
 
 ## 5. Shared Staging
 
