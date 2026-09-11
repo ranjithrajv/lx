@@ -2,18 +2,18 @@
 
 //! RPM `.rpm` plugin.
 //!
-//! Implements the `Plugin` trait for RPM packages using `lx_lib::rpmarchive`.
+//! Implements the `Packager` trait for RPM packages using `lx_lib::rpmarchive`.
 //! Shares the same staging logic as the deb plugin but emits a genuine RPM
 //! (ED AB EE DB magic) instead of an ar+control+data archive.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use super::{BuildContext, Plugin};
+use super::{BuildContext, Packager};
 
-pub struct RpmPlugin;
+pub struct RpmPackager;
 
-impl Plugin for RpmPlugin {
+impl Packager for RpmPackager {
     fn name(&self) -> &'static str {
         "rpm"
     }

@@ -416,8 +416,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         .as_deref()
         .unwrap_or(&cfg.effective_package_format())
         .to_ascii_lowercase();
-    let plugin_names = crate::plugins::available_names();
-    if crate::plugins::get_plugin(&effective_format).is_none() {
+    let plugin_names = crate::plugins::packager_names();
+    if crate::plugins::get_packager(&effective_format).is_none() {
         bail!(
             "unsupported --format '{}' (expected one of: {})",
             effective_format,
@@ -427,8 +427,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // Normalize cfg's package_format for downstream consumers (summary, etc.).
     cfg.package_format = effective_format.clone();
     // Keep plugin trait object for arch/dist filtering.
-    let plugin_for_matrix: Box<dyn crate::plugins::Plugin> =
-        crate::plugins::get_plugin(&effective_format).unwrap();
+    let plugin_for_matrix: Box<dyn crate::plugins::Packager> =
+        crate::plugins::get_packager(&effective_format).unwrap();
     println!(
         "package format: {} ({})",
         effective_format,
@@ -938,7 +938,7 @@ fn run_local(
     mut args: BuildArgs,
     mut cfg: PackageConfig,
     effective_format: &str,
-    plugin_for_matrix: &dyn crate::plugins::Plugin,
+    plugin_for_matrix: &dyn crate::plugins::Packager,
     build_start: std::time::Instant,
 ) -> Result<()> {
     let payload = cfg.local_payload.trim();
@@ -1794,8 +1794,8 @@ fn build_one(
     }
 
     // 4. Build the package via the selected plugin (deb or rpm).
-    // Plugin stages the install tree and creates the archive.
-    let plugin = crate::plugins::get_plugin(&format).ok_or_else(|| {
+    // Packager stages the install tree and creates the archive.
+    let plugin = crate::plugins::get_packager(&format).ok_or_else(|| {
         anyhow!(
             "unsupported package format '{}' (expected deb or rpm)",
             format

@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Plugin architecture for `lx`.
+//! Packager architecture for `lx`.
 //!
 //! Each package format (`.deb`, `.rpm`, …) is a plugin implementing the
-//! [`Plugin`] trait. The build pipeline is format-agnostic: it resolves
+//! [`Packager`] trait. The build pipeline is format-agnostic: it resolves
 //! assets, stages the install tree via shared helpers, then delegates the
 //! actual archive creation to the selected plugin.
 //!
 //! Registration is static and explicit — no dynamic loading — so adding a new
-//! format is just implementing `Plugin` and registering it in
-//! [`registry`] / [`all_plugins`].
+//! format is just implementing `Packager` and registering it in
+//! [`registry`] / [`all_packagers`].
 
 pub mod arch;
 pub mod build_system;
@@ -63,7 +63,7 @@ pub struct BuildContext<'a> {
 /// A package-format plugin.
 ///
 /// Implementors are stateless; they are registered once in [`registry`].
-pub trait Plugin: Send + Sync {
+pub trait Packager: Send + Sync {
     /// Canonical name used in `package.yaml` (`package_format`) and
     /// `--format` (`deb` / `rpm`).
     fn name(&self) -> &'static str;
@@ -97,23 +97,23 @@ pub trait Plugin: Send + Sync {
 }
 
 /// All known plugins, in registration order.
-pub fn all_plugins() -> Vec<Box<dyn Plugin>> {
+pub fn all_packagers() -> Vec<Box<dyn Packager>> {
     vec![
-        Box::new(deb::DebPlugin),
-        Box::new(rpm::RpmPlugin),
-        Box::new(arch::ArchPlugin),
+        Box::new(deb::DebPackager),
+        Box::new(rpm::RpmPackager),
+        Box::new(arch::ArchPackager),
     ]
 }
 
 /// Look up a plugin by name (case-insensitive). Returns `None` for unknown.
-pub fn get_plugin(name: &str) -> Option<Box<dyn Plugin>> {
+pub fn get_packager(name: &str) -> Option<Box<dyn Packager>> {
     let lower = name.to_ascii_lowercase();
-    all_plugins().into_iter().find(|p| p.name() == lower)
+    all_packagers().into_iter().find(|p| p.name() == lower)
 }
 
 /// Available plugin names for error messages / help text.
-pub fn available_names() -> Vec<&'static str> {
-    all_plugins().iter().map(|p| p.name()).collect()
+pub fn packager_names() -> Vec<&'static str> {
+    all_packagers().iter().map(|p| p.name()).collect()
 }
 
 // ---------------------------------------------------------------------------

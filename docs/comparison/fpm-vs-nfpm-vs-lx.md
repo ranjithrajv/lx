@@ -99,7 +99,7 @@ version: latest        # optional version constraint
 
 **Input source plugins** (`source:` in package.yaml):
 
-| Source | Plugin | Mechanism | Required tools |
+| Source | Packager | Mechanism | Required tools |
 |---|---|---|---|
 | npm | `npm` | `npm pack` + extract | `npm` |
 | pip | `python` | `pip download --no-binary :all:` + extract | `pip`, `python3` |
@@ -349,7 +349,7 @@ regardless of distro age.
 | Musl-static source builds | ❌ | ❌ | ✅ `musl: true` (cargo, go, cmake, custom) |
 | Prefer musl release assets | ❌ | ❌ | ✅ auto-discovery prefers `*-musl*` assets |
 | Omit `libc6` from Depends | ❌ | ❌ | ✅ `compute_depends()` skips libc6 fallback |
-| Consumer musl fallback | ❌ | ❌ | ✅ `lx-get install` falls back to `+musl_{arch}.deb` |
+| Consumer musl fallback | ❌ | ❌ | ✅ `lx get install` falls back to `+musl_{arch}.deb` |
 | `scan-deps --prefer-musl` | ❌ | ❌ | ✅ inspect what a musl binary's deps would be |
 
 How it works per build system:
@@ -367,7 +367,7 @@ How it works per build system:
 
 | Feature | fpm | nfpm | lx |
 |---|---|---|---|
-| Consumer CLI | ❌ | ❌ | ✅ `lx-get` |
+| Consumer CLI | ❌ | ❌ | ✅ `lx get` |
 | Local manifest | ❌ | ❌ | ✅ `installed.json` |
 | Rollback | ❌ | ❌ | ✅ `lx rollback` |
 | Repo generation | ❌ | ❌ | ✅ `lx repo` |

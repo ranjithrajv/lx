@@ -2,18 +2,18 @@
 
 //! Arch Linux pacman `.pkg.tar.zst` plugin.
 //!
-//! Implements `Plugin` for Arch packages using `lx_lib::archarchive`.
+//! Implements `Packager` for Arch packages using `lx_lib::archarchive`.
 //! Shares the same staging logic as deb/rpm but emits a `tar.zst`
 //! containing `.PKGINFO` + `.MTREE` + payload.
 
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
-use super::{BuildContext, Plugin};
+use super::{BuildContext, Packager};
 
-pub struct ArchPlugin;
+pub struct ArchPackager;
 
-impl Plugin for ArchPlugin {
+impl Packager for ArchPackager {
     fn name(&self) -> &'static str {
         "arch"
     }

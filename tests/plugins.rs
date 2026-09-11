@@ -203,28 +203,28 @@ fn copy_dir_recursive_preserves_symlinks() {
 
 #[test]
 fn registry_contains_deb_and_rpm() {
-    let names = available_names();
+    let names = packager_names();
     assert!(names.contains(&"deb"));
     assert!(names.contains(&"rpm"));
     assert!(names.contains(&"arch"));
-    assert!(get_plugin("deb").is_some());
-    assert!(get_plugin("rpm").is_some());
-    assert!(get_plugin("arch").is_some());
-    assert!(get_plugin("unknown").is_none());
-    assert!(get_plugin("DEB").is_some()); // case-insensitive
+    assert!(get_packager("deb").is_some());
+    assert!(get_packager("rpm").is_some());
+    assert!(get_packager("arch").is_some());
+    assert!(get_packager("unknown").is_none());
+    assert!(get_packager("DEB").is_some()); // case-insensitive
 }
 
 #[test]
 fn plugin_file_extensions() {
-    assert_eq!(get_plugin("deb").unwrap().file_extension(), "deb");
-    assert_eq!(get_plugin("rpm").unwrap().file_extension(), "rpm");
-    assert_eq!(get_plugin("arch").unwrap().file_extension(), "pkg.tar.zst");
+    assert_eq!(get_packager("deb").unwrap().file_extension(), "deb");
+    assert_eq!(get_packager("rpm").unwrap().file_extension(), "rpm");
+    assert_eq!(get_packager("arch").unwrap().file_extension(), "pkg.tar.zst");
 }
 
 #[test]
 fn deb_and_rpm_plugins_build_valid_archives() {
     for format in ["deb", "rpm", "arch"] {
-        let plugin = get_plugin(format).unwrap();
+        let plugin = get_packager(format).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let binary_dir = tmp.path().join("binary");
         std::fs::create_dir_all(&binary_dir).unwrap();
@@ -299,9 +299,9 @@ fn deb_and_rpm_plugins_build_valid_archives() {
 
 #[test]
 fn default_distributions_differ_by_format() {
-    let deb = get_plugin("deb").unwrap();
-    let rpm = get_plugin("rpm").unwrap();
-    let arch = get_plugin("arch").unwrap();
+    let deb = get_packager("deb").unwrap();
+    let rpm = get_packager("rpm").unwrap();
+    let arch = get_packager("arch").unwrap();
     assert!(deb.default_distributions().contains(&"bookworm"));
     assert!(rpm.default_distributions().contains(&"fedora"));
     assert!(arch.default_distributions().contains(&"arch"));
@@ -311,7 +311,7 @@ fn default_distributions_differ_by_format() {
 
 #[test]
 fn deb_with_new_control_fields_and_compression_is_valid() {
-    let plugin = get_plugin("deb").unwrap();
+    let plugin = get_packager("deb").unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let binary_dir = tmp.path().join("binary");
     std::fs::create_dir_all(&binary_dir).unwrap();
@@ -457,7 +457,7 @@ fn deb_with_new_control_fields_and_compression_is_valid() {
 /// through the deb plugin.
 #[test]
 fn deb_contents_scripts_conffiles_end_to_end() {
-    let plugin = get_plugin("deb").unwrap();
+    let plugin = get_packager("deb").unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let binary_dir = tmp.path().join("binary");
     std::fs::create_dir_all(&binary_dir).unwrap();

@@ -78,6 +78,30 @@ pub enum Commands {
     /// Generate JSON schema for package.yaml
     #[command(alias = "jsonschema")]
     JsonSchema(crate::schema::SchemaArgs),
+    /// Consumer commands for prebuilt packages (install/upgrade/inspect only, no building)
+    #[command(subcommand)]
+    Get(GetCommands),
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Subcommand)]
+pub enum GetCommands {
+    /// Fetch and install a pre-built .deb
+    Install(crate::install::InstallArgs),
+    /// Upgrade lx-managed packages
+    Upgrade(crate::upgrade::UpgradeArgs),
+    /// Check installed packages against their latest release (no install)
+    Update(crate::update::UpdateArgs),
+    /// Remove an installed package
+    Remove(crate::remove::RemoveArgs),
+    /// Show everything known about one package
+    Show(crate::show::ShowArgs),
+    /// Reinstall the recorded version of a package
+    Reinstall(crate::reinstall::ReinstallArgs),
+    /// List packages installed by lx
+    List(crate::list::ListArgs),
+    /// Search available packages (regex; --local for the offline index)
+    Search(crate::search::SearchArgs),
 }
 
 pub fn run(cli: Cli) -> Result<()> {
@@ -107,5 +131,15 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Index(args) => crate::index::run(args, cli.token.as_deref()),
         Commands::ScanDeps(args) => crate::scandeps::run(args, cli.token.as_deref()),
         Commands::JsonSchema(args) => crate::schema::run(args),
+        Commands::Get(cmd) => match cmd {
+            GetCommands::Install(a) => crate::install::run(a, cli.token.as_deref()),
+            GetCommands::Upgrade(a) => crate::upgrade::run(a, cli.token.as_deref()),
+            GetCommands::Update(a) => crate::update::run(a, cli.token.as_deref()),
+            GetCommands::Remove(a) => crate::remove::run(a),
+            GetCommands::Show(a) => crate::show::run(a),
+            GetCommands::Reinstall(a) => crate::reinstall::run(a, cli.token.as_deref()),
+            GetCommands::List(a) => crate::list::run(a),
+            GetCommands::Search(a) => crate::search::run(a, cli.token.as_deref()),
+        },
     }
 }

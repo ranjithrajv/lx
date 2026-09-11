@@ -67,7 +67,7 @@
   for musl binaries.
 - `lx scan-deps --prefer-musl` prefers musl release assets when scanning
   dependencies.
-- `lx-get install` falls back to a `+musl_{arch}.deb` asset when no
+- `lx get install` falls back to a `+musl_{arch}.deb` asset when no
   distro-specific build exists for the host, so users on old distros can
   still install packages.
 
@@ -95,7 +95,7 @@
 
 ### Rename: `lpt` → `lx`
 
-- The CLI is now `lx` (`lx-lib` crate, `lx-get` thin client). Env vars are
+- The CLI is now `lx` (`lx-lib` crate, `lx get` consumer subcommand). Env vars are
   `LX_*` (`LX_MAINTAINER`, `LX_SIGN_PASSPHRASE`), caches live under
   `~/.cache/lx`, the manifest under `<data>/lx/installed.json`, and the
   GitHub repo moved to `ranjithrajv/lx` (the old URL redirects).

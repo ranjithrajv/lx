@@ -14,7 +14,7 @@ any Linux.
 `musl: true` in package.yaml produces a musl-static binary with no glibc
 dependency. For source builds, each build system plugin adjusts its compile
 flags. For binary repacks, musl-named release assets are preferred. The
-consumer client (`lx-get install`) falls back to a `+musl_{arch}.deb` when no
+consumer client (`lx get install`) falls back to a `+musl_{arch}.deb` when no
 distro-specific build exists.
 
 ## Why musl over "build on oldest distro"
@@ -53,7 +53,7 @@ suite" approach.
   ships both `*-linux-gnu.tar.gz` and `*-linux-musl.tar.gz`, the musl variant
   is selected. If only glibc assets exist, the build proceeds with those (the
   user gets a glibc binary rather than no binary).
-- **Consumer fallback in `lx-get install`.** Tries dist-specific asset first
+- **Consumer fallback in `lx get install`.** Tries dist-specific asset first
   (`+{dist}_{arch}.deb`), then `+musl_{arch}.deb`. Users on old distros where
   no dist-specific build exists get a working install with a notice.
 - **No `--musl` CLI flag on `lx build`.** The musl choice is a packaging

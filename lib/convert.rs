@@ -374,7 +374,7 @@ fn build_target(
     target_format: &str,
     args: &ConvertArgs,
 ) -> Result<PathBuf> {
-    let plugin = crate::plugins::get_plugin(target_format)
+    let plugin = crate::plugins::get_packager(target_format)
         .ok_or_else(|| anyhow::anyhow!("unknown target plugin '{target_format}'"))?;
 
     let tmp = tempfile::tempdir()?;

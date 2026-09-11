@@ -1,8 +1,8 @@
-# Plugin Architecture
+# Packager Architecture
 
 **Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: clarified Source vs RegistrySource)
 **Status:** Implemented — 4 independent plugin dimensions:
-* **3× Package:** `deb` + `rpm` + `arch`
+* **3× Packager:** `deb` + `rpm` + `arch`
 * **7× Source:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
 * **4× BuildSystem:** `cmake` + `cargo` + `go` + `custom`
 * **3× RegistrySource:** `npm` + `python` + `gem`
@@ -86,7 +86,7 @@ files are already on disk). Both feed into the same `Package` plugins.
 
 ---
 
-## 1. Plugin Types
+## 1. Packager Types
 
 `lib/plugins/mod.rs`, `lib/plugins/source/mod.rs`, `lib/plugins/build_system/mod.rs`
 
@@ -94,7 +94,7 @@ Four independent plugin dimensions, each with its own trait and registry:
 
 ```rust
 // Package — lib/plugins/mod.rs
-pub trait Plugin: Send + Sync {
+pub trait Packager: Send + Sync {
     fn name(&self) -> &'static str;              // "deb" | "rpm" | "arch"
     fn file_extension(&self) -> &'static str;    // "deb" | "rpm" | "pkg.tar.zst"
     fn description(&self) -> &'static str;
@@ -148,7 +148,7 @@ Each dimension has its own registry (`all_plugins()`, `all_forge_sources()`, `al
 `lib/plugins/mod.rs`
 
 ```rust
-pub trait Plugin: Send + Sync {
+pub trait Packager: Send + Sync {
     fn name(&self) -> &'static str;              // "deb" | "rpm" | "arch"
     fn file_extension(&self) -> &'static str;    // "deb" | "rpm" | "pkg.tar.zst"
     fn description(&self) -> &'static str;
@@ -204,10 +204,10 @@ Auto-discovery (`src/discovery.rs:36` `match_assets`, `src/discovery::config_fro
 
 ```rust
 // Package
-pub fn all_plugins() -> Vec<Box<dyn Plugin>> {
+pub fn all_plugins() -> Vec<Box<dyn Packager>> {
     vec![Box::new(deb::DebPlugin), Box::new(rpm::RpmPlugin), Box::new(arch::ArchPlugin)]
 }
-pub fn get_plugin(name: &str) -> Option<Box<dyn Plugin>> { /* case-insensitive */ }
+pub fn get_plugin(name: &str) -> Option<Box<dyn Packager>> { /* case-insensitive */ }
 
 // Source
 pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
@@ -237,12 +237,12 @@ pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
 pub fn get_registry_source(name: &str) -> Option<Box<dyn RegistrySource>> { /* case-insensitive */ }
 ```
 
-No `dlopen`, no feature flags. Adding a format = `impl Plugin` + one line in `all_plugins()`. Adding a source = `impl ForgeSource` + one line in `all_forge_sources()`. Adding a build system = `impl BuildSystem` + one line in `all_build_systems()`.
+No `dlopen`, no feature flags. Adding a format = `impl Packager` + one line in `all_plugins()`. Adding a source = `impl ForgeSource` + one line in `all_forge_sources()`. Adding a build system = `impl BuildSystem` + one line in `all_build_systems()`.
 
 Selection in `lib/build.rs` / `lib/discovery.rs` / `lib/validate.rs`:
 
 ```
---format flag  >  package.yaml `package_format`  >  default "deb"   → Plugin
+--format flag  >  package.yaml `package_format`  >  default "deb"   → Packager
 --source flag  >  package.yaml `source`         >  default "github" → ForgeSource
 --plus zero-config URL host sniffing: `parse_any_url("https://gitlab.com/…") → ("gitlab","owner/repo")`
 ```
@@ -409,12 +409,12 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 * `lib/source.rs` generates deb source packages (`generate`), RPM source packages (`generate_rpm`), and Arch `PKGBUILD`s (`generate_arch`).
 * `lib/checksum.rs` generic over `RawGetter`; `lib/debs.rs` `download`/`verify_sidecar_or_require_flag` also generic (`&dyn RawGetter`).
 
-## 10. Adding a New Plugin
+## 10. Adding a New Packager
 
 **Package (e.g. `apk`):**
 
 1. `lib/<format>archive.rs` – `pub fn build(root, name, version, …) -> Result<()>` doing deterministic archive (see `archarchive.rs` for pattern).
-2. `lib/plugins/<format>.rs` – `impl Plugin` (name, extension, defaults, `build` calls `stage_install_tree` + `lx_lib::<format>archive::build`).
+2. `lib/plugins/<format>.rs` – `impl Packager` (name, extension, defaults, `build` calls `stage_install_tree` + `lx_lib::<format>archive::build`).
 3. Register in `lib/plugins/mod.rs` + `lib/config.rs` match arm + `effective_distributions_for`.
 4. `lib/summary.rs` pattern arm + `lib/build.rs` source skip if needed.
 5. Add tests in `lib/plugins/mod.rs` (registry + `build_valid_archives` magic check).
@@ -451,7 +451,7 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Plugin` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | Only `lintian` for `deb`, reproducible `SOURCE_DATE_EPOCH` for all; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, custom) — compiles on host, wraps per-suite |

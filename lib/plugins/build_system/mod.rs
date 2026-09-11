@@ -71,7 +71,7 @@ pub fn get_build_system(name: &str) -> Option<Box<dyn BuildSystem>> {
 }
 
 /// Available build-system names for error messages / help text.
-pub fn available_names() -> Vec<&'static str> {
+pub fn packager_names() -> Vec<&'static str> {
     all_build_systems().iter().map(|b| b.name()).collect()
 }
 

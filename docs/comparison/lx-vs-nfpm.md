@@ -173,7 +173,7 @@ story.
 
 | | nfpm | lx |
 |---|---|---|
-| **Consumer CLI** | ❌ | ✅ (`lx-get`: install/upgrade/remove/search/list/show) |
+| **Consumer CLI** | ❌ | ✅ (`lx get`: install/upgrade/remove/search/list/show) |
 | **Local manifest / state** | ❌ | ✅ (`installed.json`, cross-checked with dpkg) |
 | **Rollback** | ❌ | ✅ (`lx rollback`) |
 | **Repo generation** | ❌ | ✅ (`lx repo` — Packages/Release/InRelease) |

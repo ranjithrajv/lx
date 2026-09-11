@@ -9,12 +9,12 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::{BuildContext, Plugin, PACKAGED_FROM_LINE};
+use super::{BuildContext, Packager, PACKAGED_FROM_LINE};
 use crate::config::PackageConfig;
 
-pub struct DebPlugin;
+pub struct DebPackager;
 
-impl Plugin for DebPlugin {
+impl Packager for DebPackager {
     fn name(&self) -> &'static str {
         "deb"
     }

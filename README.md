@@ -13,18 +13,18 @@ It also installs/upgrades/removes the packages it builds — an apt-like
 front end for software that ships forge releases, plus the tooling to run
 a prebuilt apt repository from its output. It's a Rust rewrite of the
 [debian-multiarch-builder](https://github.com/ranjithrajv/debian-multiarch-builder)
-GitHub Action, usable as a local CLI (`lx`, with the thin `lx-get`
-consumer client), as a GitHub Action (`action.yml`, see below), and as a
+GitHub Action, usable as a local CLI (`lx`, with the `lx get` consumer
+subcommand), as a GitHub Action (`action.yml`, see below), and as a
 repo publisher (`lx repo`).
 
-## Plugin architecture
+## Packager architecture
 
 `lx` has four independent plugin dimensions, each extensible without
 editing the core pipeline:
 
 | Dimension | Purpose | Count | Selection |
 |---|---|---|---|
-| **Package** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
+| **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
 | **Source** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
 | **BuildSystem** | Compile source tree | 4 (cmake, cargo, go, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 3 (npm, python, gem) | `registry_source:` |
@@ -149,13 +149,13 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
 | `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply) |
 
-`lx-get` is a thin companion binary with the consumer half only —
+`lx get` is the consumer subcommand group —
 `install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`list`/`search`,
 no build machinery. Same manifest, same org:
 
 ```sh
-lx-get install eza
-lx-get upgrade --owned-only   # skip entries removed outside lx
+lx get install eza
+lx get upgrade --owned-only   # skip entries removed outside lx
 ```
 
 ### `lx go-native`
@@ -471,7 +471,7 @@ concepts); `build_depends` names host packages instead.
 **`build_system:`** — which build system compiles the source. Defaults to
 `cmake` (auto-detected from `CMakeLists.txt` if `build_system:` is omit).
 
-| `build_system` | Plugin | Detects | Build |
+| `build_system` | Packager | Detects | Build |
 |---|---|---|---|
 | `cmake` | CMake + Ninja | `CMakeLists.txt` | cmake configure → build → DESTDIR install |
 | `cargo` | Cargo (Rust) | `Cargo.toml` | `cargo install --path . --root <DESTDIR>` |
@@ -510,7 +510,7 @@ builds, each build system plugin adjusts its compile flags:
 For binary repacks (`build_mode: binary`, the default), `musl: true`
 prefers musl-named release assets (e.g. `*-linux-musl.tar.gz`) over glibc
 variants during auto-discovery. `compute_depends()` omits the `libc6`
-fallback for musl binaries. The consumer client (`lx-get install`) falls
+fallback for musl binaries. The consumer client (`lx get install`) falls
 back to a `+musl_{arch}.deb` asset when no distro-specific build exists.
 
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter

@@ -118,8 +118,7 @@ $ lx index info eza
 
 ## 4. `lx search --distro` → validates recipe-index coverage
 
-**Status:** `lx search --distro` implemented. Coverage-gap reporting is
-future work.
+**Status:** `lx search --distro` and `lx index coverage` implemented.
 
 Without repology, `lx search` only knows about packages in the latest-debs
 org. With it, you see the full picture:
@@ -211,11 +210,17 @@ $ lx validate ./neovim.yaml
 
 ### Phase 1 (done)
 - Repology backend (`lib/index/repology.rs`) with API + JSON cache
-- `lx index update` refreshes repology data
+- `lx index update` refreshes repology data (5 pages, ~1000 projects)
 - `lx index status` shows host distro identity and cache state
 - `lx index outdated` lists packages where host distro lags upstream
 - `lx search --distro` enriches search results with distro metadata
 - `lx index info` shows full distro breakdown per package
+- `lx index search --json` and `lx index info --json` for machine-readable output
+- `lx index search --repo <name>` to query a single index
+- `lx index search --verbose` shows per-source hit counts for debugging
+- `lx index coverage` includes locally installed packages (dpkg/rpm/pacman) in the covered set
+- Repology pagination (5 pages, ~1000 projects) for more representative coverage
+- AUR null-field handling (no parse warnings on packages with null maintainer/description)
 
 ### Phase 2 (done)
 - `lx index coverage` — compares repology's project set against the
@@ -244,11 +249,11 @@ $ lx validate ./neovim.yaml
 repology API (1 req/s, cached locally)
         │
         ▼
-~/.cache/lx/repology/projects.json    (bulk: first page, ~200 projects)
+~/.cache/lx/repology/projects.json    (bulk: 5 pages, ~1000 projects)
 ~/.cache/lx/repology/per-project/<n>.json  (per-project on demand)
         │
         ▼
-lx index  ─── outdated / status / search / info
+lx index  ─── outdated / status / search / info / coverage
 lx search ─── --distro enrichment (per-hit API lookup + cache)
         │
         ▼
