@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Reusable building blocks extracted from the `lx` binary so they can be
 //! shared across other projects:
 //!
@@ -61,7 +63,9 @@ pub mod github;
 pub mod gitlab;
 pub mod go_native;
 pub mod http;
+pub mod index;
 pub mod install;
+pub mod install_pkg;
 pub mod lintian;
 pub mod list;
 pub mod lock;

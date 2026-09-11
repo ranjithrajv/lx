@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -69,6 +71,8 @@ pub enum Commands {
     /// Migrate snap/flatpak/nix/curl|sh installs to native packages
     /// (plan by default, apply with --yes)
     GoNative(crate::go_native::GoNativeArgs),
+    /// Community recipe index with prebuilt binaries (search/install/update)
+    Index(crate::index::IndexArgs),
     /// Generate JSON schema for package.yaml
     #[command(alias = "jsonschema")]
     JsonSchema(crate::schema::SchemaArgs),
@@ -97,6 +101,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Migrate(args) => crate::migrate::run(args),
         Commands::Search(args) => crate::search::run(args, cli.token.as_deref()),
         Commands::GoNative(args) => crate::go_native::run(args, cli.token.as_deref()),
+        Commands::Index(args) => crate::index::run(args, cli.token.as_deref()),
         Commands::ScanDeps(args) => crate::scandeps::run(args, cli.token.as_deref()),
         Commands::JsonSchema(args) => crate::schema::run(args),
     }
