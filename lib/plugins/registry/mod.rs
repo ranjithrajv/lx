@@ -21,6 +21,7 @@ pub mod cargo;
 pub mod composer;
 pub mod cpan;
 pub mod gem;
+pub mod go;
 pub mod maven;
 pub mod npm;
 pub mod nuget;
@@ -62,8 +63,8 @@ pub trait RegistrySource: Send + Sync {
     /// Fetch the package and produce a local payload directory.
     ///
     /// `package` is the registry package name (npm package name, pip
-    /// requirement, Maven coordinate, composer package). `version` is the
-    /// requested version constraint, or empty for "latest".
+    /// requirement, Maven coordinate, composer package, Go module path).
+    /// `version` is the requested version constraint, or empty for "latest".
     fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload>;
 }
 
@@ -74,6 +75,7 @@ pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
         Box::new(composer::ComposerRegistrySource),
         Box::new(cpan::CpanRegistrySource),
         Box::new(gem::GemRegistrySource),
+        Box::new(go::GoRegistrySource),
         Box::new(maven::MavenRegistrySource),
         Box::new(npm::NpmRegistrySource),
         Box::new(nuget::NugetRegistrySource),

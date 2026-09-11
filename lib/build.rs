@@ -428,14 +428,10 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     }
     // Normalize cfg's package_format for downstream consumers (summary, etc.).
     cfg.package_format = effective_format.clone();
-    // Keep plugin trait object for arch/dist filtering.
-    let plugin_for_matrix: Box<dyn crate::plugins::Packager> =
-        crate::plugins::get_packager(&effective_format).unwrap();
-    println!(
-        "package format: {} ({})",
-        effective_format,
-        plugin_for_matrix.description()
-    );
+    let plugin_desc = crate::plugins::get_packager(&effective_format)
+        .unwrap()
+        .description();
+    println!("package format: {effective_format} ({plugin_desc})");
 
     // Input source plugins (language package managers): npm, python, gem.
     // These fetch from language registries and produce a local payload
@@ -486,13 +482,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         // Route through local packaging with the fetched payload directory.
         cfg.local_payload = payload.files_dir.to_string_lossy().to_string();
         cfg.artifact_format = "raw".to_string();
-        return run_local(
-            args,
-            cfg,
-            &effective_format,
-            plugin_for_matrix.as_ref(),
-            build_start,
-        );
+        return run_local(args, cfg, &effective_format, build_start);
     }
 
     // Resolve source provider plugin (github vs gitlab) for auto-discovery.
@@ -516,13 +506,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         } else {
             println!("source: local (skipping upstream download)");
         }
-        return run_local(
-            args,
-            cfg,
-            &effective_format,
-            plugin_for_matrix.as_ref(),
-            build_start,
-        );
+        return run_local(args, cfg, &effective_format, build_start);
     }
 
     let source =
@@ -739,7 +723,9 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                     let supported =
                         match cfg.distribution_arch_overrides.get(arch.as_str()) {
                             Some(o) => o.distributions.iter().any(|d| d.trim() == dist),
-                            None => plugin_for_matrix.arch_supported_for_dist(arch, dist),
+                            // Arch/dist matrix only applies to deb; rpm/arch are distro-agnostic.
+                            None => effective_format != "deb"
+                                || cfg.arch_supported_for_dist(arch, dist),
                         };
                     if !supported {
                         println!(
@@ -945,7 +931,6 @@ fn run_local(
     mut args: BuildArgs,
     mut cfg: PackageConfig,
     effective_format: &str,
-    plugin_for_matrix: &dyn crate::plugins::Packager,
     build_start: std::time::Instant,
 ) -> Result<()> {
     let payload = cfg.local_payload.trim();
@@ -1038,7 +1023,8 @@ fn run_local(
         for arch in &archs {
             let supported = match cfg.distribution_arch_overrides.get(arch.as_str()) {
                 Some(o) => o.distributions.iter().any(|d| d.trim() == dist.as_str()),
-                None => plugin_for_matrix.arch_supported_for_dist(arch, dist),
+                // Arch/dist matrix only applies to deb; rpm/arch are distro-agnostic.
+                None => effective_format != "deb" || cfg.arch_supported_for_dist(arch, dist),
             };
             if !supported {
                 println!(

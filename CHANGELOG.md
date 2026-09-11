@@ -49,12 +49,13 @@
 ### Registry source plugins (language package managers)
 
 - New `registry_source:` field in package.yaml selects a language package
-  manager plugin. Initial plugins: `npm`, `python`, `gem`, `cargo`,
+  manager plugin. Initial plugins: `npm`, `python`, `gem`, `cargo`, `go`,
   `nuget`, `maven`, `composer`, `cpan`. These fetch from language registries
   instead of forge releases, producing a local payload directory that flows
-  through the normal packaging pipeline. Each registry source is a plugin
-  implementing the `RegistrySource` trait in `lib/plugins/registry/` —
-  adding a new ecosystem is implementing the trait and registering it.
+  through the normal packaging pipeline. The `go` plugin builds a static
+  binary (CGO_ENABLED=0). Each registry source is a plugin implementing
+  the `RegistrySource` trait in `lib/plugins/registry/` — adding a new
+  ecosystem is implementing the trait and registering it.
 
 ### Musl-static builds for old-distro portability
 

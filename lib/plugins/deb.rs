@@ -32,8 +32,6 @@ impl Packager for DebPackager {
     }
 
     fn arch_supported_for_dist(&self, arch: &str, dist: &str) -> bool {
-        // Delegate to PackageConfig's matrix; construct a dummy config to
-        // avoid duplicating the logic. The matrix is static.
         PackageConfig::default().arch_supported_for_dist(arch, dist)
     }
 

@@ -31,8 +31,6 @@ impl Packager for RpmPackager {
     }
 
     fn arch_supported_for_dist(&self, _arch: &str, _dist: &str) -> bool {
-        // RPM arch matrix is largely independent of distro in our builder;
-        // filter only unknown arches.
         true
     }
 

@@ -112,14 +112,12 @@ pub trait Packager: Send + Sync {
     /// plugin is selected. For `deb` this is Debian suites; for `rpm` this
     /// is RPM-based distros.
     // Exercised by `default_distributions_differ_by_format` below; not yet
-    // called by the live distribution-resolution path, which still reads
+    /// called by the live distribution-resolution path, which still reads
     // the DEFAULT_*_DISTRIBUTIONS constants directly (see config.rs).
     #[allow(dead_code)]
     fn default_distributions(&self) -> &'static [&'static str];
 
-    /// Whether an architecture is supported for a given distribution for this
-    /// plugin. Mirrors `PackageConfig::arch_supported_for_dist` for deb and
-    /// is permissive for rpm (which is arch-independent in our matrix).
+    /// Whether an architecture is supported for a given distribution.
     fn arch_supported_for_dist(&self, arch: &str, dist: &str) -> bool;
 
     /// Build a single package archive.
