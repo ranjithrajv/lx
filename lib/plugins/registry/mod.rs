@@ -20,8 +20,10 @@
 pub mod cargo;
 pub mod composer;
 pub mod cpan;
+pub mod dart;
 pub mod gem;
 pub mod go;
+pub mod hex;
 pub mod maven;
 pub mod npm;
 pub mod nuget;
@@ -74,8 +76,10 @@ pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
         Box::new(cargo::CargoRegistrySource),
         Box::new(composer::ComposerRegistrySource),
         Box::new(cpan::CpanRegistrySource),
+        Box::new(dart::DartRegistrySource),
         Box::new(gem::GemRegistrySource),
         Box::new(go::GoRegistrySource),
+        Box::new(hex::HexRegistrySource),
         Box::new(maven::MavenRegistrySource),
         Box::new(npm::NpmRegistrySource),
         Box::new(nuget::NugetRegistrySource),

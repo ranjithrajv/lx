@@ -27,7 +27,7 @@ editing the core pipeline:
 | **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
 | **ForgeSource** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
 | **BuildSystem** | Compile source tree | 5 (cmake, cargo, go, meson, custom) | `build_system:` |
-| **RegistrySource** | Fetch from language registries | 9 (npm, python, gem, cargo, go, nuget, maven, composer, cpan) | `registry_source:` |
+| **RegistrySource** | Fetch from language registries | 11 (npm, python, gem, cargo, go, hex, dart, nuget, maven, composer, cpan) | `registry_source:` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
 available* (returns release metadata), RegistrySource fetches *specific
@@ -519,6 +519,8 @@ is implementing the trait and registering it in `lib/plugins/registry/`.
 | `composer` | PHP | `composer install` | `composer` |
 | `cpan` | Perl | `cpanm` + build install tree | `cpanm`, `perl` |
 | `go` | Go | `go get` + `go build` static binary | `go` |
+| `hex` | Elixir/Erlang | `mix deps.get` + stage | `mix`, `elixir` |
+| `dart` | Dart/Flutter | `dart pub get` + stage | `dart` |
 
 **`musl: true`** — produce a musl-static binary with no glibc dependency,
 so the package runs on any Linux regardless of distro age (solves the

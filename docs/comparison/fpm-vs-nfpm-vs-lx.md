@@ -94,7 +94,7 @@ build_mode: source
 build_system: cmake
 
 # Or language package manager (registry source plugin)
-registry_source: npm  # npm | python | gem | cargo | go | nuget | maven | composer | cpan
+registry_source: npm  # npm | python | gem | cargo | go | hex | dart | nuget | maven | composer | cpan
 github_repo: typescript # package name in the registry
 version: latest        # optional version constraint
 ```
@@ -112,6 +112,8 @@ version: latest        # optional version constraint
 | composer | PHP | `composer install` | `composer` |
 | cpan | Perl | `cpanm` + build install tree | `cpanm`, `perl` |
 | `go` | Go | `go get` + `go build` static binary | `go` |
+| `hex` | Elixir/Erlang | `mix deps.get` + stage | `mix`, `elixir` |
+| `dart` | Dart/Flutter | `dart pub get` + stage | `dart` |
 
 Registry source plugins are modular — each is a separate `RegistrySource`
 trait implementation registered in `lib/plugins/registry/`. Adding a new
@@ -335,7 +337,7 @@ overrides:
 | Musl-static builds | ❌ | ❌ | ✅ `musl: true` |
 | `from-dir`/`from-file` mode | ❌ | ❌ | ✅ `--from-dir`/`--from-file` |
 | `--prefix` custom install path | ✅ `--prefix` | ❌ | ✅ `prefix:` / `--prefix` |
-| **Language PM inputs** | ✅ npm/gem/python/cpan/pear | ❌ | ✅ `registry_source: npm/python/gem/cargo/go/nuget/maven/composer/cpan` (plugin) |
+| **Language PM inputs** | ✅ npm/gem/python/cpan/pear | ❌ | ✅ `registry_source: npm/python/gem/cargo/go/hex/dart/nuget/maven/composer/cpan` (plugin) |
 
 ---
 

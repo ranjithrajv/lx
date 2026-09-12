@@ -426,8 +426,9 @@ pub struct PackageConfig {
     pub source: String,
     /// Registry source plugin for language package managers. When set, `lx`
     /// fetches the package from a language registry instead of a forge
-    /// release. Values: "npm", "python", "gem", "cargo", "go", "nuget",
-    /// "maven", "composer". The package to fetch is taken from `github_repo` (or
+    /// release. Values: "npm", "python", "gem", "cargo", "go", "hex",
+    /// "dart", "nuget", "maven", "composer". The package to fetch is taken from
+    /// `github_repo` (or
     /// `package_name` if github_repo is empty), and the version from `version`.
     #[serde(default)]
     #[serde(alias = "registry_source")]
