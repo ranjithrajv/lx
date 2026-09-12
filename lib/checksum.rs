@@ -12,6 +12,22 @@ pub trait RawGetter {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>>;
 }
 
+/// Compute the SHA-512 of a file in chunks (streaming, low memory).
+pub fn sha512_file(path: &Path) -> Result<String> {
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open '{}'", path.display()))?;
+    let mut hasher = sha2::Sha512::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).context("failed to read file")?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
 /// Compute the SHA-256 of a file in chunks (streaming, low memory).
 pub fn sha256_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)

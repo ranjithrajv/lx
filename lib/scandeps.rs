@@ -29,7 +29,8 @@ pub struct ScanDepsArgs {
 
     /// Print a why-depends report: every non-essential shared-library need
     /// found, whether it's covered by package.yaml's `depends:`, and (when
-    /// resolvable locally via `dpkg -S`) the Debian package that owns it.
+    /// resolvable locally via the host's package manager) the package that
+    /// owns it.
     #[arg(long)]
     pub explain: bool,
 
@@ -223,10 +224,10 @@ pub fn run(args: ScanDepsArgs, token: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// Declared package names from a Debian relation field (`depends:`,
+/// Declared package names from a relation field (`depends:`,
 /// `recommends:`, ...), stripped of version constraints (`libfoo (>= 1.0)`
 /// -> `libfoo`) and alternatives (`a | b` -> `a`, `b`), lowercased for
-/// case-insensitive matching against `dpkg -S` output.
+/// case-insensitive matching against package-manager output.
 pub fn declared_package_names(relation: &str) -> std::collections::BTreeSet<String> {
     relation
         .split(',')
@@ -237,10 +238,11 @@ pub fn declared_package_names(relation: &str) -> std::collections::BTreeSet<Stri
 }
 
 /// `lx why-depends` (nfpm/Nix closure parity, minus a full closure graph):
-/// ties each non-essential shared-library need to the Debian package that
-/// owns it (best-effort via local `dpkg -S`) and flags whether that owner
-/// is covered by package.yaml's `depends:`, so declared-vs-actual runtime
-/// deps can be reviewed without walking the whole ELF graph by hand.
+/// ties each non-essential shared-library need to the owning package
+/// (best-effort via the host's local package manager) and flags whether
+/// that owner is covered by package.yaml's `depends:`, so
+/// declared-vs-actual runtime deps can be reviewed without walking the
+/// whole ELF graph by hand.
 fn print_why_depends(cfg: &PackageConfig, non_essential: &[&String]) {
     let declared = declared_package_names(&cfg.depends);
     println!(
@@ -250,7 +252,7 @@ fn print_why_depends(cfg: &PackageConfig, non_essential: &[&String]) {
     );
     let mut undeclared = Vec::new();
     for lib in non_essential {
-        match dpkg_owner(lib) {
+        match pkg_owner(lib) {
             Some(pkg) => {
                 let pkg_lc = pkg.to_ascii_lowercase();
                 if declared.contains(&pkg_lc) {
@@ -364,8 +366,8 @@ fn scan_one_arch(
             all_sonames.insert(lib.clone());
             if lx_lib::elfdeps::is_essential_libc_soname(lib) {
                 println!("    {lib}  (glibc/essential, usually omit from depends:)");
-            } else if let Some(pkg) = dpkg_owner(lib) {
-                println!("    {lib}  -> {pkg} (via local dpkg -S)");
+            } else if let Some(pkg) = pkg_owner(lib) {
+                println!("    {lib}  -> {pkg} (via local package manager)");
             } else {
                 println!("    {lib}");
             }
@@ -390,11 +392,25 @@ pub fn find_elf_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// Best-effort: the Debian package that locally owns `soname`, via
-/// `dpkg -S`. `None` when `dpkg` isn't on `PATH`, the library isn't
-/// installed on this host, or the lookup otherwise fails -- this is
-/// informational only, not authoritative for the target architecture/suite.
-pub fn dpkg_owner(soname: &str) -> Option<String> {
+/// Best-effort: the package that locally owns `soname`, auto-detecting the
+/// host's package manager (dpkg, rpm, or pacman). `None` when no supported
+/// package manager is on `PATH`, the library isn't installed on this host,
+/// or the lookup otherwise fails -- this is informational only, not
+/// authoritative for the target architecture/suite.
+pub fn pkg_owner(soname: &str) -> Option<String> {
+    // dpkg -S <soname> — Debian/Ubuntu
+    if let Some(owner) = pkg_owner_deb(soname) {
+        return Some(owner);
+    }
+    // rpm -q --whatprovides <soname> — Fedora/RHEL/openSUSE
+    if let Some(owner) = pkg_owner_rpm(soname) {
+        return Some(owner);
+    }
+    // pacman -Qo <resolved-path> — Arch/Manjaro
+    pkg_owner_pacman(soname)
+}
+
+fn pkg_owner_deb(soname: &str) -> Option<String> {
     let out = std::process::Command::new("dpkg")
         .args(["-S", soname])
         .output()
@@ -407,6 +423,324 @@ pub fn dpkg_owner(soname: &str) -> Option<String> {
     if pkg.is_empty() {
         None
     } else {
+        // Strip any :arch qualifier dpkg -S may report.
+        Some(pkg.split(':').next().unwrap_or(pkg).to_string())
+    }
+}
+
+fn pkg_owner_rpm(soname: &str) -> Option<String> {
+    let out = std::process::Command::new("rpm")
+        .args(["-q", "--whatprovides", soname])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let line = text.lines().next()?.trim();
+    // "no package provides <soname>" means no match.
+    if line.starts_with("no package provides") || line.is_empty() {
+        return None;
+    }
+    // rpm -q --whatprovides returns full NEVRA; strip to just the name.
+    // Epoch:name-version-release.arch → name
+    let name = line
+        .rsplit_once(':')
+        .map(|(_, after)| after) // after last ':'
+        .unwrap_or(line);
+    // Strip version-release.arch suffix: "name-1.2.3-1.fc39.x86_64" → "name"
+    let name = name.rsplit_once('-').map(|(n, _)| n).unwrap_or(name);
+    // Handle epoch: "1:name" → "name"
+    let name = name.split_once(':').map(|(_, n)| n).unwrap_or(name);
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
+}
+
+fn pkg_owner_pacman(soname: &str) -> Option<String> {
+    // Resolve the soname to a filesystem path via ldconfig.
+    let ldconfig = std::process::Command::new("ldconfig")
+        .args(["-p"])
+        .output()
+        .ok()?;
+    if !ldconfig.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&ldconfig.stdout);
+    let path = text
+        .lines()
+        .find(|line: &&str| {
+            // ldconfig -p format: "\tlibfoo.so.1 (libc6,x86-64) => /usr/lib/libfoo.so.1"
+            line.contains(soname) && line.contains("=>")
+        })
+        .and_then(|line: &str| line.split("=>").last())
+        .map(str::trim)
+        .map(str::to_string)?;
+
+    let out = std::process::Command::new("pacman")
+        .args(["-Qo", &path])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    // pacman -Qo output: "/usr/lib/libfoo.so.1 is owned by package 1.2.3-1"
+    let after = text.split("is owned by").last()?;
+    let pkg = after.split_whitespace().next()?;
+    if pkg.is_empty() {
+        None
+    } else {
         Some(pkg.to_string())
+    }
+}
+
+/// Detected host package manager for soname-to-package resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PkgMgr {
+    Dpkg,
+    Rpm,
+    Pacman,
+}
+
+/// Detect the host's package manager, if any.
+pub fn detect_pkg_mgr() -> Option<PkgMgr> {
+    if std::process::Command::new("dpkg")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        return Some(PkgMgr::Dpkg);
+    }
+    if std::process::Command::new("rpm")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        return Some(PkgMgr::Rpm);
+    }
+    if std::process::Command::new("pacman")
+        .arg("--version")
+        .output()
+        .is_ok()
+    {
+        return Some(PkgMgr::Pacman);
+    }
+    None
+}
+
+/// Cross-platform: installed version of a package, or None.
+pub fn pkg_installed_version(package: &str) -> Option<String> {
+    match detect_pkg_mgr()? {
+        PkgMgr::Dpkg => {
+            let out = std::process::Command::new("dpkg-query")
+                .args(["-W", "-f=${Version}", package])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let v = String::from_utf8(out.stdout).ok()?.trim().to_string();
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
+            }
+        }
+        PkgMgr::Rpm => {
+            let out = std::process::Command::new("rpm")
+                .args(["-q", "--queryformat", "%{VERSION}-%{RELEASE}", package])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let text = String::from_utf8(out.stdout).ok()?;
+            let line = text.trim().to_string();
+            if line.starts_with("not installed") || line.is_empty() {
+                None
+            } else {
+                Some(line)
+            }
+        }
+        PkgMgr::Pacman => {
+            let out = std::process::Command::new("pacman")
+                .args(["-Qi", package])
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let text = String::from_utf8(out.stdout).ok()?;
+            for line in text.lines() {
+                if let Some(v) = line.strip_prefix("Version         : ") {
+                    let v = v.trim().to_string();
+                    if !v.is_empty() {
+                        return Some(v);
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Cross-platform: runtime dependencies of an installed package.
+/// Returns bare package names (version constraints stripped).
+pub fn pkg_depends(package: &str) -> Vec<String> {
+    match detect_pkg_mgr() {
+        Some(PkgMgr::Dpkg) => {
+            let Ok(out) = std::process::Command::new("dpkg-query")
+                .args(["-W", "-f=${Depends}", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(field) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            crate::debs::parse_depends_field(&field)
+        }
+        Some(PkgMgr::Rpm) => {
+            let Ok(out) = std::process::Command::new("rpm")
+                .args(["-q", "--requires", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(text) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            text.lines()
+                .map(str::trim)
+                .filter(|l| {
+                    !l.is_empty()
+                        && !l.starts_with('/')
+                        && !l.starts_with("rpmlib(")
+                        && !l.starts_with("config(")
+                })
+                .map(|l| {
+                    // Strip version constraint: "libfoo >= 1.0" → "libfoo"
+                    l.split_whitespace().next().unwrap_or(l).to_string()
+                })
+                .collect()
+        }
+        Some(PkgMgr::Pacman) => {
+            let Ok(out) = std::process::Command::new("pacman")
+                .args(["-Qi", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(text) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            let mut in_deps = false;
+            let mut deps = Vec::new();
+            for line in text.lines() {
+                if line.starts_with("Depends On     : ") {
+                    let val = line.split_once(':').map(|(_, v)| v).unwrap_or("").trim();
+                    if val == "None" || val.is_empty() {
+                        return Vec::new();
+                    }
+                    // Depends On is space-separated on one line.
+                    for dep in val.split_whitespace() {
+                        // Strip version: "libfoo>=1.0" → "libfoo"
+                        let name = dep
+                            .split_once(['>', '<', '='])
+                            .map(|(n, _)| n)
+                            .unwrap_or(dep);
+                        if !name.is_empty() {
+                            deps.push(name.to_string());
+                        }
+                    }
+                    in_deps = true;
+                } else if in_deps && line.starts_with(' ') {
+                    // Continuation line (rare but possible).
+                    for dep in line.split_whitespace() {
+                        let name = dep
+                            .split_once(['>', '<', '='])
+                            .map(|(n, _)| n)
+                            .unwrap_or(dep);
+                        if !name.is_empty() {
+                            deps.push(name.to_string());
+                        }
+                    }
+                } else if in_deps {
+                    break;
+                }
+            }
+            deps
+        }
+        None => Vec::new(),
+    }
+}
+
+/// Cross-platform: list files owned by an installed package.
+pub fn pkg_files(package: &str) -> Vec<String> {
+    match detect_pkg_mgr() {
+        Some(PkgMgr::Dpkg) => {
+            let Ok(out) = std::process::Command::new("dpkg")
+                .args(["-L", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(text) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            text.lines().map(str::trim).map(String::from).collect()
+        }
+        Some(PkgMgr::Rpm) => {
+            let Ok(out) = std::process::Command::new("rpm")
+                .args(["-ql", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(text) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            text.lines().map(str::trim).map(String::from).collect()
+        }
+        Some(PkgMgr::Pacman) => {
+            let Ok(out) = std::process::Command::new("pacman")
+                .args(["-Ql", package])
+                .output()
+            else {
+                return Vec::new();
+            };
+            if !out.status.success() {
+                return Vec::new();
+            }
+            let Ok(text) = String::from_utf8(out.stdout) else {
+                return Vec::new();
+            };
+            // pacman -Ql output: "package /path/to/file"
+            text.lines()
+                .filter_map(|line| {
+                    line.split_once(' ')
+                        .map(|(_, path)| path.trim().to_string())
+                })
+                .collect()
+        }
+        None => Vec::new(),
     }
 }

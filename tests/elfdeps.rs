@@ -10,9 +10,12 @@ fn rejects_non_elf_input() {
 
 #[test]
 fn essential_libc_sonames_are_recognized() {
+    // Well-known glibc sonames (static fast-path).
     assert!(is_essential_libc_soname("libc.so.6"));
     assert!(is_essential_libc_soname("ld-linux-x86-64.so.2"));
+    // Non-libc libraries must not be flagged as essential.
     assert!(!is_essential_libc_soname("libssl.so.3"));
+    assert!(!is_essential_libc_soname("libfoo.so.999"));
 }
 
 /// A real, host-provided dynamically-linked binary must report at
@@ -34,5 +37,19 @@ fn real_dynamically_linked_binary_reports_libc() {
     assert!(
         libs.iter().any(|l| l.starts_with("libc.so")),
         "expected libc among {libs:?}"
+    );
+}
+
+/// The dynamic libc detection must find at least one libc package on
+/// this host (glibc, musl, etc.) and the essential check must agree
+/// with the static list for well-known sonames.
+#[test]
+fn dynamic_libc_detection_finds_a_package() {
+    let libs = lx_lib::elfdeps::detect_libc_packages();
+    eprintln!("detected libc packages: {libs:?}");
+    // On any real Linux host we expect at least one libc package.
+    assert!(
+        !libs.is_empty(),
+        "expected at least one libc package (glibc/musl) on this host"
     );
 }

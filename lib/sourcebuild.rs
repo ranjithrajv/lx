@@ -446,9 +446,10 @@ fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
 }
 
 /// shlibdeps analogue: staged ELFs' DT_NEEDED sonames resolved to owning
-/// host packages via `dpkg -S`. Essential/libc sonames are skipped (they
-/// come with every base install); empty result falls back to the config's
-/// `depends:` and finally `libc6` (bash falls back to `libc6` too).
+/// host packages via the host's package manager (dpkg, rpm, or pacman).
+/// Essential/libc sonames are skipped (they come with every base install);
+/// empty result falls back to the config's `depends:` and finally `libc6`
+/// (bash falls back to `libc6` too).
 fn compute_depends(stage: &Path, cfg: &PackageConfig) -> String {
     let mut pkgs = BTreeSet::new();
     let elfs = lx_lib::scandeps::find_elf_files(stage).unwrap_or_default();
@@ -462,9 +463,8 @@ fn compute_depends(stage: &Path, cfg: &PackageConfig) -> String {
             if lx_lib::elfdeps::is_essential_libc_soname(&soname) {
                 continue;
             }
-            if let Some(pkg) = lx_lib::scandeps::dpkg_owner(&soname) {
-                // Strip any :arch qualifier dpkg -S may report.
-                pkgs.insert(pkg.split(':').next().unwrap_or(&pkg).to_string());
+            if let Some(pkg) = lx_lib::scandeps::pkg_owner(&soname) {
+                pkgs.insert(pkg.to_string());
             }
         }
     }

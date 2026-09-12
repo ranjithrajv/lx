@@ -59,10 +59,20 @@ fn declared_package_names_of_empty_string_is_empty() {
 }
 
 #[test]
-fn dpkg_owner_is_none_when_dpkg_unavailable_or_no_match() {
-    // This dev environment may or may not have `dpkg`; either way, a
-    // nonsense soname must never resolve to a package.
-    assert!(dpkg_owner("libtotally-made-up-soname.so.999").is_none());
+fn pkg_owner_returns_none_for_nonsense_soname() {
+    // A nonsense soname must never resolve to a package, regardless of
+    // which package manager (dpkg, rpm, pacman) is present on the host.
+    assert!(pkg_owner("libtotally-made-up-soname.so.999").is_none());
+}
+
+#[test]
+fn detect_pkg_mgr_returns_a_known_variant() {
+    // This test host must have at least one of dpkg/rpm/pacman.
+    let mgr = detect_pkg_mgr();
+    assert!(
+        mgr.is_some(),
+        "expected at least one of dpkg, rpm, or pacman on PATH"
+    );
 }
 
 #[cfg(unix)]
@@ -90,4 +100,39 @@ fn find_elf_files_follows_a_symlink_to_an_elf_file_without_crashing() {
     assert!(names.contains(&"real-binary".to_string()));
     assert!(names.contains(&"linked-binary".to_string()));
     assert_eq!(found.len(), 2, "{names:?}");
+}
+
+#[test]
+fn pkg_installed_version_returns_none_for_nonsense() {
+    assert!(pkg_installed_version("totally-made-up-pkg-999").is_none());
+}
+
+#[test]
+fn pkg_depends_returns_vec_for_nonsense() {
+    // Nonexistent package should return empty vec, not panic.
+    let deps = pkg_depends("totally-made-up-pkg-999");
+    assert!(deps.is_empty());
+}
+
+#[test]
+fn pkg_files_returns_vec_for_nonsense() {
+    let files = pkg_files("totally-made-up-pkg-999");
+    assert!(files.is_empty());
+}
+
+#[test]
+fn pkg_installed_version_returns_some_for_known_pkg() {
+    let mgr = detect_pkg_mgr().expect("no package manager found");
+    // Find a package that must be installed on any real system.
+    let probe = match mgr {
+        PkgMgr::Dpkg => "coreutils",
+        PkgMgr::Rpm => "coreutils",
+        PkgMgr::Pacman => "coreutils",
+    };
+    // If the probe isn't installed either (e.g. minimal container), skip.
+    let Some(v) = pkg_installed_version(probe) else {
+        eprintln!("skipping: {probe} not installed on this host");
+        return;
+    };
+    assert!(!v.is_empty(), "version must not be empty");
 }

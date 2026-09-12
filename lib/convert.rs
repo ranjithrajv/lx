@@ -121,6 +121,12 @@ pub fn run(args: ConvertArgs) -> Result<()> {
     let install_tree = tmp.path().join("install_tree");
     extract_install_tree(source_format, &args.input, &install_tree)?;
 
+    // Scan ELF files in the install tree and fill in missing deps.
+    let meta = scan_and_fill_deps(meta, &install_tree)?;
+
+    // Map dependency syntax from source format to target format.
+    let meta = convert_deps_syntax(meta, source_format, &target);
+
     // Apply overrides. Bind resolved values first so we don't partially
     // move `args` (which is borrowed later by `build_target`).
     let package_name = args.package_name.clone().unwrap_or(meta.package);
@@ -261,41 +267,27 @@ fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, Str
 }
 
 fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
+    let input_s = input.to_string_lossy();
     let name = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{NAME}", &input.to_string_lossy()])
+        .args(["-qp", "--queryformat", "%{NAME}", &input_s])
         .output()
         .context("rpm not found — install rpm to convert from .rpm")?;
     let version = Command::new("rpm")
-        .args([
-            "-qp",
-            "--queryformat",
-            "%{VERSION}-%{RELEASE}",
-            &input.to_string_lossy(),
-        ])
+        .args(["-qp", "--queryformat", "%{VERSION}-%{RELEASE}", &input_s])
         .output()
         .context("rpm query failed")?;
     let arch = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{ARCH}", &input.to_string_lossy()])
+        .args(["-qp", "--queryformat", "%{ARCH}", &input_s])
         .output()
         .context("rpm query failed")?;
     let maintainer = Command::new("rpm")
-        .args([
-            "-qp",
-            "--queryformat",
-            "%{VENDOR}",
-            &input.to_string_lossy(),
-        ])
+        .args(["-qp", "--queryformat", "%{VENDOR}", &input_s])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
         .unwrap_or_default();
     let description = Command::new("rpm")
-        .args([
-            "-qp",
-            "--queryformat",
-            "%{SUMMARY}",
-            &input.to_string_lossy(),
-        ])
+        .args(["-qp", "--queryformat", "%{SUMMARY}", &input_s])
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
@@ -305,6 +297,28 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         bail!("rpm query failed for '{}'", input.display());
     }
 
+    // Extract Requires: (package-level runtime dependencies, with version constraints).
+    let depends = Command::new("rpm")
+        .args(["-qp", "--queryformat", "%{REQUIRES}\n", &input_s])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|text| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| {
+                    !line.is_empty()
+                        && !line.starts_with('/')
+                        && !line.starts_with("rpmlib(")
+                        && !line.starts_with("config(")
+                        && !line.starts_with("interpreter(")
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+
     let scripts = extract_rpm_scripts(input)?;
 
     Ok(SourceMeta {
@@ -313,7 +327,7 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         arch: String::from_utf8_lossy(&arch.stdout).trim().to_string(),
         maintainer: maintainer.trim().to_string(),
         description: description.trim().to_string(),
-        depends: String::new(),
+        depends,
         distribution: "el9".to_string(),
         scripts,
     })
@@ -362,9 +376,17 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
         }
     }
     let mut fields = BTreeMap::new();
+    // Collect all `depend` lines (Arch PKGBUILD dependencies).
+    let mut depends = Vec::new();
     for line in pkginfo.lines() {
         if let Some((k, v)) = line.split_once(" = ") {
-            fields.insert(k.trim(), v.trim());
+            let k = k.trim();
+            let v = v.trim();
+            if k == "depend" && !v.is_empty() {
+                depends.push(v.to_string());
+            } else {
+                fields.insert(k, v);
+            }
         }
     }
     let get = |k: &str| fields.get(k).copied().unwrap_or("").to_string();
@@ -374,10 +396,174 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
         arch: get("arch"),
         maintainer: get("packager"),
         description: get("pkgdesc"),
-        depends: String::new(),
+        depends: depends.join(", "),
         distribution: "arch".to_string(),
         scripts: BTreeMap::new(),
     })
+}
+
+/// Scan ELF files in the install tree and fill in missing `depends:`.
+/// If the source package left deps empty (common for rpm/arch conversions),
+/// populate from non-essential sonames resolved via `pkg_owner`.
+/// If deps exist, verify completeness and warn on gaps.
+fn scan_and_fill_deps(mut meta: SourceMeta, install_tree: &Path) -> Result<SourceMeta> {
+    let elf_files = match crate::scandeps::find_elf_files(install_tree) {
+        Ok(f) => f,
+        Err(_) => return Ok(meta),
+    };
+    if elf_files.is_empty() {
+        return Ok(meta);
+    }
+
+    let mut scanned_sonames = std::collections::BTreeSet::new();
+    for elf_path in &elf_files {
+        let bytes = match fs::read(elf_path) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        if let Ok(libs) = lx_lib::elfdeps::needed_libraries(&bytes) {
+            for lib in &libs {
+                if !lx_lib::elfdeps::is_essential_libc_soname(lib) {
+                    scanned_sonames.insert(lib.clone());
+                }
+            }
+        }
+    }
+
+    if scanned_sonames.is_empty() {
+        return Ok(meta);
+    }
+
+    // Resolve non-essential sonames to package names via the host's package manager.
+    let mut resolved_pkgs = std::collections::BTreeSet::new();
+    for soname in &scanned_sonames {
+        if let Some(pkg) = crate::scandeps::pkg_owner(soname) {
+            // Strip :arch qualifier and version constraints.
+            let pkg = pkg.split(':').next().unwrap_or(&pkg).to_string();
+            resolved_pkgs.insert(pkg);
+        }
+    }
+
+    if meta.depends.trim().is_empty() && !resolved_pkgs.is_empty() {
+        // Source had no deps — fill from ELF scanning.
+        meta.depends = resolved_pkgs.iter().cloned().collect::<Vec<_>>().join(", ");
+        println!("  ℹ filled depends from ELF scanning: {}", meta.depends);
+    } else if !meta.depends.is_empty() && !resolved_pkgs.is_empty() {
+        // Source had deps — verify completeness and warn on gaps.
+        let declared = crate::scandeps::declared_package_names(&meta.depends);
+        let missing: Vec<&String> = resolved_pkgs
+            .iter()
+            .filter(|p| !declared.contains(&p.to_ascii_lowercase()))
+            .collect();
+        if !missing.is_empty() {
+            println!(
+                "  ⚠ ELF needs packages not in source depends: {}",
+                missing
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+
+    Ok(meta)
+}
+
+/// Convert dependency syntax from source format to target format.
+///
+/// Arch PKGBUILD uses `name>=version` (no spaces), RPM uses
+/// `name >= version` (spaces, >=/>/</<=), and Debian uses
+/// `name (>= version)` (parenthesized). This function normalizes
+/// every source format into the target format's expected syntax.
+fn convert_deps_syntax(mut meta: SourceMeta, source: &str, target: &str) -> SourceMeta {
+    if meta.depends.is_empty() || source == target {
+        return meta;
+    }
+    let deps: Vec<String> = meta
+        .depends
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|dep| map_dep_syntax(dep, source, target))
+        .collect();
+    meta.depends = deps.join(", ");
+    meta
+}
+
+/// Map a single dependency clause from one format's syntax to another.
+fn map_dep_syntax(dep: &str, source: &str, target: &str) -> String {
+    // Parse into (name, constraint) regardless of source format.
+    let (name, constraint) = match source {
+        "arch" => parse_arch_dep(dep),
+        "rpm" => parse_rpm_dep(dep),
+        "deb" => parse_deb_dep(dep),
+        _ => (dep.to_string(), None),
+    };
+    if name.is_empty() {
+        return dep.to_string();
+    }
+    match target {
+        "deb" => match constraint {
+            Some(c) => format!("{name} ({c})"),
+            None => name,
+        },
+        "rpm" => match constraint {
+            Some(c) => format!("{name} {c}"),
+            None => name,
+        },
+        "arch" => match constraint {
+            Some(c) => format!("{name}{c}"),
+            None => name,
+        },
+        _ => dep.to_string(),
+    }
+}
+
+/// Parse an Arch-style dep: `name>=1.0`, `name>1.0`, `name=1.0`, or bare `name`.
+fn parse_arch_dep(dep: &str) -> (String, Option<String>) {
+    // Split on the first comparison operator.
+    for op in &[">=", "<=", ">", "<", "="] {
+        if let Some(idx) = dep.find(op) {
+            let name = dep[..idx].trim().to_string();
+            let ver = dep[idx..].trim().to_string();
+            return (name, Some(ver));
+        }
+    }
+    (dep.trim().to_string(), None)
+}
+
+/// Parse an RPM-style dep: `name >= 1.0`, `name >= 1.0`, bare `name`.
+fn parse_rpm_dep(dep: &str) -> (String, Option<String>) {
+    for op in &[" >= ", " <= ", " > ", " < ", " = ", "!=", "="] {
+        if let Some(idx) = dep.find(op) {
+            let name = dep[..idx].trim().to_string();
+            let ver = dep[idx..].trim().to_string();
+            return (name, Some(ver));
+        }
+    }
+    (dep.trim().to_string(), None)
+}
+
+/// Parse a Debian-style dep: `name (>= 1.0)`, `name`, `name | other`.
+fn parse_deb_dep(dep: &str) -> (String, Option<String>) {
+    // Take only the first alternative (before '|').
+    let dep = dep.split('|').next().unwrap_or(dep).trim();
+    if let Some(idx) = dep.find('(') {
+        let name = dep[..idx].trim().to_string();
+        let constraint = dep[idx..]
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim()
+            .to_string();
+        if constraint.is_empty() {
+            (name, None)
+        } else {
+            (name, Some(constraint))
+        }
+    } else {
+        (dep.trim().to_string(), None)
+    }
 }
 
 /// Extract the install tree (files that go into the package) to a directory.
@@ -626,5 +812,93 @@ fn apply_scripts_to_config(
             }
         }
         _ => {} // arch: no script carry-over (arch uses .INSTALL, set separately)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_arch_dep_bare_name() {
+        let (name, ver) = parse_arch_dep("glibc");
+        assert_eq!(name, "glibc");
+        assert!(ver.is_none());
+    }
+
+    #[test]
+    fn parse_arch_dep_with_version() {
+        let (name, ver) = parse_arch_dep("glibc>=2.17");
+        assert_eq!(name, "glibc");
+        assert_eq!(ver.as_deref(), Some(">=2.17"));
+    }
+
+    #[test]
+    fn parse_rpm_dep_bare_name() {
+        let (name, ver) = parse_rpm_dep("glibc");
+        assert_eq!(name, "glibc");
+        assert!(ver.is_none());
+    }
+
+    #[test]
+    fn parse_rpm_dep_with_version() {
+        let (name, ver) = parse_rpm_dep("glibc >= 2.17");
+        assert_eq!(name, "glibc");
+        assert_eq!(ver.as_deref(), Some(">= 2.17"));
+    }
+
+    #[test]
+    fn parse_deb_dep_bare_name() {
+        let (name, ver) = parse_deb_dep("libc6");
+        assert_eq!(name, "libc6");
+        assert!(ver.is_none());
+    }
+
+    #[test]
+    fn parse_deb_dep_with_version() {
+        let (name, ver) = parse_deb_dep("libc6 (>= 2.31)");
+        assert_eq!(name, "libc6");
+        assert_eq!(ver.as_deref(), Some(">= 2.31"));
+    }
+
+    #[test]
+    fn parse_deb_dep_strips_alternatives() {
+        let (name, ver) = parse_deb_dep("libssl3 (>= 3.0) | libssl1.1");
+        assert_eq!(name, "libssl3");
+        assert_eq!(ver.as_deref(), Some(">= 3.0"));
+    }
+
+    #[test]
+    fn map_dep_arch_to_deb() {
+        assert_eq!(
+            map_dep_syntax("glibc>=2.17", "arch", "deb"),
+            "glibc (>=2.17)"
+        );
+    }
+
+    #[test]
+    fn map_dep_rpm_to_deb() {
+        assert_eq!(
+            map_dep_syntax("glibc >= 2.17", "rpm", "deb"),
+            "glibc (>= 2.17)"
+        );
+    }
+
+    #[test]
+    fn map_dep_deb_to_rpm() {
+        assert_eq!(
+            map_dep_syntax("libc6 (>= 2.31)", "deb", "rpm"),
+            "libc6 >= 2.31"
+        );
+    }
+
+    #[test]
+    fn map_dep_arch_to_rpm() {
+        assert_eq!(map_dep_syntax("glibc>=2.17", "arch", "rpm"), "glibc >=2.17");
+    }
+
+    #[test]
+    fn map_dep_bare_passthrough() {
+        assert_eq!(map_dep_syntax("glibc", "arch", "deb"), "glibc");
     }
 }

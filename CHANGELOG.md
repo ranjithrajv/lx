@@ -59,6 +59,22 @@
   `RegistrySource` trait in `lib/plugins/registry/` — adding a new ecosystem
   is implementing the trait and registering it.
 
+### Five new features for goreleaser/cargo-dist/*2deb parity
+
+1. **Checksum sidecars** — `.sha256` and `.sha512` files generated alongside
+   each package artifact for integrity verification.
+2. **Shell installer** — `<package>-install.sh` script auto-generated per
+   build. Detects OS/distro/arch, downloads matching package, verifies
+   checksum, installs via dpkg/rpm/pacman. `curl | sh` ready.
+3. **Cross-compilation** — `--cross-target <ARCH>` flag builds for a
+   different architecture than the host. Auto-enables musl-static linking.
+4. **Cosign signing** — `--cosign` flag signs packages with Sigstore
+   keyless signing (requires cosign on PATH + OIDC token).
+5. **Dependency mapping** — auto-infers `depends:` from registry package
+   dependency files (package.json, requirements.txt, Cargo.toml, etc.)
+   using per-ecosystem mapping tables. Covers npm, python, gem, cargo,
+   composer, cpan, hex, and more.
+
 ### Meson build-system plugin
 
 - New `build_system: meson` plugin for projects using the Meson build system

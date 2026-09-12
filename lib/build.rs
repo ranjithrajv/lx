@@ -248,6 +248,17 @@ pub struct BuildArgs {
     /// populates the cache as a baseline.
     #[arg(long, requires = "artifact_cache_dir")]
     pub verify: bool,
+
+    /// Sign built packages with cosign (Sigstore keyless signing).
+    /// Requires cosign on PATH and an OIDC token (e.g., in GitHub Actions).
+    #[arg(long)]
+    pub cosign: bool,
+
+    /// Cross-compile target architecture (e.g., "arm64", "riscv64").
+    /// Builds for this architecture even on a different host. Uses musl
+    /// static linking when the build system supports it.
+    #[arg(long, value_name = "ARCH")]
+    pub cross_target: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -479,6 +490,20 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             cfg.description = payload.description;
         }
 
+        // Feature 5: Auto-map registry dependencies to system packages.
+        // If the user didn't specify depends:, try to infer them from the
+        // fetched package's dependency files.
+        if cfg.depends.trim().is_empty() {
+            if let Some(mapped) = lx_lib::depmap::infer_deps_from_dir(
+                &registry_source_name,
+                &payload.files_dir,
+                &effective_format,
+            ) {
+                println!("  mapped depends: {mapped}");
+                cfg.depends = mapped;
+            }
+        }
+
         // Route through local packaging with the fetched payload directory.
         cfg.local_payload = payload.files_dir.to_string_lossy().to_string();
         cfg.artifact_format = "raw".to_string();
@@ -647,6 +672,17 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         })?;
         println!("Building for host architecture: {detected} (--host; native)");
         archs = vec![detected];
+    }
+
+    // Feature 3: Cross-compilation target. Overrides the architecture list
+    // and enables musl static linking for reproducible multi-arch builds.
+    if let Some(ref target) = args.cross_target {
+        println!("Cross-compiling for: {target}");
+        archs = vec![target.clone()];
+        if !cfg.musl {
+            cfg.musl = true;
+            println!("  enabled musl-static for cross-compilation");
+        }
     }
 
     // Resolve one asset per architecture. `source: custom` assets are already
@@ -884,6 +920,31 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             _ => crate::source::generate(&args.output, &pkg)?,
         }
     }
+
+    // Feature 1: Checksum sidecars (.sha256, .sha512) for integrity verification.
+    lx_lib::checksum_sidecar::generate_checksum_sidecars(&args.output)?;
+
+    // Feature 2: Shell installer script (curl | sh).
+    lx_lib::shell_installer::generate_shell_installer(
+        &args.output,
+        &cfg.package_name,
+        &release.tag_name,
+    )?;
+
+    // Feature 4: Cosign signing (Sigstore keyless).
+    if args.cosign {
+        for entry in std::fs::read_dir(&args.output)? {
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("sig") {
+                continue;
+            }
+            let name = path.file_name().unwrap_or_default().to_string_lossy();
+            if lx_lib::checksum_sidecar::is_package_file(&name) {
+                lx_lib::cosign::cosign_sign_blob(&path)?;
+            }
+        }
+    }
+
     Ok(())
 }
 

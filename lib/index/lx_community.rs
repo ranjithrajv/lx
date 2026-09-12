@@ -377,6 +377,8 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
             verify: false,
             sandbox: false,
             sbom: false,
+            cosign: false,
+            cross_target: None,
         },
         None,
     )?;

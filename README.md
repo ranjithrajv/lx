@@ -540,6 +540,28 @@ variants during auto-discovery. `compute_depends()` omits the `libc6`
 fallback for musl binaries. The consumer client (`lx get install`) falls
 back to a `+musl_{arch}.deb` asset when no distro-specific build exists.
 
+**`--cross-target <ARCH>`** — cross-compile for a different architecture
+(e.g., `--cross-target arm64` on an amd64 host). Automatically enables
+musl-static linking for reproducible multi-arch builds.
+
+**`--cosign`** — sign built packages with cosign (Sigstore keyless signing).
+Requires `cosign` on PATH and an OIDC token (e.g., in GitHub Actions).
+Produces `.sig` signature files alongside each artifact.
+
+**Checksum sidecars** — every build automatically generates `.sha256` and
+`.sha512` checksum files alongside each package artifact for integrity
+verification.
+
+**Shell installer** — every build generates a `<package>-install.sh` script
+that detects the user's OS/distro/arch, downloads the matching package,
+verifies its checksum, and installs it via the native package manager
+(`dpkg`/`rpm`/`pacman`). Usage: `curl -sSL <url>/install.sh | sh`.
+
+**Dependency mapping** — when using `registry_source` without specifying
+`depends:`, lx auto-infers system package dependencies from the registry
+package's dependency files (package.json, requirements.txt, Cargo.toml, etc.)
+using per-ecosystem mapping tables.
+
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter
 `package.yaml` (makedeb-orphan migration path). Guesses are commented for
 review: the `github_repo` guess (loud `FIXME` when the AUR URL isn't
