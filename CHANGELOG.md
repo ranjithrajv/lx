@@ -57,6 +57,13 @@
   the `RegistrySource` trait in `lib/plugins/registry/` — adding a new
   ecosystem is implementing the trait and registering it.
 
+### Meson build-system plugin
+
+- New `build_system: meson` plugin for projects using the Meson build system
+  (GNOME, systemd-adjacent, many C/C++ projects). Recognizes `meson.build`,
+  invokes `meson setup` / `meson compile` / `meson install --destdir`. Supports
+  musl-static builds via `--cross-file=musl`. BuildSystem count: 4 → 5.
+
 ### Musl-static builds for old-distro portability
 
 - `musl: true` in package.yaml produces a musl-static binary with no

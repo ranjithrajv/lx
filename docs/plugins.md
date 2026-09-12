@@ -4,7 +4,7 @@
 **Status:** Implemented — 4 independent plugin dimensions:
 * **3× Packager:** `deb` + `rpm` + `arch`
 * **7× ForgeSource:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
-* **4× BuildSystem:** `cmake` + `cargo` + `go` + `custom`
+* **5× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `custom`
 * **9× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `go` + `nuget` + `maven` + `composer` + `cpan`
 
 `lx` builds Linux packages from many kinds of upstream. The original
@@ -18,7 +18,7 @@ repo root, but adds three more dimensions:
 
 * **Packager plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
 * **ForgeSource plugins** (`lib/plugins/forge/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover **what** is available (releases, assets, versions)
-* **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,custom}.rs`) → compile source tree into install tree
+* **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,meson,custom}.rs`) → compile source tree into install tree
 * **RegistrySource plugins** (`lib/plugins/registry/{npm,python,gem,cargo,go,nuget,maven,composer,cpan}.rs`) → fetch **specific files** from language package registries
 
 All are stateless, registered statically, and share the same

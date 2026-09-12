@@ -970,9 +970,9 @@ impl PackageConfig {
         }
         if self.is_source_mode() {
             match self.build_system.trim().to_ascii_lowercase().as_str() {
-                "" | "cmake" | "cargo" | "go" | "custom" => {}
+                "" | "cmake" | "cargo" | "go" | "meson" | "custom" => {}
                 other => bail!(
-                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, custom)"
+                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, meson, custom)"
                 ),
             }
             if self.effective_build_system() == "custom" && self.install_commands.is_empty() {

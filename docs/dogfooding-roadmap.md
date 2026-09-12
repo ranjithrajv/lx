@@ -21,6 +21,14 @@ repology index (what ships where, what's outdated)
         ├─→ lx init --from        → prefilled recipe scaffolds
         ├─→ lx upgrade --all      → system-wide freshness + migration targets
         └─→ lx validate            → gap-impact warnings on recipes
+
+elfdeps / pkg_owner (what binaries actually need at runtime)
+        │
+        ├─→ lx build              → auto-fill depends: (source: done, binary: next)
+        ├─→ lx validate           → pre-flight dep correctness gate
+        ├─→ lx convert            → fill missing deps (rpm/arch)
+        ├─→ lx show               → declared vs actual dep comparison
+        └─→ lx index install      → pre-flight missing-lib warning
 ```
 
 Each command stops operating in isolation. They all consume the same
@@ -206,6 +214,111 @@ $ lx validate ./neovim.yaml
 
 ---
 
+## 7. `lx scan-deps` / `elfdeps` → cross-command dependency correctness
+
+**Status:** `lx scan-deps` implemented. `elfdeps` + `pkg_owner` (cross-platform:
+dpkg/rpm/pacman) + dynamic libc detection. Currently only dogfooded by `lx build`
+source mode (`sourcebuild::compute_depends`).
+
+The ELF dependency scanner is the **ground truth** for what a binary actually
+needs at runtime. Every other command that touches `depends:` should converge
+on it.
+
+```
+elfdeps (DT_NEEDED parsing, no ldd/objdump)
+    │
+    ├─→ lx build source mode     → auto-fill depends: (done)
+    ├─→ lx build binary repack   → auto-fill + advisory warn
+    ├─→ lx validate              → pre-flight dep correctness gate
+    ├─→ lx convert               → fill missing deps (rpm/arch get empty deps today)
+    ├─→ lx show                  → "ELF needs" section vs dpkg-recorded deps
+    └─→ lx index install         → pre-flight: warn on missing host libs
+```
+
+### 7a. `lx build` binary repack → auto-fill + advisory warn
+
+**What happens today:** Binary repacks use `cfg.depends` from `package.yaml`
+as-is. If the user leaves `depends:` empty, the package ships with no runtime
+dependencies — broken install guaranteed.
+
+**Dogfooding path:**
+
+- After extraction (build.rs ~line 1770), scan `binary_dir` ELF files via
+  `elfdeps::needed_libraries()`.
+- If `cfg.depends` is empty, auto-populate from non-essential sonames resolved
+  via `pkg_owner` — same logic source mode already uses.
+- If `cfg.depends` is non-empty, advisory-warn when scanned sonames are not
+  covered. Fail-closed with `--strict`.
+- Insertion point: before `plugin.build()`, inside `build_one`.
+
+### 7b. `lx validate` → pre-flight dependency correctness gate
+
+**What happens today:** `validate` checks that assets exist and patterns
+resolve. It never inspects `depends:` — a recipe with wrong/empty deps
+validates clean.
+
+**Dogfooding path:**
+
+- After asset resolution (validate.rs ~line 120), download each arch asset,
+  extract, scan ELF files.
+- Compare non-essential sonames against `cfg.depends` via
+  `declared_package_names()`.
+- Output:
+  ```
+  ✓ recipe resolves against eza release v0.20.0
+  ⚠ depends: declares [libgit2.so.15] but binary needs [libssh2.so.1]
+    → add libssh2-1 to depends:
+  ```
+- New flag: `--check-deps` (opt-in initially, default later).
+
+### 7c. `lx convert` → fill missing deps for rpm/arch
+
+**What happens today:** `convert.rs` carries `depends` verbatim from the
+source package. For RPM (line 316) and Arch (line 377) conversions, `depends`
+is always **empty** — converted packages ship with zero runtime dependencies.
+
+**Dogfooding path:**
+
+- After `extract_install_tree` (convert.rs ~line 122), scan ELF files in the
+  install tree.
+- Auto-populate `depends` when the source left it empty (rpm/arch path).
+- Cross-verify when the source provided deps (deb→rpm where naming
+  conventions differ).
+- Insertion point: before `build_target`, populate the `PackageConfig.depends`
+  field.
+
+### 7d. `lx show` → "ELF needs" section
+
+**What happens today:** `show` displays the dpkg-recorded `Depends:` field
+only. No comparison against what the binary actually needs.
+
+**Dogfooding path:**
+
+- After `dpkg_depends` display (show.rs ~line 49), read installed ELF files
+  via `dpkg -L <pkg>`, scan with `elfdeps::needed_libraries()`.
+- Add section:
+  ```
+  depends:    libgit2.so.15, libssh2.so.1  (dpkg)
+  elf_needs:  libgit2.so.15, libssh2.so.1, libcrypto.so.3  (scanned)
+  ```
+- Discrepancies are highlighted: declared-but-not-needed (bloat) and
+  needed-but-not-declared (broken install risk).
+
+### 7e. `lx index install` → pre-flight missing-lib warning
+
+**What happens today:** `lx index install` fetches a prebuilt `.deb` and
+installs it. No check that the host has the required shared libraries.
+
+**Dogfooding path:**
+
+- Before or after installing, scan the `.deb`'s ELF files.
+- Check each non-essential soname against installed packages via `pkg_owner`.
+- Warn: "this package needs `libfoo.so.1` — not found on this host."
+- Insertion point: in `lx_community.rs` install path (~line 210-281),
+  after extracting the prebuilt.
+
+---
+
 ## Implementation phases
 
 ### Phase 1 (done)
@@ -241,6 +354,15 @@ $ lx validate ./neovim.yaml
 - `lx validate` gap-impact warnings
 - Recipe-index CI cross-referenced against repology for priority scoring
 
+### Phase 5 (scan-deps dogfooding)
+- `lx build` binary repack: auto-fill empty `depends:` from ELF scanning;
+  advisory-warn on mismatch with declared deps
+- `lx validate --check-deps`: pre-flight gate comparing declared `depends:`
+  against actual ELF `DT_NEEDED` sonames
+- `lx convert`: fill missing deps for rpm/arch conversions (currently empty)
+- `lx show`: add "ELF needs" section showing scanned vs dpkg-recorded deps
+- `lx index install`: pre-flight warn when host lacks required shared libs
+
 ---
 
 ## Data flow
@@ -258,8 +380,27 @@ lx search ─── --distro enrichment (per-hit API lookup + cache)
         │
         ▼
 future: lx init / lx go-native / lx upgrade / lx validate
+
+────────────────────────────────────────────────────────────────
+
+elfdeps (DT_NEEDED parsing, natively via `object` crate)
+pkg_owner (dpkg / rpm / pacman, auto-detected)
+detect_libc_packages (dynamic libc detection, OnceLock-cached)
+        │
+        ▼
+lx build source mode  ─── auto-fill depends: (done)
+lx build binary repack ── auto-fill + advisory warn
+lx validate            ── pre-flight dep correctness gate
+lx convert             ── fill missing deps (rpm/arch)
+lx show                ── "ELF needs" vs dpkg-recorded deps
+lx index install       ── pre-flight: warn on missing host libs
 ```
 
-The cache is the key enabler: repology's 1 req/s rate limit makes live
-API calls impractical for interactive use. The local JSON cache (refreshed
-on `lx index update`) lets every command read distro metadata instantly.
+The cache is the key enabler for repology: repology's 1 req/s rate limit
+makes live API calls impractical for interactive use. The local JSON cache
+(refreshed on `lx index update`) lets every command read distro metadata
+instantly.
+
+For scan-deps, the key enabler is `OnceLock`-cached `detect_libc_packages()`
+— the package-manager query runs once per process, then every
+`is_essential_libc_soname()` check is a hash-set lookup.

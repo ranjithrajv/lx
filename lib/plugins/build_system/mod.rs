@@ -15,6 +15,7 @@ pub mod cargo;
 pub mod cmake;
 pub mod custom;
 pub mod go;
+pub mod meson;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -60,6 +61,7 @@ pub fn all_build_systems() -> Vec<Box<dyn BuildSystem>> {
         Box::new(cmake::CmakeBuildSystem),
         Box::new(cargo::CargoBuildSystem),
         Box::new(go::GoBuildSystem),
+        Box::new(meson::MesonBuildSystem),
         Box::new(custom::CustomBuildSystem),
     ]
 }

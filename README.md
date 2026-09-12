@@ -26,7 +26,7 @@ editing the core pipeline:
 |---|---|---|---|
 | **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
 | **ForgeSource** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
-| **BuildSystem** | Compile source tree | 4 (cmake, cargo, go, custom) | `build_system:` |
+| **BuildSystem** | Compile source tree | 5 (cmake, cargo, go, meson, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 9 (npm, python, gem, cargo, go, nuget, maven, composer, cpan) | `registry_source:` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
