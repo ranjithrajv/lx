@@ -154,8 +154,10 @@ pub fn render_control(
     let relations = cfg.effective_relations("deb").render();
     let homepage = super::resolve_homepage(cfg);
     let extra_fields = super::render_extra_fields(&cfg.fields);
-    // Append arch variant to architecture (e.g. "amd64v3") when set.
-    let arch = if cfg.effective_arch_variant().is_empty() {
+    // Determine architecture: explicit override > arch variant > job arch.
+    let arch = if cfg.effective_architecture() == "all" || cfg.effective_architecture() == "any" {
+        cfg.effective_architecture()
+    } else if cfg.effective_arch_variant().is_empty() {
         job.arch.to_string()
     } else {
         format!("{}{}", job.arch, cfg.effective_arch_variant())

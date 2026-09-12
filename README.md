@@ -562,6 +562,18 @@ verifies its checksum, and installs it via the native package manager
 package's dependency files (package.json, requirements.txt, Cargo.toml, etc.)
 using per-ecosystem mapping tables.
 
+**`architecture:`** — override the package architecture field. `"auto"`
+(default) uses the target architecture. `"all"` forces `Architecture: all`
+for pure-code packages (Python/Ruby/Perl libraries). `"any"` forces
+`Architecture: any` for compiled tools. Auto-detected from registry source
+when not set.
+
+**Package naming conventions** — when `package_name` is not set, lx derives
+a convention-compliant name from the registry name:
+- Debian: `libjson-perl`, `ruby-rake`, `node-underscore`, `python3-requests`
+- RPM: `perl-JSON-XS`, `ruby-rake`, `python3-requests`
+- Arch: `perl-json-xs`, `ruby-rake`, `python-requests`
+
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter
 `package.yaml` (makedeb-orphan migration path). Guesses are commented for
 review: the `github_repo` guess (loud `FIXME` when the AUR URL isn't

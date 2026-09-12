@@ -335,6 +335,14 @@ pub struct PackageConfig {
     /// `deb.arch_variant`. Ignored by rpm/arch.
     #[serde(default)]
     pub arch_variant: String,
+    /// Override the package architecture field. "auto" (default) uses the
+    /// target architecture (amd64, arm64, ...). "all" forces
+    /// `Architecture: all` for pure-code packages (Python, Ruby, Perl
+    /// libraries). "any" forces `Architecture: any` for compiled tools.
+    /// Auto-detection via `pkgname::detect_architecture()` is used when
+    /// registry_source is set and this is "auto".
+    #[serde(default = "default_architecture")]
+    pub architecture: String,
     /// Version schema for parsing the upstream version string. "semver"
     /// (default) normalizes semver-like versions (strips `v` prefix,
     /// handles prerelease/metadata); "none" uses the version as-is.
@@ -616,6 +624,10 @@ fn default_package_format() -> String {
 
 fn default_version_schema() -> String {
     "semver".to_string()
+}
+
+fn default_architecture() -> String {
+    "auto".to_string()
 }
 
 fn default_source() -> String {
@@ -987,6 +999,11 @@ impl PackageConfig {
                 );
             }
         }
+        // Architecture must be "auto", "all", or "any".
+        match self.architecture.trim() {
+            "" | "auto" | "all" | "any" => {}
+            other => bail!("unsupported architecture '{other}' (expected auto, all, or any)"),
+        }
         // Deb triggers must not contain empty entries.
         for t in &self.deb.triggers_interest {
             if t.trim().is_empty() {
@@ -1228,6 +1245,17 @@ impl PackageConfig {
             lx_lib::constants::DEFAULT_SECTION.to_string()
         } else {
             self.section.trim().to_string()
+        }
+    }
+
+    /// Effective architecture override ("auto", "all", or "any").
+    /// "auto" means use the target architecture (amd64, arm64, etc.).
+    pub fn effective_architecture(&self) -> String {
+        let a = self.architecture.trim();
+        if a.is_empty() {
+            "auto".to_string()
+        } else {
+            a.to_string()
         }
     }
 

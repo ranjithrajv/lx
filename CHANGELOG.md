@@ -59,6 +59,15 @@
   `RegistrySource` trait in `lib/plugins/registry/` — adding a new ecosystem
   is implementing the trait and registering it.
 
+### Package naming conventions and architecture auto-detection
+
+- **Package naming:** When `package_name` is not set, lx derives a
+  convention-compliant name per ecosystem and format (Debian: `libfoo-bar-perl`,
+  `ruby-foo`; RPM: `perl-Foo-Bar`; Arch: `perl-foo-bar`).
+- **Architecture auto-detection:** Pure-code packages (Python, Ruby, Perl
+  libraries) get `Architecture: all`; compiled tools get `Architecture: any`.
+  Manual override via `architecture:` field (auto/all/any).
+
 ### Five new features for goreleaser/cargo-dist/*2deb parity
 
 1. **Checksum sidecars** — `.sha256` and `.sha512` files generated alongside

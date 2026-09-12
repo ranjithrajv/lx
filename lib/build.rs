@@ -504,6 +504,26 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             }
         }
 
+        // Apply package naming conventions if user didn't set package_name.
+        if cfg.package_name.trim().is_empty() || cfg.package_name == "package" {
+            let conventional = lx_lib::pkgname::conventional_name(
+                &registry_source_name,
+                package_id,
+                &effective_format,
+                None,
+            );
+            println!("  conventional name: {conventional}");
+            cfg.package_name = conventional;
+        }
+
+        // Auto-detect architecture (all vs any) for registry packages.
+        if cfg.architecture.trim().is_empty() || cfg.architecture == "auto" {
+            let has_ext = lx_lib::pkgname::has_compiled_extensions(&payload.files_dir);
+            let detected = lx_lib::pkgname::detect_architecture(&registry_source_name, has_ext);
+            println!("  architecture: {detected}");
+            cfg.architecture = detected.to_string();
+        }
+
         // Route through local packaging with the fetched payload directory.
         cfg.local_payload = payload.files_dir.to_string_lossy().to_string();
         cfg.artifact_format = "raw".to_string();

@@ -77,6 +77,7 @@ pub mod manifest;
 pub mod migrate;
 pub mod optimize;
 pub mod pkgmeta;
+pub mod pkgname;
 pub mod plugins;
 pub mod progress;
 pub mod reinstall;
