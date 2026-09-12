@@ -230,6 +230,10 @@ pub fn stage_install_tree(
             }
         );
     }
+
+    // Make binaries relocatable (RPATH = $ORIGIN/../lib).
+    super::relocatable::make_relocatable(&usr_bin)?;
+
     Ok(())
 }
 

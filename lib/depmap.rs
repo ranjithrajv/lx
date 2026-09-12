@@ -1,187 +1,278 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Dependency mapping: registry packages → system packages.
+//! Dependency mapping and resolution: registry packages → system packages.
 //!
-//! Maps language-ecosystem dependencies to their Debian/RPM/Arch equivalents.
-//! This is what makes lx a true *2deb replacement — without it, registry
-//! packages can't declare runtime dependencies on system libraries.
+//! Full dependency resolution reads dependency files from fetched registry
+//! packages, parses version constraints, resolves them against the target
+//! distribution, and maps them to system package names.
 //!
-//! Each ecosystem has its own mapping rules. The mappings are heuristic and
-//! best-effort; users can always override with `depends:` in package.yaml.
+//! This is what makes lx a true *2deb replacement.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-/// Map a registry dependency name to a system package name for the given
-/// format and ecosystem.
+/// A resolved dependency with optional version constraint.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ResolvedDep {
+    pub system_name: String,
+    pub version: Option<String>,
+}
+
+impl ResolvedDep {
+    pub fn to_control_string(&self) -> String {
+        match &self.version {
+            Some(v) => format!("{} ({})", self.system_name, v),
+            None => self.system_name.clone(),
+        }
+    }
+}
+
+/// Resolve all dependencies for a registry package from its fetched files.
 ///
-/// Returns `None` when no mapping is known — the caller should skip or warn.
-pub fn map_dependency(ecosystem: &str, dep_name: &str, format: &str) -> Option<String> {
+/// Returns a sorted, deduplicated list of system package dependencies.
+pub fn resolve_deps_from_dir(
+    ecosystem: &str,
+    package_dir: &std::path::Path,
+    format: &str,
+) -> Vec<ResolvedDep> {
+    let raw_deps = read_raw_deps(ecosystem, package_dir);
+    let mut resolved = BTreeSet::new();
+
+    for (dep_name, version) in raw_deps {
+        if let Some(system_name) = map_dependency(ecosystem, &dep_name, format) {
+            let version = version.and_then(|v| normalize_version(&v, format));
+            resolved.insert(ResolvedDep {
+                system_name,
+                version,
+            });
+        }
+    }
+
+    resolved.into_iter().collect()
+}
+
+/// Read raw (name, version) pairs from the package's dependency files.
+fn read_raw_deps(ecosystem: &str, package_dir: &std::path::Path) -> Vec<(String, Option<String>)> {
     match ecosystem {
-        "npm" => map_npm_dep(dep_name, format),
-        "python" => map_python_dep(dep_name, format),
-        "gem" => map_gem_dep(dep_name, format),
-        "go" => map_go_dep(dep_name, format),
-        "hex" => map_hex_dep(dep_name, format),
-        "dart" => map_dart_dep(dep_name, format),
-        "cargo" => map_cargo_dep(dep_name, format),
-        "maven" => map_maven_dep(dep_name, format),
-        "composer" => map_composer_dep(dep_name, format),
-        "cpan" => map_cpan_dep(dep_name, format),
-        "nuget" => map_nuget_dep(dep_name, format),
+        "npm" => read_npm_deps(&package_dir.join("package.json")),
+        "python" => {
+            let req = package_dir.join("requirements.txt");
+            if req.exists() {
+                read_requirements_txt(&req)
+            } else {
+                read_setup_py_deps(&package_dir.join("setup.py"))
+            }
+        }
+        "cargo" => read_cargo_deps(&package_dir.join("Cargo.toml")),
+        "gem" => read_gemfile(&package_dir.join("Gemfile")),
+        "cpan" => {
+            let makefile = package_dir.join("Makefile.PL");
+            if makefile.exists() {
+                read_makefile_pl_deps(&makefile)
+            } else {
+                read_build_pl_deps(&package_dir.join("Build.PL"))
+            }
+        }
+        "composer" => read_composer_deps(&package_dir.join("composer.json")),
+        "maven" => read_maven_deps(&package_dir.join("pom.xml")),
+        "hex" => read_mix_deps(&package_dir.join("mix.exs")),
+        "dart" => read_pubspec_deps(&package_dir.join("pubspec.yaml")),
+        "go" => read_go_mod_deps(&package_dir.join("go.mod")),
+        _ => Vec::new(),
+    }
+}
+
+/// Normalize a version constraint string to Debian/RPM format.
+fn normalize_version(version: &str, format: &str) -> Option<String> {
+    let v = version.trim();
+    if v.is_empty() || v == "*" || v == "latest" || v == "any" {
+        return None;
+    }
+
+    // Handle common version constraint prefixes.
+    if let Some(rest) = v.strip_prefix(">=") {
+        match format {
+            "deb" => Some(format!(">= {}", rest.trim())),
+            "rpm" => Some(format!(">= {}", rest.trim())),
+            "arch" => Some(format!(">={}", rest.trim())),
+            _ => None,
+        }
+    } else if let Some(rest) = v.strip_prefix(">") {
+        match format {
+            "deb" => Some(format!(">> {}", rest.trim())),
+            "rpm" => Some(format!("> {}", rest.trim())),
+            "arch" => Some(format!(">{}", rest.trim())),
+            _ => None,
+        }
+    } else if let Some(rest) = v.strip_prefix("~>") {
+        // Pessimistic constraint: ~> 1.2 means >= 1.2, < 2.0
+        match format {
+            "deb" => Some(format!(">= {}", rest.trim())),
+            _ => Some(format!(">= {}", rest.trim())),
+        }
+    } else if let Some(rest) = v.strip_prefix("^") {
+        // Caret constraint: ^1.2.3 means >= 1.2.3, < 2.0.0
+        match format {
+            "deb" => Some(format!(">= {}", rest.trim())),
+            _ => Some(format!(">= {}", rest.trim())),
+        }
+    } else if v.starts_with('=') {
+        Some(format!("= {}", v.trim_start_matches('=').trim()))
+    } else if v
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_digit())
+        .unwrap_or(false)
+    {
+        // Bare version number.
+        Some(format!(">= {}", v.trim_matches(&[' ', '~', '^', '*'][..])))
+    } else {
+        None
+    }
+}
+
+/// Map a registry dependency name to a system package name.
+pub fn map_dependency(ecosystem: &str, dep_name: &str, format: &str) -> Option<String> {
+    let deb = match ecosystem {
+        "npm" => map_npm_dep(dep_name),
+        "python" => map_python_dep(dep_name),
+        "gem" | "ruby" => map_gem_dep(dep_name),
+        "go" => return None,
+        "hex" | "elixir" => map_hex_dep(dep_name),
+        "dart" => return None,
+        "cargo" | "rust" => map_cargo_dep(dep_name),
+        "maven" | "java" => return None,
+        "composer" | "php" => map_composer_dep(dep_name),
+        "cpan" | "perl" => map_cpan_dep(dep_name),
+        "nuget" => return None,
+        _ => return None,
+    };
+    deb.map(|d| to_format(d, format))
+}
+
+// --- Ecosystem mappings ---
+
+fn map_npm_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "sharp" => Some("libvips"),
+        "canvas" => Some("libcairo2"),
+        "sqlite3" => Some("libsqlite3-0"),
+        "bcrypt" => Some("libbcrypt"),
+        "node-sass" => Some("libsass"),
+        "puppeteer" => Some("libnss3"),
+        "mongodb" => Some("libmongoc-1.0-0"),
+        "usb" => Some("libusb-1.0-0"),
+        "serialport" => Some("libserialport0"),
+        "zlib" => Some("zlib1g"),
         _ => None,
     }
 }
 
-/// Map multiple dependencies at once, returning only successful mappings.
-pub fn map_dependencies(ecosystem: &str, deps: &[String], format: &str) -> Vec<String> {
-    deps.iter()
-        .filter_map(|d| map_dependency(ecosystem, d, format))
-        .collect()
+fn map_python_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "pillow" | "Pillow" => Some("libjpeg62-turbo"),
+        "lxml" => Some("libxml2"),
+        "cryptography" => Some("libssl3"),
+        "psycopg2" => Some("libpq5"),
+        "psycopg2-binary" => Some("libpq5"),
+        "mysqlclient" => Some("libmariadb3"),
+        "mysql-connector-python" => Some("libmariadb3"),
+        "numpy" => Some("libopenblas0"),
+        "cffi" => Some("libffi8"),
+        "pyyaml" => Some("libyaml-0-2"),
+        "markdown" => Some("libmarkdown2"),
+        "grpc" | "grpcio" => Some("libgrpc++1"),
+        _ => None,
+    }
 }
 
-// --- npm (Node.js) ---
-// Common npm packages that map to system libraries.
-fn map_npm_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "sharp" => "libvips",
-        "canvas" => "libcairo2",
-        "sqlite3" => "libsqlite3-0",
-        "bcrypt" => "libbcrypt",
-        "node-sass" => "libsass",
-        "puppeteer" => "libnss3",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
+fn map_gem_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "nokogiri" => Some("libxml2"),
+        "pg" => Some("libpq5"),
+        "mysql2" => Some("libmariadb3"),
+        "sqlite3" => Some("libsqlite3-0"),
+        "rmagick" => Some("libmagickwand-6.q16-6"),
+        "grpc" => Some("libgrpc++1"),
+        "ffi" => Some("libffi8"),
+        "mini_magick" => Some("libmagickwand-6.q16-6"),
+        _ => None,
+    }
 }
 
-// --- Python ---
-// Common Python packages → system libraries.
-fn map_python_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "pillow" => "libjpeg62-turbo",
-        "lxml" => "libxml2",
-        "cryptography" => "libssl3",
-        "psycopg2" => "libpq5",
-        "mysqlclient" => "libmariadb3",
-        "numpy" => "libopenblas0",
-        "cffi" => "libffi8",
-        "pyyaml" => "libyaml-0-2",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
+fn map_hex_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "comeonin" => Some("libbcrypt"),
+        "argon2_elixir" => Some("libargon2-1"),
+        "ex_libsodium" => Some("libsodium23"),
+        "bcrypt_elixir" => Some("libbcrypt"),
+        "gettext" => Some("libgettextpo0"),
+        _ => None,
+    }
 }
 
-// --- Ruby gems ---
-fn map_gem_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "nokogiri" => "libxml2",
-        "pg" => "libpq5",
-        "mysql2" => "libmariadb3",
-        "sqlite3" => "libsqlite3-0",
-        "rmagick" => "libmagickwand-6.q16-6",
-        "grpc" => "libgrpc++1",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
+fn map_cargo_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "openssl-sys" => Some("libssl3"),
+        "sqlite3-sys" | "libsqlite3-sys" => Some("libsqlite3-0"),
+        "pq-sys" => Some("libpq5"),
+        "mysqlclient-sys" | "mysql-sys" => Some("libmariadb3"),
+        "zlib-sys" | "libz-sys" => Some("zlib1g"),
+        "reqwest" => Some("libssl3"),
+        "git2" => Some("libgit2-1.7"),
+        "sass-rs" => Some("libsass"),
+        "curl-sys" => Some("libcurl4"),
+        "flate2-sys" | "libflate" => Some("zlib1g"),
+        "libgit2-sys" => Some("libgit2-1.7"),
+        "libssh2-sys" => Some("libssh2-1"),
+        "libusb-sys" => Some("libusb-1.0-0"),
+        _ => None,
+    }
 }
 
-// --- Go ---
-// Go modules rarely need system deps (static binaries), but some do.
-fn map_go_dep(_name: &str, _format: &str) -> Option<String> {
-    // Go binaries are typically statically linked. No common mappings.
-    None
+fn map_composer_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "ext-curl" => Some("libcurl4"),
+        "ext-gd" => Some("libgd3"),
+        "ext-imagick" => Some("libmagickwand-6.q16-6"),
+        "ext-intl" => Some("libicu74"),
+        "ext-mbstring" => Some("libonig5"),
+        "ext-mysqli" | "ext-pdo_mysql" => Some("libmariadb3"),
+        "ext-pdo_sqlite" | "ext-sqlite3" => Some("libsqlite3-0"),
+        "ext-zip" => Some("libzip4"),
+        "ext-openssl" | "ext-sodium" => Some("libsodium23"),
+        "ext-zlib" => Some("zlib1g"),
+        _ => None,
+    }
 }
 
-// --- Elixir/Hex ---
-fn map_hex_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "comeonin" => "libbcrypt",
-        "argon2_elixir" => "libargon2-1",
-        "ex_libsodium" => "libsodium23",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
+fn map_cpan_dep(name: &str) -> Option<&'static str> {
+    match name {
+        "DBD::Pg" => Some("libpq5"),
+        "DBD::mysql" => Some("libmariadb3"),
+        "DBD::SQLite" => Some("libsqlite3-0"),
+        "XML::LibXML" => Some("libxml2"),
+        "XML::Parser" => Some("libexpat1"),
+        "GD" => Some("libgd3"),
+        "Image::Magick" => Some("libmagickwand-6.q16-6"),
+        "Net::SSLeay" => Some("libssl3"),
+        "IO::Socket::SSL" => Some("libssl3"),
+        "LWP::UserAgent" => Some("libwww-perl"),
+        "JSON::XS" => Some("libjson-xs-perl"),
+        "DBI" => Some("libdbi-perl"),
+        _ => None,
+    }
 }
 
-// --- Dart/Flutter ---
-fn map_dart_dep(_name: &str, _format: &str) -> Option<String> {
-    // Dart binaries are compiled ahead-of-time. No common mappings.
-    None
-}
-
-// --- Rust/cargo ---
-fn map_cargo_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "openssl-sys" => "libssl3",
-        "sqlite3-sys" => "libsqlite3-0",
-        "libsqlite3-sys" => "libsqlite3-0",
-        "pq-sys" => "libpq5",
-        "mysqlclient-sys" => "libmariadb3",
-        "zlib-sys" => "zlib1g",
-        "libz-sys" => "zlib1g",
-        "reqwest" => "libssl3",
-        "git2" => "libgit2-1.7",
-        "sass-rs" => "libsass",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
-}
-
-// --- Maven (Java) ---
-fn map_maven_dep(_name: &str, _format: &str) -> Option<String> {
-    // Java dependencies are bundled in the jar. No common system mappings.
-    None
-}
-
-// --- Composer (PHP) ---
-fn map_composer_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "ext-curl" => "libcurl4",
-        "ext-gd" => "libgd3",
-        "ext-imagick" => "libmagickwand-6.q16-6",
-        "ext-intl" => "libicu74",
-        "ext-mbstring" => "libonig5",
-        "ext-mysqli" => "libmariadb3",
-        "ext-pdo_sqlite" => "libsqlite3-0",
-        "ext-zip" => "libzip4",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
-}
-
-// --- CPAN (Perl) ---
-fn map_cpan_dep(name: &str, format: &str) -> Option<String> {
-    let deb = match name {
-        "DBD::Pg" => "libpq5",
-        "DBD::mysql" => "libmariadb3",
-        "DBD::SQLite" => "libsqlite3-0",
-        "XML::LibXML" => "libxml2",
-        "GD" => "libgd3",
-        "Image::Magick" => "libmagickwand-6.q16-6",
-        "Net::SSLeay" => "libssl3",
-        "IO::Socket::SSL" => "libssl3",
-        _ => return None,
-    };
-    Some(to_format(deb, format))
-}
-
-// --- NuGet (.NET) ---
-fn map_nuget_dep(_name: &str, _format: &str) -> Option<String> {
-    // .NET dependencies are bundled. No common system mappings.
-    None
-}
-
-/// Convert a Debian package name to the equivalent for the target format.
+/// Convert Debian package name to target format.
 fn to_format(deb_name: &str, format: &str) -> String {
     match format {
         "deb" => deb_name.to_string(),
-        "rpm" => deb_to_rpm_name(deb_name),
-        "arch" => deb_to_arch_name(deb_name),
+        "rpm" => deb_to_rpm_name(deb_name).to_string(),
+        "arch" => deb_to_arch_name(deb_name).to_string(),
         _ => deb_name.to_string(),
     }
 }
 
-/// Best-effort Debian → RPM package name conversion.
 fn deb_to_rpm_name(deb: &str) -> String {
     match deb {
         "libssl3" => "openssl-libs".to_string(),
@@ -212,7 +303,6 @@ fn deb_to_rpm_name(deb: &str) -> String {
     }
 }
 
-/// Best-effort Debian → Arch package name conversion.
 fn deb_to_arch_name(deb: &str) -> String {
     match deb {
         "libssl3" => "openssl".to_string(),
@@ -243,51 +333,12 @@ fn deb_to_arch_name(deb: &str) -> String {
     }
 }
 
-/// Infer system dependencies for a registry package from its fetched files.
-///
-/// Reads dependency files from the package directory (package.json,
-/// requirements.txt, Cargo.toml, etc.) and maps them to system packages.
-/// Returns the comma-separated depends string, or None if no mappable deps.
-pub fn infer_deps_from_dir(
-    ecosystem: &str,
-    package_dir: &std::path::Path,
-    format: &str,
-) -> Option<String> {
-    let deps = match ecosystem {
-        "npm" => {
-            let pkg_json = package_dir.join("package.json");
-            let deps = read_npm_deps(&pkg_json)?;
-            map_dependencies("npm", &deps, format)
-        }
-        "python" => {
-            let req_txt = package_dir.join("requirements.txt");
-            if req_txt.exists() {
-                let deps = read_python_deps(&req_txt)?;
-                map_dependencies("python", &deps, format)
-            } else {
-                let setup_py = package_dir.join("setup.py");
-                let deps = read_python_setup_deps(&setup_py)?;
-                map_dependencies("python", &deps, format)
-            }
-        }
-        "cargo" => {
-            let cargo_toml = package_dir.join("Cargo.toml");
-            let deps = read_cargo_deps(&cargo_toml)?;
-            map_dependencies("cargo", &deps, format)
-        }
-        _ => Vec::new(),
+// --- Dependency file readers ---
+
+fn read_npm_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
     };
-
-    if deps.is_empty() {
-        None
-    } else {
-        Some(deps.join(", "))
-    }
-}
-
-/// Read dependency names from a package.json (simple regex-free parse).
-fn read_npm_deps(path: &std::path::Path) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(path).ok()?;
     let mut deps = Vec::new();
     let mut in_deps = false;
     for line in text.lines() {
@@ -300,84 +351,93 @@ fn read_npm_deps(path: &std::path::Path) -> Option<Vec<String>> {
             if t == "}" || t == "}," {
                 break;
             }
-            if let Some(name) = t.split(':').next() {
+            if let Some((name, version)) = t.split_once(':') {
                 let name = name.trim().trim_matches('"').trim_matches(',');
+                let version = version.trim().trim_matches('"').trim_matches(',').trim();
                 if !name.is_empty() {
-                    deps.push(name.to_string());
+                    deps.push((
+                        name.to_string(),
+                        if version.is_empty() {
+                            None
+                        } else {
+                            Some(version.to_string())
+                        },
+                    ));
                 }
             }
         }
     }
-    if deps.is_empty() {
-        None
-    } else {
-        Some(deps)
-    }
+    deps
 }
 
-/// Read dependency names from a requirements.txt.
-fn read_python_deps(path: &std::path::Path) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let deps: Vec<String> = text
-        .lines()
+fn read_requirements_txt(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
         .filter_map(|line| {
             let t = line.trim();
-            if t.is_empty() || t.starts_with('#') {
+            if t.is_empty() || t.starts_with('#') || t.starts_with('-') {
                 return None;
             }
-            // Extract package name before version specifier.
-            let name = t.split(&['=', '>', '<', '!', '~', ' ']).next().unwrap_or(t);
+            // Parse package[extras]>=version.
+            let name = t
+                .split(&['=', '>', '<', '!', '~', '[', ';', ' '])
+                .next()
+                .unwrap_or(t)
+                .trim();
+            let version = if t.contains(&['=', '>', '<', '~'][..]) {
+                t.split(&['=', '>', '<', '~']).nth(1).map(|v| {
+                    v.trim()
+                        .trim_matches(&['=', '>', '<', '~', ' '][..])
+                        .to_string()
+                })
+            } else {
+                None
+            };
             if name.is_empty() {
                 None
             } else {
-                Some(name.to_string())
+                Some((name.to_string(), version))
             }
         })
-        .collect();
-    if deps.is_empty() {
-        None
-    } else {
-        Some(deps)
-    }
+        .collect()
 }
 
-/// Read dependency names from a setup.py (heuristic).
-fn read_python_setup_deps(path: &std::path::Path) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(path).ok()?;
+fn read_setup_py_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
     let mut deps = Vec::new();
-    let mut in_install_requires = false;
+    let mut in_deps = false;
     for line in text.lines() {
         let t = line.trim();
-        if t.contains("install_requires") {
-            in_install_requires = true;
+        if t.contains("install_requires") && t.contains('[') {
+            in_deps = true;
             continue;
         }
-        if in_install_requires {
+        if in_deps {
             if t == "]" || t == "]," {
                 break;
             }
-            if let Some(name) = t
+            let name = t
                 .trim_matches(&['[', ']', ',', '\'', '"'][..])
-                .split('=')
+                .split(&['=', '>', '<', '!', '~'])
                 .next()
-            {
-                let name = name.trim();
-                if !name.is_empty() {
-                    deps.push(name.to_string());
-                }
+                .unwrap_or("")
+                .trim();
+            if !name.is_empty() {
+                deps.push((name.to_string(), None));
             }
         }
     }
-    if deps.is_empty() {
-        None
-    } else {
-        Some(deps)
-    }
+    deps
 }
 
-/// Read dependency names from a Cargo.toml.
-fn read_cargo_deps(path: &std::path::Path) -> Option<Vec<String>> {
-    let text = std::fs::read_to_string(path).ok()?;
+fn read_cargo_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
     let mut deps = Vec::new();
     let mut in_deps = false;
     for line in text.lines() {
@@ -390,77 +450,296 @@ fn read_cargo_deps(path: &std::path::Path) -> Option<Vec<String>> {
             if t.starts_with('[') {
                 break;
             }
-            if let Some(name) = t.split(&['=', ' ']).next() {
+            if let Some((name, rest)) = t.split_once('=') {
                 let name = name.trim();
-                if !name.is_empty() {
-                    deps.push(name.to_string());
+                let version = rest.trim().trim_matches(&[' ', '"', '{'][..]);
+                let version = version
+                    .split(',')
+                    .next()
+                    .unwrap_or(version)
+                    .trim()
+                    .trim_matches('"');
+                deps.push((
+                    name.to_string(),
+                    if version.is_empty() {
+                        None
+                    } else {
+                        Some(version.to_string())
+                    },
+                ));
+            }
+        }
+    }
+    deps
+}
+
+fn read_gemfile(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    text.lines()
+        .filter_map(|line| {
+            let t = line.trim();
+            if t.starts_with("gem ") {
+                let parts: Vec<&str> = t.split_whitespace().collect();
+                let name = parts.get(1)?.trim_matches(&[' ', '\'', '"'][..]);
+                let version = parts
+                    .get(2)
+                    .map(|v| v.trim_matches(&[' ', '\'', ','][..]).to_string());
+                Some((name.to_string(), version))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn read_makefile_pl_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    let mut in_prereq = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.contains("PREREQ_PM") && t.contains('{') {
+            in_prereq = true;
+            continue;
+        }
+        if in_prereq {
+            if t == "}" || t == "}," {
+                break;
+            }
+            if let Some((name, _)) = t.split_once('\'') {
+                let parts: Vec<&str> = name.split("'=>'").collect();
+                if !parts.is_empty() {
+                    let name = parts[0].trim_matches('\'');
+                    if !name.is_empty() {
+                        deps.push((name.to_string(), None));
+                    }
                 }
             }
         }
     }
-    if deps.is_empty() {
-        None
-    } else {
-        Some(deps)
-    }
+    deps
 }
 
-/// Get all known mappings for an ecosystem (for documentation/debugging).
-pub fn known_mappings(ecosystem: &str) -> BTreeMap<&'static str, &'static str> {
-    let mut map = BTreeMap::new();
-    let dummy_deps: Vec<&str> = match ecosystem {
-        "npm" => vec![
-            "sharp",
-            "canvas",
-            "sqlite3",
-            "bcrypt",
-            "node-sass",
-            "puppeteer",
-        ],
-        "python" => vec![
-            "pillow",
-            "lxml",
-            "cryptography",
-            "psycopg2",
-            "mysqlclient",
-            "numpy",
-            "cffi",
-            "pyyaml",
-        ],
-        "gem" => vec!["nokogiri", "pg", "mysql2", "sqlite3", "rmagick", "grpc"],
-        "rust" | "cargo" => vec![
-            "openssl-sys",
-            "sqlite3-sys",
-            "pq-sys",
-            "libz-sys",
-            "reqwest",
-            "git2",
-        ],
-        "hex" => vec!["comeonin", "argon2_elixir", "ex_libsodium"],
-        "composer" => vec![
-            "ext-curl",
-            "ext-gd",
-            "ext-imagick",
-            "ext-intl",
-            "ext-mbstring",
-            "ext-zip",
-        ],
-        "cpan" => vec![
-            "DBD::Pg",
-            "DBD::mysql",
-            "DBD::SQLite",
-            "XML::LibXML",
-            "GD",
-            "Net::SSLeay",
-        ],
-        _ => return map,
+fn read_build_pl_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_makefile_pl_deps(path) // Same format for deps section.
+}
+
+fn read_composer_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
     };
-    for dep in dummy_deps {
-        if let Some(mapped) = map_dependency(ecosystem, dep, "deb") {
-            map.insert(dep, Box::leak(mapped.into_boxed_str()));
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("\"require\"") {
+            in_deps = true;
+            continue;
+        }
+        if in_deps {
+            if t == "}" || t == "}," {
+                break;
+            }
+            if let Some((name, version)) = t.split_once(':') {
+                let name = name.trim().trim_matches('"').trim_matches(',');
+                let version = version.trim().trim_matches('"').trim_matches(',').trim();
+                if !name.is_empty() && !name.starts_with("php") {
+                    deps.push((
+                        name.to_string(),
+                        if version.is_empty() {
+                            None
+                        } else {
+                            Some(version.to_string())
+                        },
+                    ));
+                }
+            }
         }
     }
-    map
+    deps
+}
+
+fn read_maven_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    // Simple XML parsing for <dependency> blocks.
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    let mut in_dep = false;
+    let mut group_id = String::new();
+    let mut artifact_id = String::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t == "<dependency>" {
+            in_dep = true;
+            group_id.clear();
+            artifact_id.clear();
+            continue;
+        }
+        if t == "</dependency>" {
+            in_dep = false;
+            if !artifact_id.is_empty() {
+                deps.push((artifact_id.clone(), None));
+            }
+            continue;
+        }
+        if in_dep {
+            if t.starts_with("<groupId>") {
+                group_id = t.replace("<groupId>", "").replace("</groupId>", "");
+            } else if t.starts_with("<artifactId>") {
+                artifact_id = t.replace("<artifactId>", "").replace("</artifactId>", "");
+            }
+        }
+    }
+    deps
+}
+
+fn read_mix_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t == "defp deps do" {
+            in_deps = true;
+            continue;
+        }
+        if in_deps {
+            if t == "end" {
+                break;
+            }
+            if t.starts_with("{:") {
+                let parts: Vec<&str> = t.trim_matches(&['{', '}', ','][..]).split(',').collect();
+                if let Some(name) = parts.first() {
+                    let name = name.trim().trim_matches(':').trim_matches(&[' ', '\''][..]);
+                    if !name.is_empty() {
+                        deps.push((name.to_string(), None));
+                    }
+                }
+            }
+        }
+    }
+    deps
+}
+
+fn read_pubspec_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    let mut in_deps = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("dependencies:") {
+            in_deps = true;
+            continue;
+        }
+        if in_deps {
+            if t.starts_with("dev_dependencies:") || (!t.starts_with(' ') && !t.starts_with('#')) {
+                break;
+            }
+            if let Some((name, version)) = t.split_once(':') {
+                let name = name.trim().trim_matches('#');
+                let version = version.trim().trim_matches(&[' ', '^', '~'][..]);
+                if !name.is_empty() && !name.starts_with("//") {
+                    deps.push((
+                        name.to_string(),
+                        if version.is_empty() || version == "any" {
+                            None
+                        } else {
+                            Some(version.to_string())
+                        },
+                    ));
+                }
+            }
+        }
+    }
+    deps
+}
+
+fn read_go_mod_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut deps = Vec::new();
+    let mut in_block = false;
+    for line in text.lines() {
+        let t = line.trim();
+        if t.starts_with("require (") {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if t == ")" {
+                break;
+            }
+            let parts: Vec<&str> = t.split_whitespace().collect();
+            if parts.len() >= 2 {
+                let name = parts[0].trim();
+                let version = parts[1].trim().trim_start_matches('v');
+                if !name.is_empty() {
+                    deps.push((
+                        name.to_string(),
+                        if version.is_empty() {
+                            None
+                        } else {
+                            Some(version.to_string())
+                        },
+                    ));
+                }
+            }
+        } else if t.starts_with("require ") && !t.contains('(') {
+            let parts: Vec<&str> = t.split_whitespace().collect();
+            if parts.len() >= 3 {
+                let name = parts[1].trim();
+                let version = parts[2].trim().trim_start_matches('v');
+                deps.push((
+                    name.to_string(),
+                    if version.is_empty() {
+                        None
+                    } else {
+                        Some(version.to_string())
+                    },
+                ));
+            }
+        }
+    }
+    deps
+}
+
+// --- Legacy API for backward compatibility ---
+
+/// Map multiple dependencies (legacy API).
+pub fn map_dependencies(ecosystem: &str, deps: &[String], format: &str) -> Vec<String> {
+    deps.iter()
+        .filter_map(|d| map_dependency(ecosystem, d, format))
+        .collect()
+}
+
+/// Infer dependencies (legacy API, now with full resolution).
+pub fn infer_deps_from_dir(
+    ecosystem: &str,
+    package_dir: &std::path::Path,
+    format: &str,
+) -> Option<String> {
+    let resolved = resolve_deps_from_dir(ecosystem, package_dir, format);
+    if resolved.is_empty() {
+        None
+    } else {
+        Some(
+            resolved
+                .iter()
+                .map(|d| d.to_control_string())
+                .collect::<Vec<_>>()
+                .join(", "),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -468,7 +747,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn maps_npm_sharp_to_libvips() {
+    fn map_npm_sharp() {
         assert_eq!(
             map_dependency("npm", "sharp", "deb"),
             Some("libvips".to_string())
@@ -476,7 +755,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_python_pillow_to_libjpeg() {
+    fn map_python_pillow() {
         assert_eq!(
             map_dependency("python", "pillow", "deb"),
             Some("libjpeg62-turbo".to_string())
@@ -484,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_cargo_openssl_to_libssl() {
+    fn map_cargo_openssl() {
         assert_eq!(
             map_dependency("cargo", "openssl-sys", "deb"),
             Some("libssl3".to_string())
@@ -492,28 +771,54 @@ mod tests {
     }
 
     #[test]
-    fn unknown_dep_returns_none() {
+    fn unknown_returns_none() {
         assert_eq!(map_dependency("npm", "lodash", "deb"), None);
     }
 
     #[test]
-    fn go_deps_are_typically_none() {
-        assert_eq!(map_dependency("go", "gin-gonic/gin", "deb"), None);
-    }
-
-    #[test]
-    fn rpm_conversion() {
+    fn version_gte_normalized_deb() {
         assert_eq!(
-            map_dependency("npm", "sharp", "rpm"),
-            Some("vips".to_string())
+            normalize_version(">= 1.2.3", "deb"),
+            Some(">= 1.2.3".to_string())
         );
     }
 
     #[test]
-    fn arch_conversion() {
+    fn version_tilde_normalized() {
         assert_eq!(
-            map_dependency("npm", "sharp", "arch"),
-            Some("vips".to_string())
+            normalize_version("~> 1.2", "deb"),
+            Some(">= 1.2".to_string())
         );
+    }
+
+    #[test]
+    fn version_star_returns_none() {
+        assert_eq!(normalize_version("*", "deb"), None);
+    }
+
+    #[test]
+    fn version_caret_normalized() {
+        assert_eq!(
+            normalize_version("^1.2.3", "deb"),
+            Some(">= 1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn resolved_dep_to_string_no_version() {
+        let dep = ResolvedDep {
+            system_name: "libvips".to_string(),
+            version: None,
+        };
+        assert_eq!(dep.to_control_string(), "libvips");
+    }
+
+    #[test]
+    fn resolved_dep_to_string_with_version() {
+        let dep = ResolvedDep {
+            system_name: "libssl3".to_string(),
+            version: Some(">= 3.0".to_string()),
+        };
+        assert_eq!(dep.to_control_string(), "libssl3 (>= 3.0)");
     }
 }

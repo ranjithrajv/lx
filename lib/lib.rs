@@ -81,6 +81,7 @@ pub mod pkgname;
 pub mod plugins;
 pub mod progress;
 pub mod reinstall;
+pub mod relocatable;
 pub mod remove;
 pub mod repo;
 pub mod rollback;

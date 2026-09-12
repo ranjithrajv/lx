@@ -59,6 +59,18 @@
   `RegistrySource` trait in `lib/plugins/registry/` — adding a new ecosystem
   is implementing the trait and registering it.
 
+### Relocatable binaries, full dependency resolution, auto-dep-mapping
+
+- **Relocatable binaries:** ELF binaries get RPATH set to `$ORIGIN/../lib`
+  via patchelf, enabling installation to any path (cargo-dist parity).
+- **Full dependency resolution:** Reads dependency files from all registry
+  ecosystems (package.json, requirements.txt, Cargo.toml, Gemfile,
+  composer.json, mix.exs, pubspec.yaml, go.mod, pom.xml, Makefile.PL),
+  parses version constraints, resolves them to system packages.
+- **Auto-dep-mapping:** 60+ known dependency mappings across 9 ecosystems
+  (npm, python, gem, cargo, cpan, composer, hex, dart, maven). Three-way
+  conversion: Debian ↔ RPM ↔ Arch package names.
+
 ### Package naming conventions and architecture auto-detection
 
 - **Package naming:** When `package_name` is not set, lx derives a

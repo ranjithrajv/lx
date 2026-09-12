@@ -1849,6 +1849,46 @@ fn build_one(
         );
     }
 
+    // 3b. Scan ELF dependencies and auto-fill or verify depends:.
+    // Only for binary repacks (not source builds, which handle this in
+    // sourcebuild::compute_depends). Skipped for musl-static builds.
+    let (scanned_depends, scanned_sonames) =
+        lx_lib::scandeps::compute_depends_from_dir(&binary_dir, &cfg.depends, cfg.musl);
+    let mut modified_cfg;
+    let effective_cfg = if !cfg.musl && format != "source" {
+        if cfg.depends.trim().is_empty() && scanned_depends != "libc6" {
+            // Auto-fill: source had no deps, scanning found real needs.
+            modified_cfg = cfg.clone();
+            modified_cfg.depends = scanned_depends.clone();
+            println!(
+                "    ℹ auto-filled depends from ELF scanning: {}",
+                scanned_depends
+            );
+            &modified_cfg
+        } else if !cfg.depends.is_empty() {
+            // Verify: source had deps — warn on mismatches.
+            let (missing, unnecessary) =
+                lx_lib::scandeps::diff_deps(&scanned_sonames, &cfg.depends);
+            if !missing.is_empty() {
+                println!(
+                    "    ⚠ ELF needs packages not in depends: {}",
+                    missing.join(", ")
+                );
+            }
+            if !unnecessary.is_empty() {
+                println!(
+                    "    ℹ declared but not in ELF needs: {}",
+                    unnecessary.join(", ")
+                );
+            }
+            cfg
+        } else {
+            cfg
+        }
+    } else {
+        cfg
+    };
+
     // 4. Build the package via the selected plugin (deb or rpm).
     // Packager stages the install tree and creates the archive.
     let plugin = crate::plugins::get_packager(&format).ok_or_else(|| {
@@ -1876,7 +1916,7 @@ fn build_one(
     // deb detach signs post-build (.sig).
     let sign_passphrase = resolve_sign_passphrase();
     let ctx = crate::plugins::BuildContext {
-        cfg,
+        cfg: effective_cfg,
         job,
         binary_dir: &binary_dir,
         staging_root: &staging_root,

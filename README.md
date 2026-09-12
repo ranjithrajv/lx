@@ -574,6 +574,14 @@ a convention-compliant name from the registry name:
 - RPM: `perl-JSON-XS`, `ruby-rake`, `python3-requests`
 - Arch: `perl-json-xs`, `ruby-rake`, `python-requests`
 
+**Relocatable binaries** — ELF binaries are automatically patched with
+`patchelf` to use `$ORIGIN/../lib` RPATH, so they work from any install path.
+
+**Dependency resolution** — lx reads dependency files from registry packages
+(package.json, requirements.txt, Cargo.toml, etc.), resolves version
+constraints, and maps them to system packages across 9 ecosystems with 60+
+known mappings and three-way Debian/RPM/Arch name conversion.
+
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter
 `package.yaml` (makedeb-orphan migration path). Guesses are commented for
 review: the `github_repo` guess (loud `FIXME` when the AUR URL isn't

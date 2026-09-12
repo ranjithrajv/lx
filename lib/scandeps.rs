@@ -392,6 +392,93 @@ pub fn find_elf_files(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// Scan a directory for ELF binaries and compute runtime `depends:` from
+/// their `DT_NEEDED` sonames. Essential/libc sonames are skipped; remaining
+/// sonames are resolved to package names via the host's package manager.
+///
+/// Returns `(depends_string, non_essential_sonames)` where:
+/// - `depends_string` is ready to use in a PackageConfig
+/// - `non_essential_sonames` is the raw set of scanned sonames (for
+///   comparison against declared deps)
+pub fn compute_depends_from_dir(
+    dir: &std::path::Path,
+    declared_depends: &str,
+    musl: bool,
+) -> (String, std::collections::BTreeSet<String>) {
+    let mut pkgs = std::collections::BTreeSet::new();
+    let mut all_sonames = std::collections::BTreeSet::new();
+
+    let elfs = find_elf_files(dir).unwrap_or_default();
+    for elf in &elfs {
+        let bytes = match std::fs::read(elf) {
+            Ok(b) => b,
+            Err(_) => continue,
+        };
+        let needed = lx_lib::elfdeps::needed_libraries(&bytes).unwrap_or_default();
+        for soname in needed {
+            all_sonames.insert(soname.clone());
+            if lx_lib::elfdeps::is_essential_libc_soname(&soname) {
+                continue;
+            }
+            if let Some(pkg) = pkg_owner(&soname) {
+                pkgs.insert(pkg.to_string());
+            }
+        }
+    }
+
+    // Filter to non-essential sonames for comparison.
+    let non_essential: std::collections::BTreeSet<String> = all_sonames
+        .into_iter()
+        .filter(|s| !lx_lib::elfdeps::is_essential_libc_soname(s))
+        .collect();
+
+    if pkgs.is_empty() {
+        if musl {
+            return (String::new(), non_essential);
+        }
+        if !declared_depends.trim().is_empty() {
+            return (declared_depends.trim().to_string(), non_essential);
+        }
+        return ("libc6".to_string(), non_essential);
+    }
+
+    (
+        pkgs.into_iter().collect::<Vec<_>>().join(", "),
+        non_essential,
+    )
+}
+
+/// Compare scanned ELF sonames against declared deps and report gaps.
+/// Returns lists of (missing, unnecessary) package names.
+pub fn diff_deps(
+    scanned_sonames: &std::collections::BTreeSet<String>,
+    declared_depends: &str,
+) -> (Vec<String>, Vec<String>) {
+    let declared = declared_package_names(declared_depends);
+
+    // Resolve sonames to package names for comparison.
+    let mut scanned_pkgs = std::collections::BTreeSet::new();
+    for soname in scanned_sonames {
+        if let Some(pkg) = pkg_owner(soname) {
+            let pkg = pkg.split(':').next().unwrap_or(&pkg).to_string();
+            scanned_pkgs.insert(pkg.to_ascii_lowercase());
+        }
+    }
+
+    let missing: Vec<String> = scanned_pkgs
+        .iter()
+        .filter(|p| !declared.contains(*p))
+        .cloned()
+        .collect();
+    let unnecessary: Vec<String> = declared
+        .iter()
+        .filter(|p| !scanned_pkgs.contains(*p))
+        .cloned()
+        .collect();
+
+    (missing, unnecessary)
+}
+
 /// Best-effort: the package that locally owns `soname`, auto-detecting the
 /// host's package manager (dpkg, rpm, or pacman). `None` when no supported
 /// package manager is on `PATH`, the library isn't installed on this host,
