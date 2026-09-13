@@ -84,6 +84,7 @@ pub mod reinstall;
 pub mod relocatable;
 pub mod remove;
 pub mod repo;
+pub mod repology_depmap;
 pub mod rollback;
 pub mod rpmarchive;
 pub mod sbom;

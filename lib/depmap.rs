@@ -131,22 +131,49 @@ fn normalize_version(version: &str, format: &str) -> Option<String> {
 }
 
 /// Map a registry dependency name to a system package name.
+///
+/// Resolution order:
+/// 1. Hardcoded ecosystem mappings (fast, offline, deterministic)
+/// 2. Repology online lookup (covers edge cases, always current)
 pub fn map_dependency(ecosystem: &str, dep_name: &str, format: &str) -> Option<String> {
-    let deb = match ecosystem {
+    // 1. Try hardcoded mappings first.
+    let hardcoded = hardcoded_mapping(ecosystem, dep_name);
+    if hardcoded.is_some() {
+        return hardcoded.map(|d| to_format(d, format));
+    }
+
+    // 2. Fall back to Repology for unknown packages.
+    if let Some(family) = format_to_family(format) {
+        if let Some(pkg) = crate::repology_depmap::lookup_distro_package(dep_name, &family) {
+            return Some(pkg);
+        }
+    }
+
+    None
+}
+
+/// Hardcoded ecosystem → Debian package mapping (fast path).
+fn hardcoded_mapping(ecosystem: &str, dep_name: &str) -> Option<&'static str> {
+    match ecosystem {
         "npm" => map_npm_dep(dep_name),
         "python" => map_python_dep(dep_name),
         "gem" | "ruby" => map_gem_dep(dep_name),
-        "go" => return None,
         "hex" | "elixir" => map_hex_dep(dep_name),
-        "dart" => return None,
         "cargo" | "rust" => map_cargo_dep(dep_name),
-        "maven" | "java" => return None,
         "composer" | "php" => map_composer_dep(dep_name),
         "cpan" | "perl" => map_cpan_dep(dep_name),
-        "nuget" => return None,
-        _ => return None,
-    };
-    deb.map(|d| to_format(d, format))
+        _ => None,
+    }
+}
+
+/// Convert package format to Repology distro family name.
+fn format_to_family(format: &str) -> Option<String> {
+    match format {
+        "deb" => Some("debian".to_string()),
+        "rpm" => Some("fedora".to_string()),
+        "arch" => Some("arch".to_string()),
+        _ => None,
+    }
 }
 
 // --- Ecosystem mappings ---
