@@ -48,7 +48,7 @@ command line adapts across Debian, Fedora, and Arch hosts:
 |---|---|---|
 | Native package format (`deb`/`rpm`/`arch`/`apk`/`ipk`) | the host package manager | `lx repo --format` and `lx init`'s package format (deb/rpm/arch/apk); `lx convert --to` and the consumer `install`/`upgrade`/`remove`/`list` (deb/rpm/arch) |
 | Host package manager (`apt`/`dnf`/`zypper`/`pacman`/`apk`/`xbps`) | `PATH` probe | `--install-build-deps` installs missing build dependencies with the host's own manager |
-| Architecture, in Debian naming | `uname -m` | `lx build --host`, `lx scan-deps`'s host-only default scan |
+| Architecture, in Debian naming | `uname -m` | `lx build --host`, `lx deps scan`'s host-only default scan |
 | Distro codename / RPM family | `/etc/os-release` | the release-asset "dist" token `lx install`/`upgrade` match prebuilt packages against |
 
 Every inferred default is announced and every flag still overrides it (`lx
@@ -186,27 +186,32 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format. `--to` defaults to the host's native format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
-| `lx scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
-| `lx shlibdeps <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
+| `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
+| `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
 | `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery (`package_format` pre-filled from the host) |
-| `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org |
+| `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org. `--reinstall` re-installs (an lx-managed package's recorded version) |
 | `lx update [package]` | Check installed packages against their latest release, no install |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
 | `lx list` | List packages `lx` has installed |
 | `lx show <package>` | Show everything known about one package (manifest + dpkg) |
 | `lx info` | Auto-detect and report the host OS and package system (`--json` for machine-readable output) |
-| `lx reinstall <package>` | Reinstall the recorded version of an `lx`-managed package |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
 | `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead, and defaults to the host's native format |
 | `lx publish [config]` | Build every requested format and generate that format's repository index in one run (`--formats`, default `deb,rpm,arch`), each in its own `<output>/<format>/` subdirectory — the producer→distributor loop |
-| `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
+| `lx migrate lpt [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx`. Bare `lx migrate` is equivalent |
+| `lx migrate native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
+| `lx schema` | Generate the JSON schema for `package.yaml` (aliases: `json-schema`, `jsonschema`) |
 | `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
-| `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
+
+Moved names keep working as hidden aliases so existing scripts don't break:
+`lx scan-deps` → `lx deps scan`, `lx shlibdeps` → `lx deps resolve`,
+`lx go-native` → `lx migrate native`, `lx reinstall` →
+`lx install --reinstall`.
 
 `lx get` is the consumer subcommand group —
-`install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`list`/`search`,
+`install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`rollback`/`list`/`search`,
 no build machinery. Same manifest, same org:
 
 ```sh
@@ -221,7 +226,7 @@ format's own ordering. `--format` overrides host detection, and
 `LX_INDEX_ORG` points the client at a different GitHub org (default
 `latest-debs`). Each manifest entry records the format it was installed as.
 
-### `lx go-native`
+### `lx migrate native`
 
 Migrate snap, flatpak, nix, and `curl … | sh` installs to **native**
 packages (`.deb` on dpkg hosts, `.rpm` on rpm hosts, `.pkg.tar.zst` on Arch
@@ -229,12 +234,12 @@ hosts). Plan by default — nothing is installed or removed until you pass
 `--yes`:
 
 ```sh
-lx go-native                  # plan: detect + map, print only
-lx go-native firefox          # plan, filtered to matching ids
-lx go-native --yes            # apply: install natives, remove sources
-lx go-native --yes --keep-source      # install natives, keep both
-lx go-native --from flatpak,nix --skip-sh   # managed sources only
-lx go-native --yes --cleanup-sh   # auto-delete curl|sh orphans after install
+lx migrate native                  # plan: detect + map, print only
+lx migrate native firefox          # plan, filtered to matching ids
+lx migrate native --yes            # apply: install natives, remove sources
+lx migrate native --yes --keep-source      # install natives, keep both
+lx migrate native --from flatpak,nix --skip-sh   # managed sources only
+lx migrate native --yes --cleanup-sh   # auto-delete curl|sh orphans after install
 ```
 
 How it works: `snap list` / `flatpak list --app` / `nix profile list` are
@@ -551,7 +556,7 @@ instead of flattening loose files there.
 **`depends:`** — for binaries needing a runtime library a bare Debian
 install doesn't have by default (e.g. pnpm's Node single-executable binary
 needs `libatomic1`). Emits a `Depends:` control-file line. Run `lx
-scan-deps` first to see exactly which shared libraries the actual release
+deps scan` first to see exactly which shared libraries the actual release
 binary needs (parsed natively from its ELF `DT_NEEDED` entries, no
 `ldd`/`objdump` required) rather than guessing -- it flags which ones are
 just glibc/essential and, when `dpkg` is available locally, best-effort

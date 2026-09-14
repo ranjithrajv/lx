@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Command regrouping
+
+- New `lx deps` group: `lx deps scan` (was `lx scan-deps`) and
+  `lx deps resolve` (was `lx shlibdeps`).
+- `lx go-native` is now `lx migrate native`; bare `lx migrate` (and
+  `lx migrate --repo DIR`) keeps the legacy `lpt` behavior, also reachable
+  as `lx migrate lpt`.
+- Top-level `lx reinstall` is folded into `lx install --reinstall`: with no
+  `--version`, it re-installs an lx-managed package's recorded version;
+  otherwise it forces a reinstall of the resolved version.
+- `lx json-schema` is renamed `lx schema` (aliases `json-schema`,
+  `jsonschema`).
+- `lx get` gains `rollback`, matching the top-level consumer commands.
+- The old names keep working as hidden aliases, so existing scripts and
+  `action.yml` are unaffected.
+
 ### `lx info` and host-aware defaults
 
 - New `lx info` command auto-detects the host OS and package system

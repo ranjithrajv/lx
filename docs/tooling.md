@@ -224,7 +224,7 @@ From `Makefile` and `.pre-commit-config.yaml`:
 | `debian-multiarch-builder` GitHub Action | replaced | **Drop-in** (same inputs/outputs) | `action.yml`; `lx migrate` rewrites workflows |
 | `dpkg-deb` | replaced for **building** | Functional | `lib/debarchive.rs`; real `dpkg-deb --info/--contents` accepts output |
 | `dpkg-source` | replaced for source packages | Functional | `lib/source.rs`; `dpkg-source -x` reconstructs output |
-| `dpkg-shlibdeps` | replaced by `lx shlibdeps` | **Drop-in** (command) | `lib/shlibdeps.rs`, decision doc |
+| `dpkg-shlibdeps` | replaced by `lx deps resolve` | **Drop-in** (command) | `lib/shlibdeps.rs`, decision doc |
 | `debsign` / `debsigs` | replaced for signing | Compatible | `_gpgorigin` member; `signature.method: debsign` |
 | `fpm` | replaced for the common path | Feature parity | [`comparison/fpm-vs-nfpm-vs-lx.md`](comparison/fpm-vs-nfpm-vs-lx.md) |
 | `nfpm` | replaced on covered formats | Feature parity | [`comparison/lx-vs-nfpm.md`](comparison/lx-vs-nfpm.md) |
@@ -232,7 +232,7 @@ From `Makefile` and `.pre-commit-config.yaml`:
 | `makedeb` / AUR `makepkg` | replaced (import + native build) | Feature parity | `lx init --from-aur`, `lx index install` |
 | `cargo-deb` / `cargo-dist` / `goreleaser` / `*2deb` | feature parity | Feature parity | checksum sidecars, shell installer, cosign, relocatable, SBOM |
 | `dpkg-scanpackages` / `apt-ftparchive` / `reprepro` | replaced for repo publishing | Functional | `lx repo` |
-| snap / flatpak / nix | migration source, not output | Functional | `lx go-native` |
+| snap / flatpak / nix | migration source, not output | Functional | `lx migrate native` |
 | `dpkg-buildpackage` / `debian/rules` | **not replaced** | — | `shlibdeps` decision doc, scope note |
 | `lintian` | **consumed, not replaced** | — | `lib/lintian.rs` |
 | `dpkg` / `apt` / `rpm` / `pacman` | **consumed, not replaced** | — | install/query paths above |
@@ -312,7 +312,7 @@ reader/patch-stack maintainer. `debarchive::extract` is scoped to what
 
 ### 2.6 `dpkg-shlibdeps` — command drop-in
 
-`lx shlibdeps <path>…` is described by its decision doc as "a drop-in for
+`lx deps resolve <path>…` is described by its decision doc as "a drop-in for
 `dpkg-shlibdeps` itself, not for `dpkg-buildpackage`". It parses the
 binary's `DT_NEEDED` plus `(symbol, version)` requirements from
 `.gnu.version_r`/`VERNEED` and reads the dpkg `symbols`/`shlibs` databases
@@ -381,7 +381,7 @@ this is feature parity, not a drop-in for their command lines.
 
 ### 2.11 snap / flatpak / nix — migration, not output
 
-`lx go-native` consumes `snap`/`flatpak`/`nix` to **detect and migrate
+`lx migrate native` consumes `snap`/`flatpak`/`nix` to **detect and migrate
 away from** them: parse their listings, map each finding to an `lx`
 package name, install the native package, and (on request) remove the
 non-native source. Unmapped findings land in a `missingnative` report
@@ -416,7 +416,7 @@ These are consumed on purpose and will not be reimplemented:
 - **`rpm`/`rpm2cpio`/`cpio`** — only for reading `.rpm` files during
   `lx convert`; there is no native RPM reader yet.
 - **`git`** — only to clone/pull the LX community recipe index.
-- **`dpkg-buildpackage` / `debian/rules`** — out of scope; `lx shlibdeps`
+- **`dpkg-buildpackage` / `debian/rules`** — out of scope; `lx deps resolve`
   replaces `dpkg-shlibdeps`, not the whole build.
 
 ---
@@ -440,9 +440,9 @@ These are consumed on purpose and will not be reimplemented:
 | `lx convert` from `.rpm` | `rpm`, `rpm2cpio`, `cpio` |
 | `lx convert` from `.deb`/Arch | *nothing* |
 | `lx repo --sign-key` | `gpg` |
-| `lx shlibdeps` | *nothing* (reads dpkg `symbols`/`shlibs`) |
-| `lx scan-deps` / `--bindep` | `dpkg`/`rpm`/`pacman` and/or `ldconfig` for package-name resolution (optional; sonames come from in-process ELF parsing) |
-| `lx go-native --yes` | `snap`/`flatpak`/`nix` (for the sources being migrated) + the host installer |
+| `lx deps resolve` | *nothing* (reads dpkg `symbols`/`shlibs`) |
+| `lx deps scan` / `--bindep` | `dpkg`/`rpm`/`pacman` and/or `ldconfig` for package-name resolution (optional; sonames come from in-process ELF parsing) |
+| `lx migrate native --yes` | `snap`/`flatpak`/`nix` (for the sources being migrated) + the host installer |
 | `lx index` | `git` (LX community index); HTTP for AUR/repology |
 
 **What `lx` produces without every one of those tools:** every package

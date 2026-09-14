@@ -50,8 +50,9 @@ pub struct InstallArgs {
     #[arg(long)]
     pub allow_unverified: bool,
 
-    /// Reinstall even if the host manager already reports this exact
-    /// version installed.
+    /// Reinstall. For an lx-managed package, re-install its recorded version
+    /// (unless `--version` is given); otherwise force a reinstall even when
+    /// the host manager already reports the resolved version installed.
     #[arg(long)]
     pub reinstall: bool,
 
@@ -60,7 +61,40 @@ pub struct InstallArgs {
     pub yes: bool,
 }
 
+/// `--reinstall` without an explicit `--version` re-installs the version lx
+/// recorded for this package (the former top-level `lx reinstall` behavior):
+/// fill in the manifest's version/format/arch/distribution unless the user
+/// overrode them. Not managed / no recorded version falls through to a
+/// normal forced reinstall of the latest release.
+fn apply_reinstall_defaults(mut args: InstallArgs, manifest: &Manifest) -> InstallArgs {
+    if !args.reinstall {
+        return args;
+    }
+    let Some(entry) = manifest.current(&args.package) else {
+        return args;
+    };
+    if args.version.is_none() {
+        if entry.version.trim().is_empty() {
+            return args;
+        }
+        println!("reinstalling {} {}", args.package, entry.version);
+        args.version = Some(entry.version.clone());
+    }
+    if args.format.is_none() && !entry.format.trim().is_empty() {
+        args.format = Some(entry.format.clone());
+    }
+    if args.arch.is_none() && !entry.arch.trim().is_empty() {
+        args.arch = Some(entry.arch.clone());
+    }
+    if args.distribution.is_none() && !entry.distribution.trim().is_empty() {
+        args.distribution = Some(entry.distribution.clone());
+    }
+    args
+}
+
 pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
+    let manifest = Manifest::load().unwrap_or_default();
+    let args = apply_reinstall_defaults(args, &manifest);
     let format = match &args.format {
         Some(f) => consumer::parse_format(f)?,
         None => detect_host_format(),
@@ -176,4 +210,75 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
     manifest.save()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn recorded() -> PackageEntry {
+        PackageEntry {
+            version: "1.2.3-1+trixie".into(),
+            arch: "amd64".into(),
+            distribution: "trixie".into(),
+            asset: "eza_1.2.3-1+trixie_amd64.deb".into(),
+            tag: "v1.2.3".into(),
+            installed_at: "t".into(),
+            format: "deb".into(),
+        }
+    }
+
+    fn args(reinstall: bool) -> InstallArgs {
+        InstallArgs {
+            package: "eza".into(),
+            format: None,
+            version: None,
+            arch: None,
+            distribution: None,
+            download_only: None,
+            no_verify: false,
+            allow_unverified: false,
+            reinstall,
+            yes: true,
+        }
+    }
+
+    fn manifest_with_eza() -> Manifest {
+        let mut m = Manifest::default();
+        m.record("eza", recorded());
+        m
+    }
+
+    #[test]
+    fn reinstall_fills_recorded_version_and_target() {
+        let got = apply_reinstall_defaults(args(true), &manifest_with_eza());
+        assert_eq!(got.version.as_deref(), Some("1.2.3-1+trixie"));
+        assert_eq!(got.format.as_deref(), Some("deb"));
+        assert_eq!(got.arch.as_deref(), Some("amd64"));
+        assert_eq!(got.distribution.as_deref(), Some("trixie"));
+    }
+
+    #[test]
+    fn reinstall_explicit_version_and_format_win() {
+        let mut a = args(true);
+        a.version = Some("9.9.9".into());
+        a.format = Some("rpm".into());
+        let got = apply_reinstall_defaults(a, &manifest_with_eza());
+        assert_eq!(got.version.as_deref(), Some("9.9.9"));
+        assert_eq!(got.format.as_deref(), Some("rpm"));
+        // Unset fields are still filled from the manifest.
+        assert_eq!(got.arch.as_deref(), Some("amd64"));
+    }
+
+    #[test]
+    fn reinstall_of_unmanaged_package_is_a_noop() {
+        let got = apply_reinstall_defaults(args(true), &Manifest::default());
+        assert!(got.version.is_none() && got.format.is_none());
+    }
+
+    #[test]
+    fn without_reinstall_flag_recorded_version_is_ignored() {
+        let got = apply_reinstall_defaults(args(false), &manifest_with_eza());
+        assert!(got.version.is_none());
+    }
 }
