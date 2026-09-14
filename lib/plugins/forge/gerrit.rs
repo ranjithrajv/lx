@@ -1,82 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Result;
-use std::path::Path;
-
-use lx_lib::github::{Release, ReleaseMeta};
-
-use super::ForgeSource;
-use crate::plugins::plugin::plugin_identity;
+use super::project_forge_source;
 
 pub struct GerritForgeSource;
 
-plugin_identity!(
+project_forge_source!(
     GerritForgeSource,
+    lx_lib::gerrit::GerritClient,
     "gerrit",
-    "Gerrit Code Review (review.gerrithub.io / self-hosted, Gerrit API)"
+    "Gerrit Code Review (review.gerrithub.io / self-hosted, Gerrit API)",
+    Some("GERRIT_TOKEN"),
+    Some("gerrit_host"),
+    parse_gerrit_url,
 );
-
-impl ForgeSource for GerritForgeSource {
-    fn token_env(&self) -> Option<&'static str> {
-        Some("GERRIT_TOKEN")
-    }
-
-    fn host_config_key(&self) -> Option<&'static str> {
-        Some("gerrit_host")
-    }
-
-    fn parse_url(&self, url: &str) -> Option<String> {
-        parse_gerrit_url(url)
-    }
-
-    fn latest_release(
-        &self,
-        repo: &str,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Release> {
-        let client = lx_lib::gerrit::GerritClient::with_cache(
-            token.map(|s| s.to_string()),
-            cache_dir.map(|p| p.to_path_buf()),
-        )?;
-        // Gerrit project is repo (may contain slashes like platform/system/core)
-        // For Gerrit, we pass the full repo string as project
-        client.latest_release(repo)
-    }
-
-    fn release_by_tag(
-        &self,
-        repo: &str,
-        tag: &str,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Release> {
-        let client = lx_lib::gerrit::GerritClient::with_cache(
-            token.map(|s| s.to_string()),
-            cache_dir.map(|p| p.to_path_buf()),
-        )?;
-        client.release_by_tag(repo, tag)
-    }
-
-    fn releases(
-        &self,
-        repo: &str,
-        per_page: u8,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Vec<ReleaseMeta>> {
-        let client = lx_lib::gerrit::GerritClient::with_cache(
-            token.map(|s| s.to_string()),
-            cache_dir.map(|p| p.to_path_buf()),
-        )?;
-        client.releases(repo, per_page)
-    }
-
-    fn raw_get(&self, url: &str, token: Option<&str>) -> Result<Box<dyn std::io::Read + Send>> {
-        let client = lx_lib::gerrit::GerritClient::new(token.map(|s| s.to_string()))?;
-        client.raw_get(url)
-    }
-}
 
 pub fn parse_gerrit_url(s: &str) -> Option<String> {
     // Gerrit URLs: https://{host}/{project} where project may contain slashes

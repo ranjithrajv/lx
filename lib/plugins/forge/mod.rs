@@ -211,3 +211,200 @@ pub fn parse_host_url(s: &str, host: &str) -> Option<String> {
     }
     None
 }
+
+/// Implement `Plugin` + `ForgeSource` for an "owner/repo" provider client,
+/// delegating the methods every such provider shares. A provider file then
+/// carries only its identity and URL parser instead of seven near-identical
+/// methods:
+///
+/// ```ignore
+/// repo_forge_source!(
+///     GitlabForgeSource, lx_lib::gitlab::GitlabClient,
+///     "gitlab", "GitLab Releases …",
+///     Some("GITLAB_TOKEN"), Some("gitlab_host"), parse_gitlab_url,
+/// );
+/// ```
+///
+/// The repo-info methods (`repo_license`/`repo_root`/`repo_file_text`) are
+/// generated too; clients that don't support them return empty results.
+macro_rules! repo_forge_source {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:path $(,)?) => {
+        impl $crate::plugins::plugin::Plugin for $ty {
+            fn name(&self) -> &'static str {
+                $name
+            }
+
+            fn description(&self) -> &'static str {
+                $desc
+            }
+        }
+
+        impl $crate::plugins::forge::ForgeSource for $ty {
+            fn token_env(&self) -> Option<&'static str> {
+                $token_env
+            }
+
+            fn host_config_key(&self) -> Option<&'static str> {
+                $host_key
+            }
+
+            fn parse_url(&self, url: &str) -> Option<String> {
+                $parse(url)
+            }
+
+            fn latest_release(
+                &self,
+                repo: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<$crate::github::Release> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.latest_release(owner, repo_name)
+            }
+
+            fn release_by_tag(
+                &self,
+                repo: &str,
+                tag: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<$crate::github::Release> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.release_by_tag(owner, repo_name, tag)
+            }
+
+            fn releases(
+                &self,
+                repo: &str,
+                per_page: u8,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<Vec<$crate::github::ReleaseMeta>> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.releases(owner, repo_name, per_page)
+            }
+
+            fn raw_get(
+                &self,
+                url: &str,
+                token: Option<&str>,
+            ) -> ::anyhow::Result<Box<dyn std::io::Read + Send>> {
+                let client = $crate::source_client::new_client_for::<$client>(token, None)?;
+                client.raw_get(url)
+            }
+
+            fn repo_license(
+                &self,
+                repo: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<Option<$crate::github::RepoLicense>> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.repo_license(owner, repo_name)
+            }
+
+            fn repo_root(
+                &self,
+                repo: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<Vec<String>> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.repo_root(owner, repo_name)
+            }
+
+            fn repo_file_text(
+                &self,
+                repo: &str,
+                path: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<Option<String>> {
+                let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.repo_file_text(owner, repo_name, path)
+            }
+        }
+    };
+}
+
+pub(crate) use repo_forge_source;
+
+/// The single-project counterpart of [`repo_forge_source!`]: Gerrit and
+/// SourceForge identify a package by a bare project name (which may itself
+/// contain slashes), so no `owner/repo` split is applied.
+macro_rules! project_forge_source {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:path $(,)?) => {
+        impl $crate::plugins::plugin::Plugin for $ty {
+            fn name(&self) -> &'static str {
+                $name
+            }
+
+            fn description(&self) -> &'static str {
+                $desc
+            }
+        }
+
+        impl $crate::plugins::forge::ForgeSource for $ty {
+            fn token_env(&self) -> Option<&'static str> {
+                $token_env
+            }
+
+            fn host_config_key(&self) -> Option<&'static str> {
+                $host_key
+            }
+
+            fn parse_url(&self, url: &str) -> Option<String> {
+                $parse(url)
+            }
+
+            fn latest_release(
+                &self,
+                repo: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<$crate::github::Release> {
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.latest_release(repo)
+            }
+
+            fn release_by_tag(
+                &self,
+                repo: &str,
+                tag: &str,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<$crate::github::Release> {
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.release_by_tag(repo, tag)
+            }
+
+            fn releases(
+                &self,
+                repo: &str,
+                per_page: u8,
+                token: Option<&str>,
+                cache_dir: Option<&std::path::Path>,
+            ) -> ::anyhow::Result<Vec<$crate::github::ReleaseMeta>> {
+                let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
+                client.releases(repo, per_page)
+            }
+
+            fn raw_get(
+                &self,
+                url: &str,
+                token: Option<&str>,
+            ) -> ::anyhow::Result<Box<dyn std::io::Read + Send>> {
+                let client = $crate::source_client::new_client_for::<$client>(token, None)?;
+                client.raw_get(url)
+            }
+        }
+    };
+}
+
+pub(crate) use project_forge_source;

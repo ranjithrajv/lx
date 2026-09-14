@@ -1,80 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::Result;
-use std::path::Path;
-
-use lx_lib::github::{Release, ReleaseMeta};
-
-use super::ForgeSource;
-use crate::plugins::plugin::plugin_identity;
+use super::repo_forge_source;
 
 pub struct BitbucketForgeSource;
 
-plugin_identity!(
+repo_forge_source!(
     BitbucketForgeSource,
+    lx_lib::bitbucket::BitbucketClient,
     "bitbucket",
-    "Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)"
+    "Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)",
+    Some("BITBUCKET_TOKEN"),
+    Some("bitbucket_host"),
+    parse_bitbucket_url,
 );
-
-impl ForgeSource for BitbucketForgeSource {
-    fn token_env(&self) -> Option<&'static str> {
-        Some("BITBUCKET_TOKEN")
-    }
-
-    fn host_config_key(&self) -> Option<&'static str> {
-        Some("bitbucket_host")
-    }
-
-    fn parse_url(&self, url: &str) -> Option<String> {
-        parse_bitbucket_url(url)
-    }
-
-    fn latest_release(
-        &self,
-        repo: &str,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Release> {
-        let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lx_lib::source_client::new_client_for::<lx_lib::bitbucket::BitbucketClient>(
-            token, cache_dir,
-        )?;
-        client.latest_release(owner, repo_name)
-    }
-
-    fn release_by_tag(
-        &self,
-        repo: &str,
-        tag: &str,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Release> {
-        let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lx_lib::source_client::new_client_for::<lx_lib::bitbucket::BitbucketClient>(
-            token, cache_dir,
-        )?;
-        client.release_by_tag(owner, repo_name, tag)
-    }
-
-    fn releases(
-        &self,
-        repo: &str,
-        per_page: u8,
-        token: Option<&str>,
-        cache_dir: Option<&Path>,
-    ) -> Result<Vec<ReleaseMeta>> {
-        let (owner, repo_name) = crate::discovery::split_repo(repo)?;
-        let client = lx_lib::source_client::new_client_for::<lx_lib::bitbucket::BitbucketClient>(
-            token, cache_dir,
-        )?;
-        client.releases(owner, repo_name, per_page)
-    }
-
-    fn raw_get(&self, url: &str, token: Option<&str>) -> Result<Box<dyn std::io::Read + Send>> {
-        let client = lx_lib::bitbucket::BitbucketClient::new(token.map(|s| s.to_string()))?;
-        client.raw_get(url)
-    }
-}
 
 pub fn parse_bitbucket_url(s: &str) -> Option<String> {
     // Bitbucket Cloud: https://bitbucket.org/{workspace}/{repo_slug}
