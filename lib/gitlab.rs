@@ -9,6 +9,8 @@ use crate::release::{Asset, Release, ReleaseMeta};
 /// GitLab API client mirroring `GitHubClient`'s surface.
 /// Uses blocking `reqwest` and the same 5-minute JSON cache as the other
 /// provider clients.
+use crate::cache::ApiCacheProvider;
+
 pub struct GitlabClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -139,13 +141,6 @@ impl GitlabClient {
             body: raw.description,
         }
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 pub fn parse_gitlab_time(s: &str) -> Option<i64> {
@@ -206,5 +201,11 @@ impl crate::source_client::ClientNew for GitlabClient {
 impl crate::checksum::RawGetter for GitlabClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GitlabClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for GitlabClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

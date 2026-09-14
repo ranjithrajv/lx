@@ -299,3 +299,20 @@ pub mod lock_file {
         }
     }
 }
+
+/// Forge clients that keep an optional on-disk JSON API cache.
+///
+/// The eight forge clients each hand-wrote the same `api_cache` wrapper around
+/// [`ApiCache::get_or_fetch`]; this default method replaces them.
+pub trait ApiCacheProvider {
+    /// Directory for the JSON API cache, or `None` to fetch every time.
+    fn api_cache_dir(&self) -> Option<PathBuf>;
+
+    /// Fetch `key` through the cache, or directly when no cache dir is set.
+    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
+    {
+        ApiCache::new(self.api_cache_dir()).get_or_fetch(key, fetch)
+    }
+}

@@ -11,6 +11,8 @@ pub use crate::release::{Asset, Release, ReleaseMeta, RepoLicense};
 /// no async runtime. Mirrors [`crate::gitlab::GitlabClient`]'s shape and
 /// shares the 5-minute JSON API cache, so every source-provider client in
 /// lx is synchronous.
+use crate::cache::ApiCacheProvider;
+
 pub struct GitHubClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -129,13 +131,6 @@ impl GitHubClient {
             Err(e) if e.to_string().contains("not found") => Ok(None),
             Err(e) => Err(e),
         }
-    }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
 }
 
@@ -261,5 +256,11 @@ impl crate::source_client::ClientNew for GitHubClient {
 impl crate::checksum::RawGetter for GitHubClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GitHubClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for GitHubClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

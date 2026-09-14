@@ -8,6 +8,8 @@ use crate::release::{Release, ReleaseMeta};
 
 /// Forgejo API client – API compatible with Gitea.
 /// Uses `FORGEJO_*` env vars, falls back to `GITEA_*` for compat.
+use crate::cache::ApiCacheProvider;
+
 pub struct ForgejoClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -113,13 +115,6 @@ impl ForgejoClient {
             })
             .collect())
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 /// Uniform construction for the `ForgeSource` glue (`ClientNew`).
@@ -135,5 +130,11 @@ impl crate::source_client::ClientNew for ForgejoClient {
 impl crate::checksum::RawGetter for ForgejoClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         ForgejoClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for ForgejoClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

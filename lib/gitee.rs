@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use crate::release::{Asset, Release, ReleaseMeta};
 
 /// Gitee API v5 client.
+use crate::cache::ApiCacheProvider;
+
 pub struct GiteeClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -178,13 +180,6 @@ impl GiteeClient {
             body: raw.body,
         }
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -228,5 +223,11 @@ impl crate::source_client::ClientNew for GiteeClient {
 impl crate::checksum::RawGetter for GiteeClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GiteeClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for GiteeClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

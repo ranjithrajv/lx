@@ -8,6 +8,8 @@ use crate::release::{Asset, Release, ReleaseMeta};
 
 /// Gitea API client (also used for Forgejo – API compatible).
 /// Mirrors `GitHubClient`/`GitlabClient` surface, uses blocking `reqwest`.
+use crate::cache::ApiCacheProvider;
+
 pub struct GiteaClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -151,13 +153,6 @@ impl GiteaClient {
             body: raw.body,
         }
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -207,5 +202,11 @@ impl crate::source_client::ClientNew for GiteaClient {
 impl crate::checksum::RawGetter for GiteaClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GiteaClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for GiteaClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

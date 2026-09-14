@@ -11,6 +11,8 @@ use crate::release::{Asset, Release, ReleaseMeta};
 /// Assets are synthesized as `https://{host}/{project}/-/archive/{tag}.tar.gz`
 /// (common for Gerrit via plugins, e.g. `download-commands`). This is sufficient
 /// for `lx`'s `match_assets` which only needs a filename containing the arch.
+use crate::cache::ApiCacheProvider;
+
 pub struct GerritClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -217,13 +219,6 @@ impl GerritClient {
             body: None,
         }
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 fn base64_encode(s: &str) -> String {
@@ -260,5 +255,11 @@ impl crate::source_client::ClientNew for GerritClient {
 impl crate::checksum::RawGetter for GerritClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GerritClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for GerritClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

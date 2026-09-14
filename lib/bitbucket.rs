@@ -9,6 +9,8 @@ use crate::release::{Asset, Release, ReleaseMeta};
 /// Bitbucket Cloud API client (`api.bitbucket.org/2.0`).
 /// Bitbucket has no native "releases" – we treat `downloads` as a single
 /// pseudo-release with tag `latest`. Assets are `downloads` entries.
+use crate::cache::ApiCacheProvider;
+
 pub struct BitbucketClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -128,13 +130,6 @@ impl BitbucketClient {
             body: None,
         }
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -184,5 +179,11 @@ impl crate::source_client::ClientNew for BitbucketClient {
 impl crate::checksum::RawGetter for BitbucketClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         BitbucketClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for BitbucketClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }

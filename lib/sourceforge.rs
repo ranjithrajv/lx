@@ -30,6 +30,8 @@ use std::path::PathBuf;
 use crate::release::{Asset, Release, ReleaseMeta};
 
 /// SourceForge RSS client.
+use crate::cache::ApiCacheProvider;
+
 pub struct SourceForgeClient {
     http: reqwest::blocking::Client,
     base_url: String,
@@ -117,13 +119,6 @@ impl SourceForgeClient {
             published_at: None,
         }])
     }
-
-    fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
-    where
-        T: serde::Serialize + serde::de::DeserializeOwned + Clone,
-    {
-        crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
-    }
 }
 
 /// Parse a SourceForge project RSS feed into release assets.
@@ -206,5 +201,11 @@ impl crate::source_client::ClientNew for SourceForgeClient {
 impl crate::checksum::RawGetter for SourceForgeClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         SourceForgeClient::raw_get(self, url)
+    }
+}
+
+impl crate::cache::ApiCacheProvider for SourceForgeClient {
+    fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
+        self.api_cache_dir.clone()
     }
 }
