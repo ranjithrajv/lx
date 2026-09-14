@@ -10,7 +10,8 @@ repo_forge_source!(
     "gitee",
     "Gitee Releases (gitee.com / self-hosted, API v5)",
     Some("GITEE_TOKEN"),
-    Some("gitee_host"),
+    Some("GITEE_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.gitee_host.clone(),
     parse_gitee_url,
 );
 

@@ -10,7 +10,8 @@ project_forge_source!(
     "gerrit",
     "Gerrit Code Review (review.gerrithub.io / self-hosted, Gerrit API)",
     Some("GERRIT_TOKEN"),
-    Some("gerrit_host"),
+    Some("GERRIT_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.gerrit_host.clone(),
     parse_gerrit_url,
 );
 

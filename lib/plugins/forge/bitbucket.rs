@@ -10,7 +10,8 @@ repo_forge_source!(
     "bitbucket",
     "Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)",
     Some("BITBUCKET_TOKEN"),
-    Some("bitbucket_host"),
+    Some("BITBUCKET_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.bitbucket_host.clone(),
     parse_bitbucket_url,
 );
 

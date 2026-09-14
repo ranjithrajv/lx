@@ -34,9 +34,17 @@ pub trait ForgeSource: Plugin {
     /// provider never requires editing them, only this method.
     fn token_env(&self) -> Option<&'static str>;
 
-    /// Config field name for a self-hosted host override (e.g. Some("gitlab_host")).
-    /// `None` for single-host providers (github).
-    fn host_config_key(&self) -> Option<&'static str> {
+    /// Env var the self-hosted host override is published to (e.g.
+    /// `Some("GITLAB_HOST")`). `None` for single-host providers (github).
+    fn host_env(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The configured self-hosted host override for this provider, if any.
+    ///
+    /// Read straight from `cfg` by each provider's own accessor, so adding a
+    /// provider never requires editing a central `match` over config fields.
+    fn host_override(&self, _cfg: &crate::config::PackageConfig) -> Option<String> {
         None
     }
 
@@ -139,30 +147,14 @@ pub fn forge_source_names() -> Vec<&'static str> {
 
 /// Apply the provider's host override from config to its env var, so
 /// `lib::<provider>::Client` (which reads env) picks it up. Data-driven via
-/// `host_config_key` — adding a provider requires no edits at call sites.
-/// Lives here (not in `build.rs`) because host/token resolution is
+/// the provider itself — adding a provider requires no edits here or at any
+/// call site. Lives here (not in `build.rs`) because host/token resolution is
 /// provider-domain logic (SRP).
 pub fn apply_forge_host(source: &dyn ForgeSource, cfg: &crate::config::PackageConfig) {
-    let Some(key) = source.host_config_key() else {
+    let (Some(env), Some(host)) = (source.host_env(), source.host_override(cfg)) else {
         return;
     };
-    let Some(host) = cfg_host(cfg, key) else {
-        return;
-    };
-    let env_name = format!("{}_HOST", key.trim_end_matches("_host").to_uppercase());
-    std::env::set_var(env_name, host);
-}
-
-fn cfg_host<'a>(cfg: &'a crate::config::PackageConfig, key: &str) -> Option<&'a str> {
-    match key {
-        "gitlab_host" => cfg.gitlab_host.as_deref(),
-        "gitea_host" => cfg.gitea_host.as_deref(),
-        "forgejo_host" => cfg.forgejo_host.as_deref(),
-        "bitbucket_host" => cfg.bitbucket_host.as_deref(),
-        "gerrit_host" => cfg.gerrit_host.as_deref(),
-        "gitee_host" => cfg.gitee_host.as_deref(),
-        _ => None,
-    }
+    std::env::set_var(env, host);
 }
 
 /// Resolve the auth token for a provider: its `token_env()` first, then the
@@ -218,7 +210,7 @@ pub fn parse_host_url(s: &str, host: &str) -> Option<String> {
 /// `ForgeSource` impl so the repo-info variant can add its three methods
 /// without duplicating this body.
 macro_rules! repo_forge_source_impl {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident, $($extra:item),* $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident, $($extra:item),* $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name
@@ -234,8 +226,15 @@ macro_rules! repo_forge_source_impl {
                 $token_env
             }
 
-            fn host_config_key(&self) -> Option<&'static str> {
-                $host_key
+            fn host_env(&self) -> Option<&'static str> {
+                $host_env
+            }
+
+            fn host_override(
+                &self,
+                cfg: &$crate::config::PackageConfig,
+            ) -> Option<String> {
+                ($host_override)(cfg)
             }
 
             fn parse_url(&self, url: &str) -> Option<String> {
@@ -301,7 +300,8 @@ pub(crate) use repo_forge_source_impl;
 /// repo_forge_source!(
 ///     GitlabForgeSource, lx_lib::gitlab::GitlabClient,
 ///     "gitlab", "GitLab Releases …",
-///     Some("GITLAB_TOKEN"), Some("gitlab_host"), parse_gitlab_url,
+///     Some("GITLAB_TOKEN"), Some("GITLAB_HOST"), |cfg| cfg.gitlab_host.clone(),
+///     parse_gitlab_url,
 /// );
 /// ```
 ///
@@ -309,9 +309,16 @@ pub(crate) use repo_forge_source_impl;
 /// back to the trait defaults instead of being generated as stubs. Providers
 /// that do offer repo-info use [`repo_forge_source_with_repo_info!`].
 macro_rules! repo_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
         $crate::plugins::forge::repo_forge_source_impl!(
-            $ty, $client, $name, $desc, $token_env, $host_key, $parse,
+            $ty,
+            $client,
+            $name,
+            $desc,
+            $token_env,
+            $host_env,
+            $host_override,
+            $parse,
         );
     };
 }
@@ -319,14 +326,15 @@ macro_rules! repo_forge_source {
 /// The repo-info variant of [`repo_forge_source!`], for providers whose API
 /// actually exposes license / root-listing / raw-file reads (today GitHub).
 macro_rules! repo_forge_source_with_repo_info {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
         $crate::plugins::forge::repo_forge_source_impl!(
             $ty,
             $client,
             $name,
             $desc,
             $token_env,
-            $host_key,
+            $host_env,
+            $host_override,
             $parse,
             fn repo_license(
                 &self,
@@ -370,7 +378,7 @@ pub(crate) use repo_forge_source_with_repo_info;
 /// SourceForge identify a package by a bare project name (which may itself
 /// contain slashes), so no `owner/repo` split is applied.
 macro_rules! project_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name
@@ -386,8 +394,12 @@ macro_rules! project_forge_source {
                 $token_env
             }
 
-            fn host_config_key(&self) -> Option<&'static str> {
-                $host_key
+            fn host_env(&self) -> Option<&'static str> {
+                $host_env
+            }
+
+            fn host_override(&self, cfg: &$crate::config::PackageConfig) -> Option<String> {
+                ($host_override)(cfg)
             }
 
             fn parse_url(&self, url: &str) -> Option<String> {

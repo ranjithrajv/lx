@@ -10,7 +10,8 @@ repo_forge_source!(
     "gitea",
     "Gitea Releases (codeberg.org / self-hosted, Gitea API v1)",
     Some("GITEA_TOKEN"),
-    Some("gitea_host"),
+    Some("GITEA_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.gitea_host.clone(),
     parse_gitea_url,
 );
 

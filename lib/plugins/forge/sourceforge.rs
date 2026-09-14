@@ -11,6 +11,7 @@ project_forge_source!(
     "SourceForge file releases (project RSS feed as pseudo-releases)",
     None,
     None,
+    |_| None,
     parse_sourceforge_url,
 );
 

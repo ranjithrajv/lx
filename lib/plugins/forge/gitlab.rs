@@ -10,7 +10,8 @@ repo_forge_source!(
     "gitlab",
     "GitLab Releases (gitlab.com / self-hosted) — via GitLab API v4",
     Some("GITLAB_TOKEN"),
-    Some("gitlab_host"),
+    Some("GITLAB_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.gitlab_host.clone(),
     parse_gitlab_url,
 );
 

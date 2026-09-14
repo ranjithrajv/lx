@@ -10,7 +10,8 @@ repo_forge_source!(
     "forgejo",
     "Forgejo Releases (codeberg.org / self-hosted, Forgejo/Gitea API v1)",
     Some("FORGEJO_TOKEN"),
-    Some("forgejo_host"),
+    Some("FORGEJO_HOST"),
+    |cfg: &crate::config::PackageConfig| cfg.forgejo_host.clone(),
     parse_forgejo_url,
 );
 

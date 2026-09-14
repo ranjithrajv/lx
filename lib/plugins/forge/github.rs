@@ -13,6 +13,7 @@ repo_forge_source_with_repo_info!(
     "GitHub Releases (api.github.com, blocking reqwest) — github_repo: owner/repo",
     Some("GITHUB_TOKEN"),
     None,
+    |_| None,
     parse_github_url,
 );
 
