@@ -389,20 +389,6 @@ pub fn extract(deb_path: &Path, dest: &Path) -> Result<()> {
 /// package lx produces while still capping memory on corrupt input.
 const MAX_ZSTD_DECOMPRESSED_BYTES: usize = 256 * 1024 * 1024;
 
-#[allow(dead_code)]
-fn build_control_tar_gz(control: &[u8], md5sums: &[u8], mtime: i64) -> Result<Vec<u8>> {
-    build_control_tar(
-        control,
-        md5sums,
-        mtime,
-        &Compression {
-            kind: CompressionKind::Gzip,
-            level: None,
-        },
-        &[],
-    )
-}
-
 fn build_control_tar(
     control: &[u8],
     md5sums: &[u8],
@@ -462,25 +448,6 @@ fn xz(data: &[u8], preset: u32) -> Result<Vec<u8>> {
     let mut writer = lzma_rust2::XzWriter::new(Vec::new(), options)?;
     writer.write_all(data)?;
     Ok(writer.finish()?)
-}
-
-/// Write the outer `ar` container: `debian-binary`, `control.tar.*`,
-/// `data.tar.*`, in that order (dpkg requires this exact order and reads
-/// only as much of the archive as it needs, so anything after `data.tar.*`
-/// -- e.g. `_gpgorigin` -- is safe to append).
-#[allow(dead_code)]
-fn write_ar(deb_path: &Path, mtime: i64, control_tar_gz: &[u8], data_tar_gz: &[u8]) -> Result<()> {
-    write_ar_with_compression(
-        deb_path,
-        mtime,
-        control_tar_gz,
-        data_tar_gz,
-        &Compression {
-            kind: CompressionKind::Gzip,
-            level: None,
-        },
-        None,
-    )
 }
 
 fn write_ar_with_compression(

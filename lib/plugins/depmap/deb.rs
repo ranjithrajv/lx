@@ -18,10 +18,6 @@ impl DependencyMapper for DebianDeps {
         "deb"
     }
 
-    fn repo_family(&self) -> Option<&'static str> {
-        Some("debian")
-    }
-
     fn map(&self, ecosystem: &str, dep_name: &str) -> Option<String> {
         crate::depmap::hardcoded_or_repology(ecosystem, dep_name, "deb")
     }

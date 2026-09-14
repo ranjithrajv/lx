@@ -8,8 +8,6 @@
 //! about a dependency, Repology can often tell us what it's called in the
 //! target distribution.
 
-use anyhow::Result;
-
 /// Look up the distribution package name for an upstream project.
 ///
 /// Queries Repology's API for the project, then finds the best match for
@@ -77,31 +75,6 @@ fn repo_name_for_family(family: &str) -> Option<String> {
         "opensuse" => Some("opensuse_tumbleweed".to_string()),
         _ => None,
     }
-}
-
-/// Search Repology for projects matching a pattern.
-///
-/// Useful for finding the canonical name of a project before looking up
-/// its distribution package name.
-pub fn search_upstream(pattern: &str) -> Result<Vec<(String, String)>> {
-    use regex::Regex;
-    let re = Regex::new(&format!("(?i){}", regex::escape(pattern)))
-        .map_err(|e| anyhow::anyhow!("invalid regex: {e}"))?;
-
-    let source = crate::index::repology::RepologySource::new("repology");
-    let results = source.search_cached(&re)?;
-
-    Ok(results
-        .into_iter()
-        .map(|(name, project)| {
-            let summary = project
-                .packages
-                .first()
-                .and_then(|p| p.summary.clone())
-                .unwrap_or_default();
-            (name, summary)
-        })
-        .collect())
 }
 
 #[cfg(test)]

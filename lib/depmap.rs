@@ -758,13 +758,6 @@ fn read_go_mod_deps(path: &std::path::Path) -> Vec<(String, Option<String>)> {
 
 // --- Legacy API for backward compatibility ---
 
-/// Map multiple dependencies (legacy API).
-pub fn map_dependencies(ecosystem: &str, deps: &[String], format: &str) -> Vec<String> {
-    deps.iter()
-        .filter_map(|d| map_dependency(ecosystem, d, format))
-        .collect()
-}
-
 /// Infer dependencies (legacy API, now with full resolution).
 pub fn infer_deps_from_dir(
     ecosystem: &str,

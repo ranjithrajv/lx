@@ -26,11 +26,6 @@ pub trait DependencyMapper: Plugin {
     /// The `package_format` this backend serves.
     fn format(&self) -> &'static str;
 
-    /// Repology distro family for the online fallback, when one exists.
-    fn repo_family(&self) -> Option<&'static str> {
-        None
-    }
-
     /// Map an ecosystem dependency name to this format's package name.
     fn map(&self, ecosystem: &str, dep_name: &str) -> Option<String>;
 
