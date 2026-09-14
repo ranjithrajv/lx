@@ -12,7 +12,7 @@
 //! auto-generated source archives, which `match_assets` simply skips for
 //! architecture matching.
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -76,27 +76,12 @@ impl GiteeClient {
     }
 
     fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
-        let resp = crate::http::send_get_with_retry(&self.http, url, self.auth_header())
-            .with_context(|| format!("GET {url} failed"))?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().unwrap_or_default();
-            if status.as_u16() == 404 {
-                return Err(anyhow!("not found on Gitee: {body}"));
-            }
-            return Err(anyhow!("Gitee API {status} for {url}: {body}"));
-        }
-        resp.json::<T>()
-            .with_context(|| format!("failed to parse JSON from {url}"))
+        let headers: Vec<(&'static str, String)> = self.auth_header().into_iter().collect();
+        crate::http::get_json(&self.http, url, &headers, "Gitee")
     }
 
     pub fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
-        let resp = crate::http::send_get_with_retry(&self.http, url, self.auth_header())
-            .with_context(|| format!("GET {url} failed"))?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} for {url}", resp.status()));
-        }
-        Ok(Box::new(resp))
+        crate::http::raw_get(&self.http, url, self.auth_header())
     }
 
     pub fn latest_release(&self, owner: &str, repo: &str) -> Result<Release> {

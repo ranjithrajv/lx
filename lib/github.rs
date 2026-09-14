@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 
 // The provider-agnostic release model lives in `crate::release` (every forge
 // client shares it). Re-exported here so existing `github::Release` paths keep
@@ -49,30 +49,11 @@ impl GitHubClient {
     fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
         let mut headers = vec![("Accept", "application/vnd.github+json".to_string())];
         headers.extend(self.auth_header());
-        let resp = crate::http::send_get_with_retry_headers(&self.http, url, &headers)
-            .with_context(|| format!("GET {url} failed"))?;
-        let status = resp.status();
-        if !status.is_success() {
-            let body = resp.text().unwrap_or_default();
-            return Err(match status.as_u16() {
-                404 => anyhow!("not found on GitHub: {body}"),
-                403 => {
-                    anyhow!("GitHub API rate limit hit (403). Set GITHUB_TOKEN to raise the limit.")
-                }
-                _ => anyhow!("GitHub API {status} for {url}: {body}"),
-            });
-        }
-        resp.json::<T>()
-            .with_context(|| format!("failed to parse JSON from {url}"))
+        crate::http::get_json(&self.http, url, &headers, "GitHub")
     }
 
     pub fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
-        let resp = crate::http::send_get_with_retry(&self.http, url, self.auth_header())
-            .with_context(|| format!("GET {url} failed"))?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} for {url}", resp.status()));
-        }
-        Ok(Box::new(resp))
+        crate::http::raw_get(&self.http, url, self.auth_header())
     }
 
     pub fn release_by_tag(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {

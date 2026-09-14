@@ -108,12 +108,7 @@ impl GerritClient {
     }
 
     pub fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
-        let resp = crate::http::send_get_with_retry(&self.http, url, self.auth_header())
-            .with_context(|| format!("GET {url} failed"))?;
-        if !resp.status().is_success() {
-            return Err(anyhow!("HTTP {} for {url}", resp.status()));
-        }
-        Ok(Box::new(resp))
+        crate::http::raw_get(&self.http, url, self.auth_header())
     }
 
     pub fn release_by_tag(&self, project: &str, tag: &str) -> Result<Release> {

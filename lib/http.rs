@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 
 /// Shared HTTP client factory — DRY for `github`/`gitlab`/`gitea`/etc.
 pub fn new_client() -> Result<reqwest::blocking::Client> {
@@ -59,6 +59,54 @@ pub fn send_get_with_retry(
 ) -> reqwest::Result<reqwest::blocking::Response> {
     let headers: Vec<_> = auth.into_iter().collect();
     send_get_with_retry_headers(http, url, &headers)
+}
+
+/// GET `url` and return the body as a streaming reader. `auth` is the
+/// provider's auth header, if any.
+///
+/// Shared by every forge client's asset/sidecar download; the clients used to
+/// each carry this identical body.
+pub fn raw_get(
+    http: &reqwest::blocking::Client,
+    url: &str,
+    auth: Option<(&'static str, String)>,
+) -> Result<Box<dyn std::io::Read + Send>> {
+    let resp = send_get_with_retry(http, url, auth).with_context(|| format!("GET {url} failed"))?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("HTTP {} for {url}", resp.status()));
+    }
+    Ok(Box::new(resp))
+}
+
+/// GET `url` and deserialize the JSON body, mapping a non-2xx response to a
+/// `{provider}`-flavoured error. `headers` carries the provider's `Accept` and
+/// auth headers.
+///
+/// A 404 is phrased `"not found on {provider}"` because callers detect a
+/// missing resource by that convention.
+pub fn get_json<T: serde::de::DeserializeOwned>(
+    http: &reqwest::blocking::Client,
+    url: &str,
+    headers: &[(&'static str, String)],
+    provider: &str,
+) -> Result<T> {
+    let resp = send_get_with_retry_headers(http, url, headers)
+        .with_context(|| format!("GET {url} failed"))?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        if status.as_u16() == 404 {
+            return Err(anyhow!("not found on {provider}: {body}"));
+        }
+        if status.as_u16() == 401 || status.as_u16() == 403 {
+            return Err(anyhow!(
+                "{provider} API authentication failed ({status}). Set the provider token."
+            ));
+        }
+        return Err(anyhow!("{provider} API {status} for {url}: {body}"));
+    }
+    resp.json::<T>()
+        .with_context(|| format!("failed to parse JSON from {url}"))
 }
 
 /// RFC 3986 percent-encoding (unreserved = alphanumerics plus `-_.~`) used for
