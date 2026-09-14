@@ -1,0 +1,66 @@
+name: integration (containers)
+
+# Runs the opt-in container matrix: the statically linked `lx` inside real
+# distro images, asserting its host detection per package manager. `lx` itself
+# never uses containers; this job only obtains package managers we lack on the
+# runner. Kept in its own workflow so the main lint job stays fast and
+# container-free, and path-filtered so it only runs when relevant code changes.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "lib/**"
+      - "src/**"
+      - "tests/container_matrix.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/integration.yml"
+  pull_request:
+    paths:
+      - "lib/**"
+      - "src/**"
+      - "tests/container_matrix.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/integration.yml"
+
+jobs:
+  containers:
+    name: lx in ${{ matrix.key }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - key: alpine
+          - key: debian
+          - key: fedora
+          - key: arch
+    env:
+      CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+      CC_x86_64_unknown_linux_musl: musl-gcc
+      CONTAINER_ENGINE: docker
+      LX_BIN: target/x86_64-unknown-linux-musl/release/lx
+      LX_CONTAINER_TARGETS: ${{ matrix.key }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      # musl-gcc drives the C dependency (zstd-sys) and the link step. The
+      # runner already ships Docker, so no engine install is needed here.
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build static lx
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl
+
+      - name: Verify statically linked
+        run: file "$LX_BIN"
+
+      - name: Run container matrix
+        run: cargo test --features container-tests --test container_matrix -- --nocapture

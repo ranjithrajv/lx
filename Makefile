@@ -45,6 +45,10 @@ build:
 test:
 	cargo test --all-targets
 
+# Run the opt-in container matrix (needs podman/docker; see tests/container_matrix.rs)
+test-containers:
+	cargo test --features container-tests --test container_matrix -- --nocapture
+
 # Run clippy (deny warnings)
 clippy:
 	cargo clippy --all-targets --all-features -- -D warnings

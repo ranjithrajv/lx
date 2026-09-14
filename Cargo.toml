@@ -73,6 +73,12 @@ x509-certificate = "0.24"
 assert_cmd = "2.0"
 predicates = "3.1"
 
+[features]
+# Opt-in integration tests that run the statically linked `lx` inside real
+# distro containers (tests/container_matrix.rs). Needs a container engine
+# (podman/docker); off by default so a bare `cargo test` stays container-free.
+container-tests = []
+
 [profile.release]
 lto = true
 strip = true
