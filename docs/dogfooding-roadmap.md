@@ -24,7 +24,7 @@ repology index (what ships where, what's outdated)
 
 elfdeps / pkg_owner (what binaries actually need at runtime)
         │
-        ├─→ lx build              → auto-fill depends: (source: done, binary: next)
+        ├─→ lx build              → auto-fill depends: (source + binary)
         ├─→ lx validate           → pre-flight dep correctness gate
         ├─→ lx convert            → fill missing deps (rpm/arch)
         ├─→ lx show               → declared vs actual dep comparison
@@ -32,14 +32,101 @@ elfdeps / pkg_owner (what binaries actually need at runtime)
 ```
 
 Each command stops operating in isolation. They all consume the same
-cross-distro truth.
+cross-distro truth. Which edges already ship and which remain is tracked by
+[priority](#priority-queue) below and summarized under
+[Completed](#completed).
 
 ---
 
-## 1. `lx index outdated` → drives `lx build` / recipe contributions
+## Priority queue
 
-**Status:** `lx index outdated` implemented. Integration with `lx build` /
-`lx contribute` is future work.
+Remaining work, highest priority first. Completed work is summarized under
+[Completed](#completed).
+
+| Priority | Task | Status | Detail |
+|---|---|---|---|
+| **P1** | `lx index install` pre-flight missing-lib warning | todo | §1 |
+| **P2** | `lx init --from repology <name>` — scaffold from metadata | todo | §2 |
+| **P2** | `lx index contribute --from-outdated` / `lx build --from-outdated` | todo | §3 |
+| **P3** | `lx go-native --from-outdated` — migrate stale distro packages | todo | §4 |
+| **P3** | `lx validate` — repology gap-impact warnings | todo | §5 |
+| **P4** | Repology-scored recipe-index CI | todo (infra) | §6 |
+
+Priority rationale:
+
+- **P1 — finish the correctness loop.** Four of the five `elfdeps`
+  dogfooding targets now ship; `lx index install` is the last one. It guards
+  the one remaining path that can hand a user a package whose shared
+  libraries aren't present.
+- **P2 — cheapest repology → recipe wins.** The metadata is already cached,
+  so scaffolding (`lx init --from repology`) and the outdated backlog
+  (`--from-outdated`) are small changes that directly grow the recipe index.
+- **P3 — freshness and migration.** Bigger, user-facing surfaces that build
+  on the now-shipped `lx upgrade --all`.
+- **P4 — ecosystem/infra.** Recipe-index CI scoring depends on the recipe
+  index and its CI, so it lands last.
+
+---
+
+## 1. `lx index install` → pre-flight missing-lib warning
+
+**Priority: P1.** The last open item in the ELF dependency loop.
+
+**What happens today:** `lx index install` fetches a prebuilt `.deb` (or the
+host's native format) and installs it. Nothing checks that the host actually
+has the shared libraries the package needs — a package built for a different
+image can install "successfully" and then fail at first run.
+
+**Dogfooding path:**
+
+- Before or after installing, scan the package's ELF files with
+  `elfdeps::needed_libraries()`.
+- Check each non-essential soname against installed packages via
+  `pkg_owner` (dpkg/rpm/pacman, auto-detected).
+- Warn: "this package needs `libfoo.so.1` — not found on this host."
+- Insertion point: the `lx-community` install path, after extracting the
+  prebuilt.
+
+---
+
+## 2. `lx init --from repology <name>` → recipe scaffold
+
+**Priority: P2.** Cheapest repology → recipe win; metadata is already cached.
+
+**Status:** `lx index info` shows repology metadata. `--from repology`
+integration with `lx init` is future work (`lx init --from-aur` already
+exists as the first such importer).
+
+`lx init` interactively scaffolds a recipe. Repology already knows the
+project's summary, categories, licenses, and which distros carry it:
+
+```
+$ lx index info eza
+  distros: 210 repos
+  newest: 0.20.0
+  licenses: MIT
+```
+
+**Dogfooding path:**
+
+- `lx init --from repology <name>` prefills the recipe scaffold from
+  repology metadata: description, license, category. Less manual entry,
+  fewer mistakes.
+- The forge URL can be auto-detected from repology's `srcname` field or by
+  matching against known forge patterns (GitHub/GitLab/Gitea).
+- The version field can default to the newest known release, so the
+  generated recipe starts from current upstream, not a stale guess.
+
+---
+
+## 3. `lx index outdated` → `lx index contribute` / `lx build --from-outdated`
+
+**Priority: P2.** Turns the detected gap into a contribution/build backlog.
+
+**Status:** `lx index outdated` is implemented; the `lx contribute` /
+`--from-outdated` wiring is not (there is no `lx index contribute` command
+or `--from-outdated` flag yet). `lx index gaps` is superseded by the shipped
+`lx index coverage` (see [Completed](#completed)).
 
 The outdated list is a ready-made backlog for the recipe index:
 
@@ -60,17 +147,21 @@ would fill a real, detected gap.
   outdated list as input, it becomes: "package the 47 projects the index
   flagged as outdated on this host." The index becomes the **prioritization
   engine** for community contributions.
-- `lx build` could accept `--from-outdated` to build the top N gap-fillers
-  without the user manually looking up each forge URL.
-- A future `lx index gaps` (packages tracked by repology in 50+ repos but
-  missing from the recipe index entirely) would be the highest-value
-  contribution target — popular software nobody has packaged yet.
+- `lx build --from-outdated` builds the top N gap-fillers without the user
+  manually looking up each forge URL.
+- (Covered today by `lx index coverage`.) The highest-value contribution
+  target is popular software nobody has packaged yet — repology projects in
+  50+ repos but absent from the recipe index.
 
 ---
 
-## 2. `lx index outdated` → feeds `lx go-native`
+## 4. `lx go-native --from-outdated` → migrate stale distro packages
 
-**Status:** `lx go-native` exists. `--from-outdated` integration is future work.
+**Priority: P3.** Bigger addressable set, builds on the shipped
+`lx upgrade --all`.
+
+**Status:** `lx go-native` exists. `--from-outdated` integration is future
+work.
 
 `lx go-native` finds snap/flatpak/nix/`curl | sh` installs and plans
 native-package migrations. It currently starts from what's already on the
@@ -97,100 +188,12 @@ bigger addressable set.
 
 ---
 
-## 3. `lx index info <pkg>` → jump-starts `lx init`
+## 5. `lx validate` → repology gap-impact warnings
 
-**Status:** `lx index info` shows repology metadata. `--from` integration
-with `lx init` is future work.
+**Priority: P3.** Advisory context for authors and reviewers.
 
-`lx init` interactively scaffolds a recipe. Repology already knows the
-project's summary, categories, licenses, and which distros carry it:
-
-```
-$ lx index info eza
-  distros: 210 repos
-  newest: 0.20.0
-  licenses: MIT
-```
-
-**Dogfooding path:**
-
-- `lx init --from repology <name>` prefills the recipe scaffold from
-  repology metadata: description, license, category. Less manual entry,
-  fewer mistakes.
-- The forge URL can be auto-detected from repology's `srcname` field or by
-  matching against known forge patterns (GitHub/GitLab/Gitea).
-- The version field can default to the newest known release, so the
-  generated recipe starts from current upstream, not a stale guess.
-
----
-
-## 4. `lx search --distro` → validates recipe-index coverage
-
-**Status:** `lx search --distro` and `lx index coverage` implemented.
-
-Without repology, `lx search` only knows about packages in the latest-debs
-org. With it, you see the full picture:
-
-```
-$ lx search --distro uv
-  uv  ... [latest-debs] — host: 0.12.13 (newest) [389/408 repos outdated]
-```
-
-This tells you three things at a glance:
-
-- **Is the latest-debs prebuilt needed?** Yes if the host is outdated, no
-  if the host is current.
-- **How popular is this package?** 408 repos track it — high value to
-  package.
-- **Is the recipe index complete?** If repology shows a package
-  everywhere but the recipe index doesn't have it, that's a gap.
-
-**Dogfooding path:**
-
-- A future `lx index coverage` command compares repology's project set
-  against the recipe index. Output: "repology tracks 12,847 projects with
-  50+ repos; the recipe index covers 142. Top 50 by repo count not yet
-  packaged: ..."
-- This turns the index into a **coverage dashboard** — you can see at a
-  glance how much of the distro gap LX fills, and where to focus
-  contribution effort.
-
----
-
-## 5. Repology + `lx upgrade` → cross-distro freshness-aware upgrades
-
-**Status:** `lx upgrade` exists for LX-managed packages. `--all` distro
-awareness is future work.
-
-`lx upgrade` currently upgrades LX-managed packages against their forge
-releases. With repology, it can also flag distro-managed packages that are
-behind:
-
-```
-$ lx upgrade --all
-  lx-managed:
-    eza 0.18.0 → 0.20.0  (rebuild from recipe)
-  distro-managed but outdated (use `lx install` to take over):
-    neovim 0.9.5 → 0.11.0
-    ripgrep 14.1.0 → 15.2.0
-```
-
-**Dogfooding path:**
-
-- `lx upgrade --all` becomes a system-wide freshness check, not just an
-  LX-package check.
-- The distro-outdated list is a **migration target** — packages LX could
-  manage on the user's behalf. Each entry links to `lx install` or
-  `lx go-native` to take over management.
-- Over time, the ratio of "lx-managed" to "distro-managed but outdated"
-  becomes a health metric for how much of the system LX is keeping
-  current.
-
----
-
-## 6. Repology → `lx validate` pre-flight for recipes
-
-**Status:** `lx validate` exists. Gap-impact warnings are future work.
+**Status:** `lx validate` exists (including the shipped `--check-deps` ELF
+gate). The repology gap-impact warnings are future work.
 
 `lx validate` checks a `package.yaml` resolves against a real release. With
 repology, it can warn about the gap the recipe fills:
@@ -207,161 +210,61 @@ $ lx validate ./neovim.yaml
 - Validation carries **context about the gap the recipe fills** — useful
   for the author (prioritization) and a future recipe reviewer (impact
   assessment).
-- A future CI check on the recipe index could cross-reference repology:
-  "this recipe fills a gap affecting 89 repos — mark as high priority."
 - Recipes that fill large gaps could be auto-surfaced in
   `lx index contribute` as suggested starting points.
 
 ---
 
-## 7. `lx scan-deps` / `elfdeps` → cross-command dependency correctness
+## 6. Repology-scored recipe-index CI
 
-**Status:** `lx scan-deps` implemented. `elfdeps` + `pkg_owner` (cross-platform:
-dpkg/rpm/pacman) + dynamic libc detection. Currently only dogfooded by `lx build`
-source mode (`sourcebuild::compute_depends`).
+**Priority: P4.** Infra; depends on the recipe index and its CI.
 
-The ELF dependency scanner is the **ground truth** for what a binary actually
-needs at runtime. Every other command that touches `depends:` should converge
-on it.
+**Status:** future work.
 
-```
-elfdeps (DT_NEEDED parsing, no ldd/objdump)
-    │
-    ├─→ lx build source mode     → auto-fill depends: (done)
-    ├─→ lx build binary repack   → auto-fill + advisory warn
-    ├─→ lx validate              → pre-flight dep correctness gate
-    ├─→ lx convert               → fill missing deps (rpm/arch get empty deps today)
-    ├─→ lx show                  → "ELF needs" section vs dpkg-recorded deps
-    └─→ lx index install         → pre-flight: warn on missing host libs
-```
-
-### 7a. `lx build` binary repack → auto-fill + advisory warn
-
-**What happens today:** Binary repacks use `cfg.depends` from `package.yaml`
-as-is. If the user leaves `depends:` empty, the package ships with no runtime
-dependencies — broken install guaranteed.
-
-**Dogfooding path:**
-
-- After extraction (build.rs ~line 1770), scan `binary_dir` ELF files via
-  `elfdeps::needed_libraries()`.
-- If `cfg.depends` is empty, auto-populate from non-essential sonames resolved
-  via `pkg_owner` — same logic source mode already uses.
-- If `cfg.depends` is non-empty, advisory-warn when scanned sonames are not
-  covered. Fail-closed with `--strict`.
-- Insertion point: before `plugin.build()`, inside `build_one`.
-
-### 7b. `lx validate` → pre-flight dependency correctness gate
-
-**What happens today:** `validate` checks that assets exist and patterns
-resolve. It never inspects `depends:` — a recipe with wrong/empty deps
-validates clean.
-
-**Dogfooding path:**
-
-- After asset resolution (validate.rs ~line 120), download each arch asset,
-  extract, scan ELF files.
-- Compare non-essential sonames against `cfg.depends` via
-  `declared_package_names()`.
-- Output:
-  ```
-  ✓ recipe resolves against eza release v0.20.0
-  ⚠ depends: declares [libgit2.so.15] but binary needs [libssh2.so.1]
-    → add libssh2-1 to depends:
-  ```
-- New flag: `--check-deps` (opt-in initially, default later).
-
-### 7c. `lx convert` → fill missing deps for rpm/arch
-
-**What happens today:** `convert.rs` carries `depends` verbatim from the
-source package. For RPM (line 316) and Arch (line 377) conversions, `depends`
-is always **empty** — converted packages ship with zero runtime dependencies.
-
-**Dogfooding path:**
-
-- After `extract_install_tree` (convert.rs ~line 122), scan ELF files in the
-  install tree.
-- Auto-populate `depends` when the source left it empty (rpm/arch path).
-- Cross-verify when the source provided deps (deb→rpm where naming
-  conventions differ).
-- Insertion point: before `build_target`, populate the `PackageConfig.depends`
-  field.
-
-### 7d. `lx show` → "ELF needs" section
-
-**What happens today:** `show` displays the dpkg-recorded `Depends:` field
-only. No comparison against what the binary actually needs.
-
-**Dogfooding path:**
-
-- After `dpkg_depends` display (show.rs ~line 49), read installed ELF files
-  via `dpkg -L <pkg>`, scan with `elfdeps::needed_libraries()`.
-- Add section:
-  ```
-  depends:    libgit2.so.15, libssh2.so.1  (dpkg)
-  elf_needs:  libgit2.so.15, libssh2.so.1, libcrypto.so.3  (scanned)
-  ```
-- Discrepancies are highlighted: declared-but-not-needed (bloat) and
-  needed-but-not-declared (broken install risk).
-
-### 7e. `lx index install` → pre-flight missing-lib warning
-
-**What happens today:** `lx index install` fetches a prebuilt `.deb` and
-installs it. No check that the host has the required shared libraries.
-
-**Dogfooding path:**
-
-- Before or after installing, scan the `.deb`'s ELF files.
-- Check each non-essential soname against installed packages via `pkg_owner`.
-- Warn: "this package needs `libfoo.so.1` — not found on this host."
-- Insertion point: in `lx_community.rs` install path (~line 210-281),
-  after extracting the prebuilt.
+A CI check on the recipe index could cross-reference repology: "this recipe
+fills a gap affecting 89 repos — mark as high priority." Scoring contributions
+by the size of the gap they close makes review and merge order data-driven
+rather than first-come-first-served.
 
 ---
 
-## Implementation phases
+## Completed
 
-### Phase 1 (done)
-- Repology backend (`lib/plugins/package_index/repology.rs`) with API + JSON cache
-- `lx index update` refreshes repology data (5 pages, ~1000 projects)
-- `lx index status` shows host distro identity and cache state
-- `lx index outdated` lists packages where host distro lags upstream
-- `lx search --distro` enriches search results with distro metadata
-- `lx index info` shows full distro breakdown per package
-- `lx index search --json` and `lx index info --json` for machine-readable output
-- `lx index search --repo <name>` to query a single index
-- `lx index search --verbose` shows per-source hit counts for debugging
-- `lx index coverage` includes locally installed packages (dpkg/rpm/pacman) in the covered set
-- Repology pagination (5 pages, ~1000 projects) for more representative coverage
-- AUR null-field handling (no parse warnings on packages with null maintainer/description)
+Already dogfooded. Kept here so the loop's remaining work is unambiguous.
 
-### Phase 2 (done)
-- `lx index coverage` — compares repology's project set against the
-  recipe index + latest-debs org, reports coverage % and the top
-  gap-fillers by repo count. Flags: `--min-repos` (popularity
-  threshold), `--limit` (gap list length), `--gaps-only` (suppress
-  the totals breakdown).
+### ELF dependency loop (`elfdeps` / `pkg_owner`)
 
-### Phase 3 (next)
-- `lx init --from repology <name>` — scaffold recipe from repology
-  metadata
-- `lx index contribute --from-outdated` — scaffold a recipe for a
-  detected gap-filler
+The ELF dependency scanner is the **ground truth** for what a binary actually
+needs at runtime, and every command that touches `depends:` has now converged
+on it. `elfdeps` parses `DT_NEEDED` natively (no `ldd`/`objdump`), `pkg_owner`
+resolves sonames via dpkg/rpm/pacman (auto-detected), and
+`detect_libc_packages()` is `OnceLock`-cached so the package-manager query
+runs once per process.
 
-### Phase 4 (future)
-- `lx go-native --from-outdated` — migrate stale distro packages
-- `lx upgrade --all` — system-wide freshness check with distro awareness
-- `lx validate` gap-impact warnings
-- Recipe-index CI cross-referenced against repology for priority scoring
+- ✅ **`lx build` source mode** — auto-fill `depends:` from staged ELFs.
+- ✅ **`lx build` binary repack** — auto-fill an empty `depends:` and
+  advisory-warn when scanned sonames aren't covered by a non-empty
+  `depends:`.
+- ✅ **`lx validate --check-deps`** — pre-flight gate comparing declared
+  `depends:` against actual ELF sonames.
+- ✅ **`lx convert`** — fills missing deps for rpm/arch conversions (which
+  previously shipped empty) and cross-verifies source-provided deps.
+- ✅ **`lx show`** — "ELF needs" section alongside the dpkg-recorded
+  `Depends:`.
 
-### Phase 5 (scan-deps dogfooding)
-- `lx build` binary repack: auto-fill empty `depends:` from ELF scanning;
-  advisory-warn on mismatch with declared deps
-- `lx validate --check-deps`: pre-flight gate comparing declared `depends:`
-  against actual ELF `DT_NEEDED` sonames
-- `lx convert`: fill missing deps for rpm/arch conversions (currently empty)
-- `lx show`: add "ELF needs" section showing scanned vs dpkg-recorded deps
-- `lx index install`: pre-flight warn when host lacks required shared libs
+### Repology index brain
+
+- ✅ Repology backend with API + JSON cache.
+- ✅ `lx index update` (5 pages, ~1000 projects), `lx index status`,
+  `lx index outdated`, `lx index info`.
+- ✅ `lx index search --json` / `--repo <name>` / `--verbose`.
+- ✅ `lx search --distro` — per-hit distro metadata.
+- ✅ `lx index coverage` — repology vs. recipe index + latest-debs org, with
+  `--min-repos` / `--limit` / `--gaps-only`, including locally installed
+  packages in the covered set.
+- ✅ `lx upgrade --all` + `--auto-migrate` — system-wide freshness check and
+  takeover of distro packages flagged outdated.
+- ✅ AUR null-field handling (no parse warnings on null maintainer/description).
 
 ---
 
@@ -375,11 +278,13 @@ repology API (1 req/s, cached locally)
 ~/.cache/lx/repology/per-project/<n>.json  (per-project on demand)
         │
         ▼
-lx index  ─── outdated / status / search / info / coverage
-lx search ─── --distro enrichment (per-hit API lookup + cache)
+lx index  ─── outdated / status / search / info / coverage        ✅
+lx search ─── --distro enrichment (per-hit API lookup + cache)    ✅
+lx upgrade ── --all / --auto-migrate                              ✅
         │
         ▼
-future: lx init / lx go-native / lx upgrade / lx validate
+todo: lx init --from repology / lx index contribute --from-outdated
+      lx go-native --from-outdated / lx validate gap warnings
 
 ────────────────────────────────────────────────────────────────
 
@@ -388,12 +293,12 @@ pkg_owner (dpkg / rpm / pacman, auto-detected)
 detect_libc_packages (dynamic libc detection, OnceLock-cached)
         │
         ▼
-lx build source mode  ─── auto-fill depends: (done)
-lx build binary repack ── auto-fill + advisory warn
-lx validate            ── pre-flight dep correctness gate
-lx convert             ── fill missing deps (rpm/arch)
-lx show                ── "ELF needs" vs dpkg-recorded deps
-lx index install       ── pre-flight: warn on missing host libs
+lx build source mode  ─── auto-fill depends:                     ✅
+lx build binary repack ── auto-fill + advisory warn              ✅
+lx validate            ── --check-deps gate                      ✅
+lx convert             ── fill missing deps (rpm/arch)           ✅
+lx show                ── "ELF needs" vs dpkg-recorded deps      ✅
+lx index install       ── pre-flight: warn on missing host libs  ⏳ P1
 ```
 
 The cache is the key enabler for repology: repology's 1 req/s rate limit
