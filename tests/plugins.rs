@@ -529,18 +529,21 @@ fn deb_contents_scripts_conffiles_end_to_end() {
                 dst: "/usr/share/bash-completion/completions/hello".into(),
                 kind: String::new(),
                 packager: String::new(),
+                ..Default::default()
             },
             lx_lib::config::ContentEntry {
                 src: env.path().join("hello.conf").to_string_lossy().to_string(),
                 dst: "/etc/hello/hello.conf".into(),
                 kind: "config|noreplace".into(),
                 packager: String::new(),
+                ..Default::default()
             },
             lx_lib::config::ContentEntry {
                 src: String::new(),
                 dst: "/var/lib/hello".into(),
                 kind: "dir".into(),
                 packager: String::new(),
+                ..Default::default()
             },
         ],
         scripts: lx_lib::config::Scripts {
@@ -658,18 +661,21 @@ fn apply_contents_respects_packager_filter() {
                 dst: "/usr/share/deb-only".into(),
                 kind: String::new(),
                 packager: "deb".into(),
+                ..Default::default()
             },
             lx_lib::config::ContentEntry {
                 src: env.path().join("rpm-only").to_string_lossy().into(),
                 dst: "/usr/share/rpm-only".into(),
                 kind: String::new(),
                 packager: "rpm".into(),
+                ..Default::default()
             },
             lx_lib::config::ContentEntry {
                 src: env.path().join("all").to_string_lossy().into(),
                 dst: "/usr/share/all".into(),
                 kind: String::new(),
                 packager: String::new(),
+                ..Default::default()
             },
         ],
         ..Default::default()
@@ -717,6 +723,7 @@ fn arch_plugin_emits_relations_and_backup() {
             dst: "/etc/hello.conf".into(),
             kind: "config|noreplace".into(),
             packager: String::new(),
+            ..Default::default()
         }],
         ..Default::default()
     };
@@ -769,4 +776,250 @@ fn arch_plugin_emits_relations_and_backup() {
     assert!(pkginfo.contains("provides = hello-cli\n"), "{pkginfo}");
     assert!(pkginfo.contains("replaces = hello-old\n"), "{pkginfo}");
     assert!(pkginfo.contains("backup = etc/hello.conf\n"), "{pkginfo}");
+}
+
+/// `contents[].file_info`, `expand: true`, and `disown_subtree` reach the
+/// archive: per-file mode/mtime/ownership, an env-expanded `dst`, and a
+/// disowned directory omitted from the data tar while its children stay.
+#[test]
+fn deb_contents_file_info_expand_disown_reach_the_archive() {
+    let plugin = get_packager("deb").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let binary_dir = tmp.path().join("binary");
+    std::fs::create_dir_all(&binary_dir).unwrap();
+    std::fs::write(binary_dir.join("hello"), fake_elf_bytes()).unwrap();
+
+    let env = tempfile::tempdir().unwrap();
+    let tree = env.path().join("share");
+    std::fs::create_dir_all(tree.join("vendor")).unwrap();
+    std::fs::write(tree.join("a.txt"), b"a\n").unwrap();
+    std::fs::write(tree.join("vendor/b.txt"), b"b\n").unwrap();
+    std::fs::write(env.path().join("expanded"), b"expanded\n").unwrap();
+    std::env::set_var("LX_TEST_EXPAND_PREFIX", "/opt/expanded");
+
+    let staging_root = tmp.path().join("root");
+    std::fs::create_dir_all(&staging_root).unwrap();
+
+    let cfg = PackageConfig {
+        package_name: "hello".into(),
+        github_repo: "owner/hello".into(),
+        description: "test".into(),
+        maintainer: "t <t@example.com>".into(),
+        license_spdx: "MIT".into(),
+        package_format: "deb".into(),
+        contents: vec![
+            lx_lib::config::ContentEntry {
+                src: tree.to_string_lossy().to_string(),
+                dst: "/usr/share/hello".into(),
+                kind: "tree".into(),
+                packager: String::new(),
+                file_info: lx_lib::config::ContentFileInfo {
+                    owner: "root".into(),
+                    group: "root".into(),
+                    mode: Some("0o640".into()),
+                    mtime: Some("1000000000".into()),
+                    lang: String::new(),
+                },
+                expand: false,
+                disown_subtree: vec!["/usr/share/hello/vendor".into()],
+            },
+            lx_lib::config::ContentEntry {
+                src: env.path().join("expanded").to_string_lossy().to_string(),
+                dst: "$LX_TEST_EXPAND_PREFIX/expanded".into(),
+                kind: String::new(),
+                packager: String::new(),
+                file_info: Default::default(),
+                expand: true,
+                disown_subtree: Vec::new(),
+            },
+        ],
+        ..Default::default()
+    };
+    let job = lx_lib::build::ResolvedJob {
+        dist: "trixie".into(),
+        arch: "amd64".into(),
+        asset: lx_lib::github::Asset {
+            name: "hello.tar.gz".into(),
+            size: None,
+            browser_download_url: "".into(),
+            checksums: Default::default(),
+        },
+        tag: "v1.0.0".into(),
+        published_at: Some(1_735_689_600),
+    };
+    let ctx = BuildContext {
+        cfg: &cfg,
+        job: &job,
+        binary_dir: &binary_dir,
+        staging_root: &staging_root,
+        license: None,
+        debian_version: "1.0.0",
+        build_version: "1",
+        mtime: 1_735_689_600,
+        sign_key: None,
+        sign_key_id: "",
+        sign_passphrase: None,
+        sign_method: "detach",
+        detected_deps: Vec::new(),
+    };
+    let out = plugin.build(&ctx).unwrap();
+
+    // Recover data.tar.gz and its headers.
+    let deb_bytes = std::fs::read(&out).unwrap();
+    let mut ar = ar::Archive::new(deb_bytes.as_slice());
+    let mut data_tar = Vec::new();
+    while let Some(entry) = ar.next_entry() {
+        let mut e = entry.unwrap();
+        if String::from_utf8_lossy(e.header().identifier()).starts_with("data.tar") {
+            std::io::copy(&mut e, &mut data_tar).unwrap();
+            break;
+        }
+    }
+    let mut members: std::collections::HashMap<String, (u32, u64, u32, u32)> =
+        std::collections::HashMap::new();
+    let mut names: Vec<String> = Vec::new();
+    let decoder = flate2::read::GzDecoder::new(data_tar.as_slice());
+    for entry in tar::Archive::new(decoder).entries().unwrap() {
+        let e = entry.unwrap();
+        let path = e
+            .path()
+            .unwrap()
+            .to_string_lossy()
+            .trim_start_matches("./")
+            .to_string();
+        let h = e.header();
+        members.insert(
+            path.clone(),
+            (
+                h.mode().unwrap(),
+                h.mtime().unwrap(),
+                h.uid().unwrap() as u32,
+                h.gid().unwrap() as u32,
+            ),
+        );
+        names.push(path);
+    }
+
+    // file_info.mode / mtime applied to the tree's files.
+    let (mode, mtime, uid, gid) = members.get("usr/share/hello/a.txt").expect("a.txt staged");
+    assert_eq!(
+        *mode, 0o640,
+        "file_info.mode should win over the source mode"
+    );
+    assert_eq!(*mtime, 1_000_000_000, "file_info.mtime override");
+    assert_eq!(*uid, 0, "owner root resolves to uid 0");
+    assert_eq!(*gid, 0, "group root resolves to gid 0");
+
+    // disown_subtree: the vendor dir entry is omitted, its files are not.
+    assert!(
+        !names.iter().any(|n| n == "usr/share/hello/vendor"),
+        "disowned directory must not be an explicit entry: {names:?}"
+    );
+    let (vendor_mode, _, _, _) = members
+        .get("usr/share/hello/vendor/b.txt")
+        .expect("disowned dir's file still packaged");
+    assert_eq!(*vendor_mode, 0o640);
+
+    // expand: true turned the env var into the package path.
+    assert!(
+        members.contains_key("opt/expanded/expanded"),
+        "env-expanded dst not staged: {names:?}"
+    );
+}
+
+/// RPM plugin: `contents[].file_info.lang` reaches `RPMTAG_FILELANGS` end to
+/// end, and the rewritten header's digest still verifies.
+#[test]
+fn rpm_plugin_emits_file_info_lang() {
+    let plugin = get_packager("rpm").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let binary_dir = tmp.path().join("binary");
+    std::fs::create_dir_all(&binary_dir).unwrap();
+    std::fs::write(binary_dir.join("hello"), fake_elf_bytes()).unwrap();
+
+    let env = tempfile::tempdir().unwrap();
+    std::fs::write(env.path().join("README"), b"docs\n").unwrap();
+
+    let staging_root = tmp.path().join("root");
+    std::fs::create_dir_all(&staging_root).unwrap();
+
+    let cfg = PackageConfig {
+        package_name: "hello".into(),
+        github_repo: "owner/hello".into(),
+        description: "test".into(),
+        maintainer: "t <t@example.com>".into(),
+        license_spdx: "MIT".into(),
+        package_format: "rpm".into(),
+        contents: vec![lx_lib::config::ContentEntry {
+            src: env.path().join("README").to_string_lossy().to_string(),
+            dst: "/usr/share/doc/hello/README".into(),
+            kind: String::new(),
+            packager: String::new(),
+            file_info: lx_lib::config::ContentFileInfo {
+                lang: "en".into(),
+                ..Default::default()
+            },
+            expand: false,
+            disown_subtree: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let job = lx_lib::build::ResolvedJob {
+        dist: "fedora".into(),
+        arch: "amd64".into(),
+        asset: lx_lib::github::Asset {
+            name: "hello.tar.gz".into(),
+            size: None,
+            browser_download_url: "".into(),
+            checksums: Default::default(),
+        },
+        tag: "v1.0.0".into(),
+        published_at: Some(1_735_689_600),
+    };
+    let ctx = BuildContext {
+        cfg: &cfg,
+        job: &job,
+        binary_dir: &binary_dir,
+        staging_root: &staging_root,
+        license: None,
+        debian_version: "1.0.0",
+        build_version: "1",
+        mtime: 1_735_689_600,
+        sign_key: None,
+        sign_key_id: "",
+        sign_passphrase: None,
+        sign_method: "detach",
+        detected_deps: Vec::new(),
+    };
+    let out = plugin.build(&ctx).unwrap();
+
+    // `use lx_lib::plugins::*` brings the `rpm` plugin module into scope, so
+    // name the external `rpm` crate explicitly.
+    let pkg = ::rpm::Package::open(&out).unwrap();
+    pkg.verify_digests()
+        .expect("rpm header digest verifies after lang injection");
+    let files: Vec<String> = pkg
+        .metadata
+        .get_file_entries()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.path.to_string_lossy().to_string())
+        .collect();
+    let langs: Vec<String> = pkg
+        .metadata
+        .header
+        .get_entry_data_as_string_array(::rpm::IndexTag::RPMTAG_FILELANGS)
+        .unwrap()
+        .to_vec();
+    let by_path: std::collections::HashMap<&str, &str> = files
+        .iter()
+        .map(String::as_str)
+        .zip(langs.iter().map(String::as_str))
+        .collect();
+    assert_eq!(
+        by_path.get("/usr/share/doc/hello/README"),
+        Some(&"en"),
+        "{by_path:?}"
+    );
+    assert_eq!(by_path.get("/usr/bin/hello"), Some(&""), "{by_path:?}");
 }

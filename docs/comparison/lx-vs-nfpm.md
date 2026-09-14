@@ -18,7 +18,7 @@ adopted, what it deliberately rejects, and what remains to be done.
 | **Language** | Go | Rust |
 | **Philosophy** | General-purpose packager — you bring files, it wraps them | Opinionated — fetches forge releases, verifies, wraps them |
 | **Primary use case** | Packaging CI/build artifacts you already have | Packaging upstream GitHub/GitLab/etc. release binaries |
-| **Can be a library** | ✅ Go package | Not yet public API |
+| **Can be a library** | ✅ Go package | ✅ `lx_lib::api` (Rust) |
 
 ---
 
@@ -31,12 +31,15 @@ adopted, what it deliberately rejects, and what remains to be done.
 | **apk** (Alpine) | ✅ | ✅ |
 | **arch** (`.pkg.tar.zst`) | ✅ (`archlinux`) | ✅ |
 | **ipk** (OpenWrt) | ✅ | ✅ |
-| **msix** (Windows) | ✅ | ❌ |
+| **msix** (Windows) | ✅ | ✅ (native `AppxSignature.p7x`; PEM key+cert) |
 | **Source packages** (`.dsc` + tarballs) | ❌ | ✅ (deb, `.src.rpm`, PKGBUILD) |
 
-**nfpm still wins on Windows output** (msix has no lx equivalent), but lx
-now covers every Linux format nfpm does. **lx is the only one that
-produces proper source packages.**
+**Both sign Windows/macOS output natively** — lx writes a real
+`AppxSignature.p7x` (PKCS#7 over the Appx digests) and a xar `Signature`
+member, from a PEM key + certificate, via the `msix` and `apple-xar`
+crates. nfpm's MSIX signing takes a `.pfx`; lx takes PEM. For Linux, lx
+covers every format nfpm does. **lx is the only one that produces proper
+source packages.**
 
 ---
 
@@ -57,6 +60,19 @@ files, dir ownership, per-packager entries, `disown_subtree`, `expand`,
 `file_info` with custom `mode`/`mtime`/`owner`/`group`/`lang`). **lx is
 opinionated** — it fetches releases, auto-installs ancillaries (man pages,
 licenses), and supports both binary repack and source-build modes.
+
+**Parity note:** lx implements nfpm's `contents:` DSL — `file_info`
+(`owner`/`group`/`mode`/`mtime`/`lang`), `expand: true`, `disown_subtree`,
+`packager`, globs, `disable_globbing`, and every entry type (`file`,
+`config`/`config|noreplace`/`config|missingok`, the `config|*|tree`
+variants, `tree`, `symlink`, `dir`, `ghost`, and the RPM `doc`/`license`/
+`readme` classifications). RPM `%lang` is emitted by injecting
+`RPMTAG_FILELANGS` into the built header. The `ipk:` block
+(`alternatives`/`tags`/`abi_version`/`auto_installed`/`essential`),
+`rpm.buildhost`, and the top-level `mtime:` override are mapped too.
+Crate-limited fields — `rpm.group` (the rpm crate hardcodes `Group`),
+`rpm.prefixes`, `rpm.requires_post`, and per-file `mtime` on RPM — are
+accepted and reported, never silently dropped.
 
 ---
 
@@ -106,6 +122,9 @@ For Arch, they render as `.PKGINFO` `depend`/`optdepend`/`conflict`/
 | **Arch variant** (e.g. amd64v3) | ✅ (deb) | ✅ (deb, `arch_variant:`) |
 | **Umask** | ✅ | ✅ |
 | **Version schema** | ✅ (semver/none) | ✅ (semver/none) |
+| **Global build `mtime` (`mtime:`)** | ✅ | ✅ (reproducible-timestamp override) |
+| **RPM `group` / `buildhost`** | ✅ | ✅ `rpm.buildhost`; `rpm.group` accepted (rpm crate hardcodes `Group`, reported) |
+| **IPK alternatives / tags / ABI / flags** | ✅ | ✅ (`ipk:` block) |
 
 **Feature parity achieved.** lx covers all the metadata knobs nfpm does.
 Section/Priority are configurable via `section:`/`priority:` fields,
@@ -150,7 +169,7 @@ in the `deb:` block. As a bonus lx keeps nfpm's build-time hooks
 | **deb signing** | ✅ (debsign + dpkg-sig) | ✅ (debsign + detach) |
 | **rpm signing** | ✅ (PGP, embedded) | ✅ (embedded) |
 | **apk signing** | ✅ (RSA PEM) | ✅ (RSA/SHA-1, in-process) |
-| **msix signing** | ✅ (PFX) | N/A |
+| **msix signing** | ✅ (PFX) | ✅ (PEM key + cert; native p7x) |
 | **Checksum verification** | ❌ | ✅ (fail-closed by default; sidecar + pinned metadata) |
 | **SBOM / SLSA provenance** | ❌ | ✅ (`--sbom` → SPDX 2.3 + SLSA v1) |
 | **Reproducible builds** | ✅ (SOURCE_DATE_EPOCH, mtime) | ✅ (SOURCE_DATE_EPOCH, release-publish timestamps, sorted archive walk) |
@@ -177,7 +196,7 @@ story.
 | **Auto-discover patterns** | ❌ | ✅ (`lx init --from`) |
 | **Dependency scanner** | ❌ | ✅ (`lx deps scan` — ELF `DT_NEEDED` → `dpkg -S`) |
 | **Musl-static builds** | ❌ | ✅ (`musl: true` — no glibc dep, runs on any Linux) |
-| **Per-file mtime/mode/owner/group** | ✅ (`file_info`) | 🟡 (umask only; per-file mode/owner/group not yet) |
+| **Per-file mtime/mode/owner/group/lang** | ✅ (`file_info`) | ✅ (`contents[].file_info`, including RPM `%lang`) |
 | **Umask control** | ✅ | ✅ |
 
 ---
@@ -210,10 +229,10 @@ and serving a repository.
 | You should use nfpm if… | You should use lx if… |
 |---|---|
 | You already have files and need max control over their placement, per-file metadata, and distro policy fields | You want to package an upstream forge release end-to-end with minimal config |
-| You need Windows (msix) output | You care about supply-chain verification, SBOMs, and reproducible builds |
+| You prefer packaging Windows apps with a `.pfx`/Windows toolchain | You want natively-signed MSIX (PEM key + cert), plus source packages, verification, and a Rust embedding API |
 | You need maintainer scripts (pre/post-install, triggers, debconf) | You want a consumer-facing install/upgrade/rollback workflow with repo serving |
 | You need per-format dependency overrides, Suggests, Pre-Depends, etc. | You want zero-config URL builds, auto-discovery, and AUR import |
-| You're embedding it as a Go library in another tool | You want source packages (`.dsc`, `.src.rpm`, PKGBUILD) |
+| You're embedding it as a Go library in another tool | You want a Rust embedding API (`lx_lib::api`) with source packages (`.dsc`, `.src.rpm`, PKGBUILD) |
 
 **nfpm is the more mature, general-purpose packager with broader format
 coverage and richer per-format control. lx is a more opinionated,

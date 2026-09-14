@@ -106,6 +106,7 @@ fn scriptlets_build_without_error() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
     let bytes = std::fs::read(&rpm_path).unwrap();
@@ -140,6 +141,7 @@ fn transaction_and_verify_scriptlets_build_without_error() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
     let bytes = std::fs::read(&rpm_path).unwrap();
@@ -150,55 +152,10 @@ fn transaction_and_verify_scriptlets_build_without_error() {
 /// gpg or quick key generation is unavailable.
 #[test]
 fn native_signing_round_trip_with_generated_key() {
-    let Ok(_) = std::process::Command::new("gpg").arg("--version").output() else {
-        eprintln!("skipping: gpg not on PATH");
+    let Some((_home, key_file)) = export_test_gpg_key() else {
+        eprintln!("skipping: gpg quick-gen-key unavailable");
         return;
     };
-    let home = match tempfile::tempdir() {
-        Ok(h) => h,
-        Err(_) => return,
-    };
-    let gen = std::process::Command::new("gpg")
-        .env("GNUPGHOME", home.path())
-        .args([
-            "--batch",
-            "--pinentry-mode",
-            "loopback",
-            "--passphrase",
-            "",
-            "--quick-gen-key",
-            "lx-rpm-test <lx@example.invalid>",
-            "default",
-            "default",
-            "never",
-        ])
-        .output();
-    let Ok(gen) = gen else { return };
-    if !gen.status.success() {
-        eprintln!("skipping: quick-gen-key unsupported here");
-        return;
-    }
-    // Export the secret key (armored) for the crate's Signer.
-    let list = std::process::Command::new("gpg")
-        .env("GNUPGHOME", home.path())
-        .args(["--batch", "--list-secret-keys", "--with-colons"])
-        .output()
-        .unwrap();
-    let fpr = String::from_utf8_lossy(&list.stdout)
-        .lines()
-        .find_map(|l| {
-            let f: Vec<&str> = l.split(':').collect();
-            (f.len() > 4 && f[0] == "sec").then(|| f[4].to_string())
-        })
-        .expect("secret key fingerprint");
-    let export = std::process::Command::new("gpg")
-        .env("GNUPGHOME", home.path())
-        .args(["--batch", "--armor", "--export-secret-keys", &fpr])
-        .output()
-        .unwrap();
-    assert!(export.status.success());
-    let key_file = home.path().join("key.asc");
-    std::fs::write(&key_file, &export.stdout).unwrap();
 
     let root = tempfile::tempdir().unwrap();
     std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
@@ -225,6 +182,7 @@ fn native_signing_round_trip_with_generated_key() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
     assert!(rpm_path.exists());
@@ -279,6 +237,7 @@ fn config_files_get_config_flags() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
 
@@ -335,6 +294,7 @@ fn auto_requires_scans_elf_payload() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
 
@@ -380,6 +340,7 @@ fn rpm_epoch_header_is_emitted() {
         1_735_689_600,
         &rpm_path,
         &opts,
+        &Default::default(),
     )
     .unwrap();
     let pkg = rpm::Package::open(&rpm_path).unwrap();
@@ -472,4 +433,277 @@ fn extract_round_trips_files_dirs_and_symlinks() {
 
     let link_target = std::fs::read_link(dest.path().join("usr/bin/hello-link")).unwrap();
     assert_eq!(link_target, std::path::PathBuf::from("hello"));
+}
+
+// ---------------------------------------------------------------------------
+// file_info.lang → RPMTAG_FILELANGS
+// ---------------------------------------------------------------------------
+
+fn lang_meta(paths: &[(&str, &str)]) -> lx_lib::filemeta::FileMetaMap {
+    let mut meta = lx_lib::filemeta::FileMetaMap::new();
+    for (path, lang) in paths {
+        meta.insert(
+            (*path).to_string(),
+            lx_lib::filemeta::FileMeta {
+                lang: Some((*lang).to_string()),
+                ..Default::default()
+            },
+        );
+    }
+    meta
+}
+
+fn test_meta() -> PackageMeta<'static> {
+    PackageMeta {
+        name: "hello",
+        version: "1.0",
+        release: "1",
+        summary: "test",
+        description: "desc",
+        license: "MIT",
+        vendor: None,
+        packager: None,
+    }
+}
+
+/// `file_info.lang` must land in RPM's `RPMTAG_FILELANGS`, an array parallel
+/// to the package's file list, and the rewritten header's digest must verify.
+#[test]
+fn file_info_lang_reaches_rpm_header() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::create_dir_all(root.path().join("usr/share/doc/hello")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+    std::fs::write(root.path().join("usr/share/doc/hello/README"), b"docs").unwrap();
+    std::fs::write(
+        root.path().join("usr/share/doc/hello/CHANGELOG"),
+        b"changes",
+    )
+    .unwrap();
+
+    let meta = lang_meta(&[
+        ("/usr/share/doc/hello/README", "en"),
+        ("/usr/share/doc/hello/CHANGELOG", "de"),
+    ]);
+    let rpm_path = root.path().join("hello.rpm");
+    build_with_options(
+        root.path(),
+        &test_meta(),
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &BuildOptions::default(),
+        &meta,
+    )
+    .unwrap();
+
+    let pkg = rpm::Package::open(&rpm_path).unwrap();
+    // The signature-header digest must match the rewritten main header.
+    pkg.verify_digests()
+        .expect("rpm header digest must verify after lang injection");
+
+    let files: Vec<String> = pkg
+        .metadata
+        .get_file_entries()
+        .unwrap()
+        .into_iter()
+        .map(|e| e.path.to_string_lossy().to_string())
+        .collect();
+    let langs: Vec<String> = pkg
+        .metadata
+        .header
+        .get_entry_data_as_string_array(rpm::IndexTag::RPMTAG_FILELANGS)
+        .unwrap()
+        .to_vec();
+
+    assert_eq!(
+        langs.len(),
+        files.len(),
+        "FILELANGS must be parallel to the file list"
+    );
+    let by_path: std::collections::HashMap<&str, &str> = files
+        .iter()
+        .map(String::as_str)
+        .zip(langs.iter().map(String::as_str))
+        .collect();
+    assert_eq!(by_path.get("/usr/share/doc/hello/README"), Some(&"en"));
+    assert_eq!(by_path.get("/usr/share/doc/hello/CHANGELOG"), Some(&"de"));
+    assert_eq!(
+        by_path.get("/usr/bin/hello"),
+        Some(&""),
+        "files without a lang keep the empty slot"
+    );
+}
+
+/// Injecting languages must stay byte-for-byte reproducible.
+#[test]
+fn file_info_lang_output_is_deterministic() {
+    let build_once = || {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("usr/share/doc/hello")).unwrap();
+        std::fs::write(root.path().join("usr/share/doc/hello/README"), b"docs").unwrap();
+        let meta = lang_meta(&[("/usr/share/doc/hello/README", "en")]);
+        let rpm_path = root.path().join("hello.rpm");
+        build_with_options(
+            root.path(),
+            &test_meta(),
+            "amd64",
+            1_735_689_600,
+            &rpm_path,
+            &BuildOptions::default(),
+            &meta,
+        )
+        .unwrap();
+        std::fs::read(&rpm_path).unwrap()
+    };
+    assert_eq!(build_once(), build_once());
+}
+
+/// A signed build re-signs over the rewritten header, so the language and the
+/// embedded PGP signature both survive.
+#[test]
+fn file_info_lang_survives_signing() {
+    let Some((_home, key_file)) = export_test_gpg_key() else {
+        eprintln!("skipping: gpg quick-gen-key unavailable");
+        return;
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/share/doc/hello")).unwrap();
+    std::fs::write(root.path().join("usr/share/doc/hello/README"), b"docs").unwrap();
+    let meta = lang_meta(&[("/usr/share/doc/hello/README", "en")]);
+
+    let rpm_path = root.path().join("hello-signed.rpm");
+    let opts = BuildOptions {
+        sign_key_file: Some(&key_file),
+        sign_passphrase: None,
+        ..Default::default()
+    };
+    build_with_options(
+        root.path(),
+        &test_meta(),
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &opts,
+        &meta,
+    )
+    .unwrap();
+
+    let pkg = rpm::Package::open(&rpm_path).unwrap();
+    pkg.verify_digests()
+        .expect("digest must verify for the signed + lang package");
+    // The PGP signature header entry survived the re-sign (RSA or EdDSA,
+    // depending on the generated key type).
+    let sig = &pkg.metadata.signature;
+    let signed = sig
+        .get_entry_data_as_binary(rpm::IndexSignatureTag::RPMSIGTAG_RSA)
+        .is_ok()
+        || sig
+            .get_entry_data_as_binary(rpm::IndexSignatureTag::RPMSIGTAG_DSA)
+            .is_ok();
+    assert!(signed, "expected an embedded PGP signature");
+    let langs = pkg
+        .metadata
+        .header
+        .get_entry_data_as_string_array(rpm::IndexTag::RPMTAG_FILELANGS)
+        .unwrap();
+    assert!(langs.iter().any(|l| l == "en"), "{langs:?}");
+}
+
+/// Gated on the host `rpm` binary: it must be able to read the injected
+/// languages back out of the package it did not create.
+#[test]
+fn real_rpm_reports_file_info_lang() {
+    let Ok(ver) = std::process::Command::new("rpm").arg("--version").output() else {
+        eprintln!("skipping: rpm not on PATH");
+        return;
+    };
+    if !ver.status.success() {
+        eprintln!("skipping: rpm --version failed");
+        return;
+    }
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/share/doc/hello")).unwrap();
+    std::fs::write(root.path().join("usr/share/doc/hello/README"), b"docs").unwrap();
+    let meta = lang_meta(&[("/usr/share/doc/hello/README", "en")]);
+    let rpm_path = root.path().join("hello.rpm");
+    build_with_options(
+        root.path(),
+        &test_meta(),
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &BuildOptions::default(),
+        &meta,
+    )
+    .unwrap();
+
+    let out = std::process::Command::new("rpm")
+        .args(["-qp", "--qf", "[%{FILENAMES}\t%{FILELANGS}\n]"])
+        .arg(&rpm_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "rpm -qp failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines().any(|l| l == "/usr/share/doc/hello/README\ten"),
+        "rpm did not report the language: {text:?}"
+    );
+}
+
+/// Mint a throwaway GPG key and export its armored secret material. Returns
+/// `None` (so callers skip) when gpg or quick key generation is unavailable.
+fn export_test_gpg_key() -> Option<(tempfile::TempDir, std::path::PathBuf)> {
+    std::process::Command::new("gpg")
+        .arg("--version")
+        .output()
+        .ok()?;
+    let home = tempfile::tempdir().ok()?;
+    let gen = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home.path())
+        .args([
+            "--batch",
+            "--pinentry-mode",
+            "loopback",
+            "--passphrase",
+            "",
+            "--quick-gen-key",
+            "lx-rpm-test <lx@example.invalid>",
+            "default",
+            "default",
+            "never",
+        ])
+        .output()
+        .ok()?;
+    if !gen.status.success() {
+        return None;
+    }
+    let list = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home.path())
+        .args(["--batch", "--list-secret-keys", "--with-colons"])
+        .output()
+        .ok()?;
+    let fpr = String::from_utf8_lossy(&list.stdout)
+        .lines()
+        .find_map(|l| {
+            let f: Vec<&str> = l.split(':').collect();
+            (f.len() > 4 && f[0] == "sec").then(|| f[4].to_string())
+        })?;
+    let export = std::process::Command::new("gpg")
+        .env("GNUPGHOME", home.path())
+        .args(["--batch", "--armor", "--export-secret-keys", &fpr])
+        .output()
+        .ok()?;
+    if !export.status.success() {
+        return None;
+    }
+    let key_file = home.path().join("key.asc");
+    std::fs::write(&key_file, &export.stdout).ok()?;
+    Some((home, key_file))
 }

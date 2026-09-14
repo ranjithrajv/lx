@@ -105,6 +105,13 @@ pub const DEFAULT_APK_DISTRIBUTIONS: &[&str] = &["alpine"];
 /// OpenWrt / opkg (ipk). Embedded Linux, one target family.
 pub const DEFAULT_IPK_DISTRIBUTIONS: &[&str] = &["openwrt"];
 
+/// MSIX (Windows). Not a Linux distro; one synthetic suite so the
+/// distribution×architecture job matrix still applies.
+pub const DEFAULT_MSIX_DISTRIBUTIONS: &[&str] = &["windows"];
+
+/// macOS flat package (osxpkg). One synthetic suite.
+pub const DEFAULT_OSX_DISTRIBUTIONS: &[&str] = &["macos"];
+
 /// All Debian architectures the tool can target
 pub const DEFAULT_ARCHITECTURES: &[&str] = &[
     "amd64", "arm64", "armel", "armhf", "i386", "ppc64el", "s390x", "riscv64", "loong64",

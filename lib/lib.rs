@@ -64,6 +64,7 @@ pub mod debs;
 pub mod depmap;
 pub mod discovery;
 pub mod elfdeps;
+pub mod filemeta;
 pub mod forgejo;
 pub mod gerrit;
 pub mod gitea;

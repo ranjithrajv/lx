@@ -53,7 +53,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
 
     // Layer the `contents:` overlay. Config-typed entries become
     // `%config` / `%config(noreplace)` markers.
-    let configs = super::apply_contents_with_config(cfg, ctx.staging_root, "rpm")?;
+    let (configs, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "rpm")?;
 
     // RPM metadata: name, version, release, arch, summary, description,
     // license. Version is the stripped upstream version; release encodes
@@ -187,7 +187,27 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         config_files,
         config_noreplace_files,
         epoch: cfg.epoch.trim().parse::<u32>().ok(),
+        buildhost: cfg.rpm.buildhost.clone(),
     };
+    // Fields accepted for nfpm parity that the in-process rpm crate cannot
+    // express: report them rather than dropping them silently.
+    if !cfg.rpm.group.is_empty() {
+        eprintln!(
+            "    ⚠ rpm.group is ignored: the rpm crate hardcodes Group to \"Unspecified\" (needs header injection)"
+        );
+    }
+    if !cfg.rpm.prefixes.is_empty() {
+        eprintln!(
+            "    ⚠ rpm.prefixes is not supported by the in-process rpm builder; ignoring {:?}",
+            cfg.rpm.prefixes
+        );
+    }
+    if !cfg.rpm.requires_post.is_empty() {
+        eprintln!(
+            "    ⚠ rpm.requires_post has no distinct post-requires setter in the rpm crate; ignoring {:?}",
+            cfg.rpm.requires_post
+        );
+    }
     let meta = lx_lib::rpmarchive::PackageMeta {
         name: &cfg.package_name,
         version: &version,
@@ -205,6 +225,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         ctx.mtime,
         &rpm_dest,
         &opts,
+        &file_meta,
     )
     .with_context(|| format!("failed to build {}", rpm_dest.display()))?;
 

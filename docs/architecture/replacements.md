@@ -63,7 +63,7 @@ triggers, custom control fields, per-format overrides, globs in
 `registry_source:`). `lx` adds what fpm lacks: source packages, checksum
 verification, SBOM/SLSA, reproducible builds, zero-config URL builds.
 
-**Where fpm still wins:** `osxpkg`, `freebsd`, `solaris`, `snap`, `tar`,
+**Where fpm still wins:** `freebsd`, `solaris`, `snap`, `tar`,
 `sh` (self-extracting), `zip` outputs; PEAR, virtualenv, pleaserun, puppet
 inputs; `--deb-shlibs`, `--deb-init`, `--deb-systemd`, `--deb-upstart`,
 `--deb-default`, `--deb-meta-file`, `--deb-after-purge`.
@@ -83,9 +83,22 @@ ELF payload (sonames as `name()(N bit)`); `rpm.defines` is accepted but not
 applied — the in-process builder has no rpmbuild macro engine, and lx warns
 instead of dropping it silently.
 
-**Where nfpm still wins:** `msix` (Windows) output; per-file
-`file_info.mode/owner/group/lang`; `disown_subtree`; `expand: true`.
-`lx` adds source packages, forged-release fetching, the consumer CLI, and
+The `contents:` DSL now also covers nfpm's per-file features: `file_info`
+(`owner`/`group`/`mode`/`mtime`/`lang`), `expand: true`, and
+`disown_subtree`. Modes/mtimes and ownership reach the deb/arch/apk tar
+headers and the rpm file options; `lang` reaches RPM's `RPMTAG_FILELANGS`
+(injected into the built header, since the `rpm` crate has no `%lang`
+setter) and is ignored by the other formats, matching nfpm. An `nfpm.yaml`
+can be converted with **`lx init --from-nfpm <nfpm.yaml>`** (see
+`lib/nfpm.rs`), which maps the config and lists unmappable keys instead of
+dropping them.
+
+**Where nfpm still wins:** only nfpm's `.pfx` MSIX-signing *interface* —
+lx signs MSIX natively (`AppxSignature.p7x`) and macOS pkg (xar
+`Signature`), using `signature.key_file` + `signature.cert_file` rather than
+accepting `msix.signature.pfx_file`.
+lx adds source packages, forged-release fetching, an `nfpm.yaml` importer,
+the consumer CLI, a public Rust embedding API (`lx_lib::api`), and
 supply-chain features nfpm has no equivalent for.
 
 ### 2.5 `dpkg-deb` and `dpkg-source` — build-side functional replacement
@@ -246,6 +259,6 @@ These are consumed on purpose and will not be reimplemented:
 | `lx index` | `git` (LX community index); HTTP for AUR/repology |
 
 **What `lx` produces without every one of those tools:** every package
-format (deb/rpm/arch/apk/ipk), source packages (`.dsc`, `.src.rpm`,
+format (deb/rpm/arch/apk/ipk/msix), source packages (`.dsc`, `.src.rpm`,
 `PKGBUILD`), SBOM/SLSA, checksum sidecars, shell installers, and an
 apt repository — all in-process.

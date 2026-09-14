@@ -27,6 +27,78 @@ pub struct ContentEntry {
     /// entry applies to every format (nfpm's `packager:` field).
     #[serde(default)]
     pub packager: String,
+    /// Per-file metadata override, mirroring nfpm's `file_info:` block.
+    #[serde(default)]
+    pub file_info: ContentFileInfo,
+    /// Expand `$VAR` / `${VAR}` in `src` and `dst` at staging time (nfpm's
+    /// `expand: true`). Unknown variables expand to the empty string.
+    #[serde(default)]
+    pub expand: bool,
+    /// For `type: tree` only: directories whose installed path matches one of
+    /// these globs are **not** owned by the package (they are treated as
+    /// implicit parent directories). Mirrors nfpm's `disown_subtree`.
+    #[serde(default)]
+    pub disown_subtree: Vec<String>,
+}
+
+/// Per-file metadata for one [`ContentEntry`], mirroring nfpm's
+/// `file_info:` block. Every field is optional; unset fields fall back to the
+/// staged file's own metadata (mode) or the build's reproducible timestamp.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContentFileInfo {
+    /// Owning user name (e.g. `root`). Recorded in the archive header; the
+    /// build host does not need the user to exist.
+    #[serde(default)]
+    pub owner: String,
+    /// Owning group name (e.g. `root`).
+    #[serde(default)]
+    pub group: String,
+    /// Permission bits as an octal string (`"0o755"`, `"0755"`, or `"755"`).
+    /// A bare YAML integer is intentionally rejected: `0644` is ambiguous
+    /// across YAML versions, so the string form is required.
+    #[serde(default)]
+    pub mode: Option<String>,
+    /// Modification time: an RFC 3339 timestamp (e.g.
+    /// `"2008-01-02T15:04:05Z"`) or a Unix epoch second count.
+    #[serde(default)]
+    pub mtime: Option<String>,
+    /// RPM `%lang(<lang>)` tag. Honored by the RPM packager, ignored by every
+    /// other format (matching nfpm).
+    #[serde(default)]
+    pub lang: String,
+}
+
+impl ContentFileInfo {
+    /// Parse `mode` into permission bits, if set.
+    pub fn parsed_mode(&self) -> anyhow::Result<Option<u32>> {
+        let Some(raw) = self.mode.as_deref() else {
+            return Ok(None);
+        };
+        let raw = raw.trim();
+        let raw = raw
+            .strip_prefix("0o")
+            .or_else(|| raw.strip_prefix("0O"))
+            .unwrap_or(raw);
+        let value = u32::from_str_radix(raw, 8)
+            .map_err(|_| anyhow::anyhow!("invalid file_info mode '{}' (expected octal)", raw))?;
+        if value > 0o7777 {
+            anyhow::bail!("file_info mode '{raw}' is out of range");
+        }
+        Ok(Some(value))
+    }
+
+    /// Parse `mtime` into Unix epoch seconds, if set.
+    pub fn parsed_mtime(&self) -> anyhow::Result<Option<i64>> {
+        let Some(raw) = self.mtime.as_deref() else {
+            return Ok(None);
+        };
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(parse_mtime_str(raw)?))
+    }
 }
 
 /// Per-format relation-field overrides (`overrides: {deb: {depends: ...}}`),
@@ -212,6 +284,56 @@ pub struct RpmConfig {
     /// rpm crate supports it, else documented for rpmbuild fallback.
     #[serde(default)]
     pub defines: Vec<String>,
+    /// RPM `Group:` header (e.g. `"Unspecified"`). Mirrors nfpm's
+    /// `rpm.group`.
+    #[serde(default)]
+    pub group: String,
+    /// RPM `BuildHost:` header override. Mirrors nfpm's `rpm.buildhost`.
+    #[serde(default)]
+    pub buildhost: String,
+    /// RPM relocatable prefixes (`Prefixes:` tag). Accepted for nfpm config
+    /// parity; the in-process `rpm` crate exposes no `Prefixes` setter, so
+    /// this is reported and skipped rather than silently dropped.
+    #[serde(default)]
+    pub prefixes: Vec<String>,
+    /// RPM post-transaction requires (`Requires(post):`), mirroring nfpm's
+    /// `rpm.requires.post`. Accepted for parity; the `rpm` crate has no
+    /// distinct post-requires setter, so this is reported and skipped.
+    #[serde(default)]
+    pub requires_post: Vec<String>,
+}
+
+/// OpenWrt / opkg-specific configuration, mirroring nfpm's `ipk:` block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpkConfig {
+    /// `Alternatives:` entries, each `priority:link_name:target`.
+    #[serde(default)]
+    pub alternatives: Vec<IpkAlternative>,
+    /// `Tags:` control field entries.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// `ABIVersion:` control field.
+    #[serde(default)]
+    pub abi_version: String,
+    /// `Auto-Installed: yes` control field.
+    #[serde(default)]
+    pub auto_installed: bool,
+    /// `Essential: yes` control field.
+    #[serde(default)]
+    pub essential: bool,
+}
+
+/// One opkg `Alternatives:` entry (nfpm's `ipk.alternatives`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct IpkAlternative {
+    #[serde(default)]
+    pub priority: i64,
+    #[serde(default)]
+    pub link_name: String,
+    #[serde(default)]
+    pub target: String,
 }
 
 /// Package signing configuration (`signature:`).
@@ -247,6 +369,126 @@ pub struct SignatureConfig {
     /// (nfpm / debsigs parity). Ignored for detach / rpm / arch.
     #[serde(default, rename = "type")]
     pub sign_type: String,
+    /// X.509 certificate (PEM) for formats whose signature embeds it:
+    /// `msix` (with a PKCS#8 private key in `key_file`) and `osxpkg` (with an
+    /// RSA private key in `key_file`). Ignored by deb/rpm/apk.
+    #[serde(default)]
+    pub cert_file: String,
+}
+
+/// MSIX (Windows) package metadata, mirroring nfpm's `msix:` block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixConfig {
+    /// Architecture in MSIX nomenclature (x64/x86/arm64/neutral).
+    #[serde(default)]
+    pub arch: String,
+    /// Publisher identity, e.g. `CN=MyCompany, O=MyCompany, C=US`.
+    #[serde(default)]
+    pub publisher: String,
+    #[serde(default)]
+    pub identity: MsixIdentity,
+    #[serde(default)]
+    pub properties: MsixProperties,
+    #[serde(default)]
+    pub applications: Vec<MsixApplication>,
+    #[serde(default)]
+    pub dependencies: MsixDependencies,
+    #[serde(default)]
+    pub capabilities: MsixCapabilities,
+    #[serde(default)]
+    pub signature: MsixSignature,
+}
+
+/// Optional MSIX identity resource id.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixIdentity {
+    #[serde(default)]
+    pub resource_id: String,
+}
+
+/// MSIX display properties (all optional; sensible fallbacks are used).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixProperties {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub publisher_display_name: String,
+    #[serde(default)]
+    pub logo: String,
+}
+
+/// One MSIX application entry.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixApplication {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub executable: String,
+    #[serde(default)]
+    pub entry_point: String,
+    #[serde(default)]
+    pub visual_elements: MsixVisualElements,
+}
+
+/// MSIX visual elements for an application.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixVisualElements {
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub background_color: String,
+    #[serde(default)]
+    pub square150x150_logo: String,
+    #[serde(default)]
+    pub square44x44_logo: String,
+}
+
+/// MSIX target device families.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixDependencies {
+    #[serde(default)]
+    pub target_device_families: Vec<MsixTargetDeviceFamily>,
+}
+
+/// One MSIX target device family.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixTargetDeviceFamily {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub min_version: String,
+    #[serde(default)]
+    pub max_version_tested: String,
+}
+
+/// MSIX capability declarations.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixCapabilities {
+    #[serde(default)]
+    pub capabilities: Vec<String>,
+    #[serde(default)]
+    pub device_capabilities: Vec<String>,
+    #[serde(default)]
+    pub restricted: Vec<String>,
+}
+
+/// MSIX signing (`pfx_file` is accepted for parity but signing is not yet
+/// implemented; a non-empty value is reported as an unsupported request).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MsixSignature {
+    #[serde(default)]
+    pub pfx_file: String,
 }
 
 /// A single Debian package definition, mirroring package.yaml.
@@ -393,6 +635,13 @@ pub struct PackageConfig {
     /// RPM-specific configuration (triggers). See [`RpmConfig`].
     #[serde(default)]
     pub rpm: RpmConfig,
+    /// OpenWrt/opkg-specific configuration (alternatives, tags, ABI). See
+    /// [`IpkConfig`]. Ignored by other formats.
+    #[serde(default)]
+    pub ipk: IpkConfig,
+    /// MSIX (Windows) configuration. See [`MsixConfig`].
+    #[serde(default)]
+    pub msix: MsixConfig,
     /// Package signing. See [`SignatureConfig`].
     #[serde(default)]
     pub signature: SignatureConfig,
@@ -425,6 +674,11 @@ pub struct PackageConfig {
     /// (Debian policy excludes it there since `:` isn't filename-safe).
     #[serde(default)]
     pub epoch: String,
+    /// Optional override for the reproducible build timestamp (RFC 3339 or
+    /// Unix epoch seconds). Mirrors nfpm's `mtime`; when set it takes
+    /// precedence over the release-publish time derived from the forge.
+    #[serde(default)]
+    pub mtime: String,
     /// Package format plugin to use: "deb" (default), "rpm", "arch",
     /// "apk", or "ipk".
     #[serde(default = "default_package_format")]
@@ -876,9 +1130,9 @@ impl PackageConfig {
         }
         if !self.package_format.trim().is_empty() {
             match self.package_format.trim().to_ascii_lowercase().as_str() {
-                "deb" | "rpm" | "arch" | "apk" | "ipk" => {}
+                "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg" => {}
                 other => bail!(
-                    "unsupported package_format '{other}' (expected deb, rpm, arch, apk, or ipk)"
+                    "unsupported package_format '{other}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
                 ),
             }
         }
@@ -918,9 +1172,12 @@ impl PackageConfig {
         }
         for key in self.overrides.keys() {
             let k = key.trim().to_ascii_lowercase();
-            if !matches!(k.as_str(), "deb" | "rpm" | "arch" | "apk" | "ipk") {
+            if !matches!(
+                k.as_str(),
+                "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg"
+            ) {
                 bail!(
-                    "unsupported overrides format '{key}' (expected deb, rpm, arch, apk, or ipk)"
+                    "unsupported overrides format '{key}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
                 );
             }
         }
@@ -943,7 +1200,18 @@ impl PackageConfig {
                         bail!("contents entry requires src for type '{}'", display_kind(&entry.kind));
                     }
                 }
-                "config" | "config|noreplace" | "config|missingok" | "tree" | "symlink" => {
+                "config"
+                | "config|noreplace"
+                | "config|missingok"
+                | "config|tree"
+                | "config|noreplace|tree"
+                | "config|missingok|tree"
+                | "tree"
+                | "symlink"
+                | "doc"
+                | "license"
+                | "licence"
+                | "readme" => {
                     if entry.src.trim().is_empty() {
                         bail!("contents entry requires src for type '{}'", display_kind(&entry.kind));
                     }
@@ -951,17 +1219,20 @@ impl PackageConfig {
                 // dir: no src needed; ghost: RPM-only, staged as a no-op.
                 "dir" | "ghost" => {}
                 other => bail!(
-                    "unsupported contents type '{other}' (expected file, config, config|noreplace, config|missingok, tree, symlink, dir, or ghost)"
+                    "unsupported contents type '{other}' (expected file, config, config|noreplace, config|missingok, config|tree, config|noreplace|tree, config|missingok|tree, tree, symlink, dir, ghost, doc, license, or readme)"
                 ),
             }
             if !entry.packager.trim().is_empty() {
                 match entry.packager.trim().to_ascii_lowercase().as_str() {
-                    "deb" | "rpm" | "arch" | "apk" | "ipk" => {}
+                    "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg" => {}
                     other => bail!(
-                        "unsupported contents packager '{other}' (expected deb, rpm, arch, apk, or ipk)"
+                        "unsupported contents packager '{other}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
                     ),
                 }
             }
+            // Fail early on malformed per-file metadata rather than mid-build.
+            entry.file_info.parsed_mode()?;
+            entry.file_info.parsed_mtime()?;
         }
         for (arch, o) in &self.distribution_arch_overrides {
             if arch.trim().is_empty() {
@@ -1186,12 +1457,13 @@ impl PackageConfig {
         suites.first().cloned()
     }
 
-    /// Effective package format, normalized to lowercase ("deb", "rpm", or "arch").
+    /// Effective package format, canonicalized ("deb", "rpm", "osxpkg", …).
+    /// `pkg` is accepted as an alias for `osxpkg`.
     pub fn effective_package_format(&self) -> String {
         if self.package_format.trim().is_empty() {
             "deb".to_string()
         } else {
-            self.package_format.trim().to_ascii_lowercase()
+            canonical_format(&self.package_format)
         }
     }
 
@@ -1242,6 +1514,8 @@ impl PackageConfig {
             "arch" => lx_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS,
             "apk" => lx_lib::constants::DEFAULT_APK_DISTRIBUTIONS,
             "ipk" => lx_lib::constants::DEFAULT_IPK_DISTRIBUTIONS,
+            "msix" => lx_lib::constants::DEFAULT_MSIX_DISTRIBUTIONS,
+            "osxpkg" => lx_lib::constants::DEFAULT_OSX_DISTRIBUTIONS,
             _ => lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS,
         };
         defaults.iter().map(|s| s.to_string()).collect()
@@ -1319,6 +1593,17 @@ impl PackageConfig {
             s
         };
         u32::from_str_radix(stripped, 8).ok()
+    }
+
+    /// Explicit reproducible-build timestamp override (`mtime:`), parsed from
+    /// RFC 3339 or epoch seconds. `None` means "derive from the release".
+    pub fn effective_mtime(&self) -> anyhow::Result<Option<i64>> {
+        let t = self.mtime.trim();
+        if t.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(parse_mtime_str(t)?))
+        }
     }
 
     /// Effective packager (falls back to maintainer when unset). Split out
@@ -1532,6 +1817,28 @@ fn is_env_name(s: &str) -> bool {
         _ => return false,
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Parse an `mtime` value: either Unix epoch seconds or an RFC 3339
+/// timestamp. Shared by `file_info.mtime` and the top-level `mtime:`.
+pub fn parse_mtime_str(raw: &str) -> anyhow::Result<i64> {
+    let raw = raw.trim();
+    if let Ok(secs) = raw.parse::<i64>() {
+        return Ok(secs);
+    }
+    let ts = raw.parse::<jiff::Timestamp>().map_err(|_| {
+        anyhow::anyhow!("invalid mtime '{raw}' (expected RFC 3339 or epoch seconds)")
+    })?;
+    Ok(ts.as_second())
+}
+
+/// Canonicalize a package-format name. `pkg` is an alias for `osxpkg`
+/// (macOS flat package); everything else is lowercased unchanged.
+pub fn canonical_format(name: &str) -> String {
+    match name.trim().to_ascii_lowercase().as_str() {
+        "pkg" | "osxpkg" => "osxpkg".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// Drop suites whose LTS support has ended, mirroring the action's

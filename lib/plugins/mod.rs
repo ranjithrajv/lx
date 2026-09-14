@@ -29,7 +29,8 @@ use anyhow::{Context, Result};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use crate::config::PackageConfig;
+use crate::config::{ContentEntry, PackageConfig};
+use crate::filemeta::{installed_path, FileMeta, FileMetaMap, RpmFileKind};
 use crate::plugins::plugin::{Plugin, PluginSet};
 use lx_lib::github::RepoLicense;
 
@@ -149,9 +150,10 @@ pub fn all_packagers() -> Vec<Box<dyn Packager>> {
     ]
 }
 
-/// Look up a plugin by name (case-insensitive). Returns `None` for unknown.
+/// Look up a plugin by name (case-insensitive, aliases resolved: `pkg` →
+/// `osxpkg`). Returns `None` for unknown.
 pub fn get_packager(name: &str) -> Option<Box<dyn Packager>> {
-    PluginSet::new(all_packagers()).take(name)
+    PluginSet::new(all_packagers()).take(&crate::config::canonical_format(name))
 }
 
 /// Available plugin names for error messages / help text.
@@ -450,55 +452,108 @@ pub fn apply_contents(
 
 /// Like [`apply_contents`] but keeps the config kind so rpm can mark
 /// `%config(noreplace)` and Arch can build its `backup` list.
+///
+/// Drops the per-file metadata map; callers that need it (every archive
+/// writer, for `file_info` / `disown_subtree`) use [`apply_contents_full`].
 pub fn apply_contents_with_config(
     cfg: &PackageConfig,
     root: &Path,
     format: &str,
 ) -> anyhow::Result<Vec<StagedConfig>> {
+    Ok(apply_contents_full(cfg, root, format)?.0)
+}
+
+/// Stage every applicable `contents:` entry and return the registered config
+/// files plus the per-file metadata overrides (`file_info`, `disown_subtree`)
+/// keyed by installed path for the archive writers.
+pub fn apply_contents_full(
+    cfg: &PackageConfig,
+    root: &Path,
+    format: &str,
+) -> anyhow::Result<(Vec<StagedConfig>, FileMetaMap)> {
     let format = format.trim().to_ascii_lowercase();
     let umask = cfg.effective_umask();
     let mut configs = Vec::new();
+    let mut meta = FileMetaMap::new();
     for entry in &cfg.contents {
         let packager = entry.packager.trim().to_ascii_lowercase();
         if !packager.is_empty() && packager != format {
             continue;
         }
+        // nfpm's `expand: true` expands `$VAR` / `${VAR}` in src and dst.
+        let entry = if entry.expand {
+            let mut e = entry.clone();
+            e.src = os_expand(&e.src);
+            e.dst = os_expand(&e.dst);
+            e
+        } else {
+            entry.clone()
+        };
         let dst_abs = safe_join(root, &entry.dst)?;
-        match entry.kind.as_str() {
-            "" | "file" => {
-                stage_contents_entry(
-                    Path::new(&entry.src),
-                    &dst_abs,
-                    &entry.kind,
-                    umask,
-                    cfg.disable_globbing,
-                    false,
-                )?;
-            }
+        let staged: Vec<PathBuf> = match entry.kind.as_str() {
+            "" | "file" => stage_contents_entry(
+                Path::new(&entry.src),
+                &dst_abs,
+                &entry.kind,
+                umask,
+                cfg.disable_globbing,
+                false,
+            )?,
             "config" | "config|noreplace" | "config|missingok" => {
-                stage_contents_entry(
-                    Path::new(&entry.src),
-                    &dst_abs,
-                    &entry.kind,
-                    umask,
-                    cfg.disable_globbing,
-                    false,
-                )?;
                 configs.push(StagedConfig {
                     path: entry.dst.clone(),
                     noreplace: entry.kind == "config|noreplace",
                 });
-            }
-            "tree" => {
                 stage_contents_entry(
                     Path::new(&entry.src),
                     &dst_abs,
                     &entry.kind,
                     umask,
                     cfg.disable_globbing,
+                    false,
+                )?
+            }
+            "tree" => stage_contents_entry(
+                Path::new(&entry.src),
+                &dst_abs,
+                &entry.kind,
+                umask,
+                cfg.disable_globbing,
+                true,
+            )?,
+            // nfpm's "config tree" types: copy the tree, then register every
+            // regular file as a config file.
+            "config|tree" | "config|noreplace|tree" | "config|missingok|tree" => {
+                let staged = stage_contents_entry(
+                    Path::new(&entry.src),
+                    &dst_abs,
+                    "tree",
+                    umask,
+                    cfg.disable_globbing,
                     true,
                 )?;
+                let noreplace = entry.kind == "config|noreplace|tree";
+                for p in &staged {
+                    for f in walk_paths(p)? {
+                        if f.is_file() {
+                            configs.push(StagedConfig {
+                                path: installed_for(root, &f)?,
+                                noreplace,
+                            });
+                        }
+                    }
+                }
+                staged
             }
+            // RPM doc/license/readme classification; a plain file elsewhere.
+            "doc" | "license" | "licence" | "readme" => stage_contents_entry(
+                Path::new(&entry.src),
+                &dst_abs,
+                &entry.kind,
+                umask,
+                cfg.disable_globbing,
+                false,
+            )?,
             // nfpm symlink semantics: both src and dst are paths *inside*
             // the package; nothing is read from the build environment.
             "symlink" => {
@@ -508,20 +563,172 @@ pub fn apply_contents_with_config(
                 let _ = std::fs::remove_file(&dst_abs);
                 #[cfg(unix)]
                 std::os::unix::fs::symlink(&entry.src, &dst_abs)?;
+                vec![dst_abs.clone()]
             }
             "dir" => {
                 std::fs::create_dir_all(&dst_abs)?;
+                vec![dst_abs.clone()]
             }
             // RPM-only directive; a no-op for deb/arch (matches nfpm,
             // which ignores ghost files for non-rpm packagers).
-            "ghost" => {}
+            "ghost" => Vec::new(),
             other => anyhow::bail!(
                 "unsupported contents type '{other}' (validate() should have caught this)"
             ),
-        }
+        };
+        record_entry_meta(&mut meta, root, &entry, &staged)?;
     }
     configs.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(configs)
+    Ok((configs, meta))
+}
+
+/// Record the `file_info` / `disown_subtree` overrides for one entry's staged
+/// paths. `tree` and `dir` entries apply to their whole subtree; a symlink
+/// carries ownership but never a mode (matching nfpm).
+fn record_entry_meta(
+    meta: &mut FileMetaMap,
+    root: &Path,
+    entry: &ContentEntry,
+    staged: &[PathBuf],
+) -> anyhow::Result<()> {
+    if staged.is_empty() {
+        return Ok(());
+    }
+    let base = FileMeta {
+        mode: entry.file_info.parsed_mode()?,
+        owner: non_empty(&entry.file_info.owner),
+        group: non_empty(&entry.file_info.group),
+        mtime: entry.file_info.parsed_mtime()?,
+        lang: non_empty(&entry.file_info.lang),
+        disown: false,
+        rpm_kind: match entry.kind.as_str() {
+            "doc" => Some(RpmFileKind::Doc),
+            "license" | "licence" => Some(RpmFileKind::License),
+            "readme" => Some(RpmFileKind::Readme),
+            _ => None,
+        },
+    };
+    let is_symlink = entry.kind == "symlink";
+    let recurse = matches!(
+        entry.kind.as_str(),
+        "tree" | "dir" | "config|tree" | "config|noreplace|tree" | "config|missingok|tree"
+    );
+    for path in staged {
+        if recurse || path.is_dir() {
+            for p in walk_paths(path)? {
+                let installed = installed_for(root, &p)?;
+                let mut m = base.clone();
+                if p.is_dir()
+                    && !entry.disown_subtree.is_empty()
+                    && matches_any(&installed, &entry.disown_subtree)
+                {
+                    m.disown = true;
+                }
+                if !m.is_empty() {
+                    meta.insert(installed, m);
+                }
+            }
+        } else {
+            let mut m = base.clone();
+            if is_symlink {
+                m.mode = None;
+            }
+            if !m.is_empty() {
+                meta.insert(installed_for(root, path)?, m);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn non_empty(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+fn installed_for(root: &Path, path: &Path) -> anyhow::Result<String> {
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|_| anyhow::anyhow!("staged path '{}' escaped the root", path.display()))?;
+    Ok(installed_path(&rel.to_string_lossy()))
+}
+
+/// `path` plus every descendant, for applying a tree-wide `file_info`.
+fn walk_paths(path: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let mut out = vec![path.to_path_buf()];
+    if path.is_dir() {
+        let mut entries: Vec<_> = std::fs::read_dir(path)?.collect::<std::io::Result<Vec<_>>>()?;
+        entries.sort_by_key(|e| e.file_name());
+        for entry in entries {
+            out.extend(walk_paths(&entry.path())?);
+        }
+    }
+    Ok(out)
+}
+
+fn matches_any(installed: &str, patterns: &[String]) -> bool {
+    patterns.iter().any(|p| {
+        let p = if p.starts_with('/') {
+            p.clone()
+        } else {
+            format!("/{p}")
+        };
+        installed == p
+            || glob::Pattern::new(&p)
+                .map(|pat| pat.matches(installed))
+                .unwrap_or(false)
+    })
+}
+
+/// Go `os.Expand` semantics: `$NAME` / `${NAME}` become the environment
+/// value, or the empty string when unset. Used by `contents[].expand: true`.
+fn os_expand(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('{') => {
+                chars.next();
+                let mut name = String::new();
+                let mut closed = false;
+                for c2 in chars.by_ref() {
+                    if c2 == '}' {
+                        closed = true;
+                        break;
+                    }
+                    name.push(c2);
+                }
+                if closed {
+                    out.push_str(&std::env::var(&name).unwrap_or_default());
+                } else {
+                    out.push_str("${");
+                    out.push_str(&name);
+                }
+            }
+            Some(c2) if c2.is_ascii_alphanumeric() || c2 == '_' => {
+                let mut name = String::new();
+                while let Some(&next) = chars.peek() {
+                    if next.is_ascii_alphanumeric() || next == '_' {
+                        name.push(next);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                out.push_str(&std::env::var(&name).unwrap_or_default());
+            }
+            _ => out.push('$'),
+        }
+    }
+    out
 }
 
 /// Stage a single contents entry, expanding glob patterns when applicable.
@@ -541,7 +748,7 @@ fn stage_contents_entry(
     umask: Option<u32>,
     disable_globbing: bool,
     is_tree: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<PathBuf>> {
     let src_str = src.to_string_lossy();
     let should_glob = !disable_globbing && is_glob_pattern(&src_str);
 
@@ -552,7 +759,7 @@ fn stage_contents_entry(
         } else {
             stage_file(src, dst, umask)?;
         }
-        return Ok(());
+        return Ok(vec![dst.to_path_buf()]);
     }
 
     // Glob expansion path.
@@ -566,6 +773,7 @@ fn stage_contents_entry(
         anyhow::bail!("glob pattern '{src_str}' matched no files");
     }
 
+    let mut staged = Vec::new();
     if is_dir_type {
         // For tree type: copy each matching directory as a subtree.
         std::fs::create_dir_all(dst)?;
@@ -574,7 +782,9 @@ fn stage_contents_entry(
                 let name = matched.file_name().ok_or_else(|| {
                     anyhow::anyhow!("glob match '{}' has no file name", matched.display())
                 })?;
-                copy_dir_recursive(&matched, &dst.join(name))?;
+                let dest = dst.join(name);
+                copy_dir_recursive(&matched, &dest)?;
+                staged.push(dest);
             }
         }
     } else {
@@ -585,11 +795,13 @@ fn stage_contents_entry(
                 let name = matched.file_name().ok_or_else(|| {
                     anyhow::anyhow!("glob match '{}' has no file name", matched.display())
                 })?;
-                stage_file(&matched, &dst.join(name), umask)?;
+                let dest = dst.join(name);
+                stage_file(&matched, &dest, umask)?;
+                staged.push(dest);
             }
         }
     }
-    Ok(())
+    Ok(staged)
 }
 
 /// Read the configured maintainer scripts from the build environment and

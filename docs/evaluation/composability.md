@@ -153,10 +153,10 @@ registry.
 - **`registry_source:` + dependency mapping** — registry manifests are
   mapped to the target format's names and syntax (`lib/depmap.rs`).
 
-It is 🟡 because one config does **not** fully compose per-file metadata
-across formats: nfpm's per-file `mode`/`owner`/`group`/`lang` are missing
-(`lx` has `umask` only, `docs/comparison/lx-vs-nfpm.md`), so a tree that
-needs per-file ownership cannot be expressed in one cross-format config.
+It is 🟡 because per-file metadata is not uniform across formats:
+`contents[].file_info` carries `mode`/`owner`/`group`/`mtime`/`lang`, but
+`lang` maps only to RPM's `%lang` (other formats ignore it, matching nfpm),
+so one cross-format config cannot attach a language outside the RPM payload.
 
 ## C6 — Library reuse (partial)
 

@@ -6,8 +6,11 @@
 //! subprocess. The output is a genuine RPM that `rpm -qip` / `dnf` accept.
 
 use anyhow::{bail, Context, Result};
+use sha2::Digest as _;
 use std::io::Read;
 use std::path::Path;
+
+use crate::filemeta::FileMetaMap;
 
 /// RPM header tag fields shared by [`build`], [`build_with_options`], and
 /// [`build_srpm`].
@@ -39,7 +42,15 @@ pub fn build(
     mtime: i64,
     rpm_path: &Path,
 ) -> Result<()> {
-    build_with_options(root, meta, arch, mtime, rpm_path, &BuildOptions::default())
+    build_with_options(
+        root,
+        meta,
+        arch,
+        mtime,
+        rpm_path,
+        &BuildOptions::default(),
+        &FileMetaMap::new(),
+    )
 }
 
 /// RPM relation fields (requires, provides, conflicts, obsoletes,
@@ -198,6 +209,9 @@ pub struct BuildOptions<'a> {
     pub config_noreplace_files: Vec<String>,
     /// RPM epoch header tag. `None` means 0 (the RPM default).
     pub epoch: Option<u32>,
+    /// RPM `BuildHost:` header override (nfpm `rpm.buildhost`). Empty means
+    /// the rpm crate default.
+    pub buildhost: String,
 }
 
 /// Parse `"package: script_path"` trigger entries from config. The script
@@ -252,6 +266,7 @@ pub fn build_with_options(
     mtime: i64,
     rpm_path: &Path,
     opts: &BuildOptions,
+    file_meta: &FileMetaMap,
 ) -> Result<()> {
     let rpm_arch = to_rpm_arch(arch);
 
@@ -269,6 +284,13 @@ pub fn build_with_options(
     // Apply the epoch header tag when the config pins one.
     if let Some(e) = opts.epoch {
         builder = builder.epoch(e);
+    }
+
+    // rpm.buildhost (nfpm parity). `rpm.group` is *not* applied here: the
+    // `rpm` crate hardcodes RPMTAG_GROUP to "Unspecified" and ignores
+    // `PackageBuilder::group`; the plugin reports it.
+    if !opts.buildhost.trim().is_empty() {
+        builder = builder.build_host(opts.buildhost.clone());
     }
 
     // Apply payload compression if specified (mirrors fpm's --rpm-compression).
@@ -414,7 +436,14 @@ pub fn build_with_options(
         config_map.insert(f.clone(), true);
     }
 
-    add_dir_recursive(root, root, &mut builder, empty_file.path(), &config_map)?;
+    add_dir_recursive(
+        root,
+        root,
+        &mut builder,
+        empty_file.path(),
+        &config_map,
+        file_meta,
+    )?;
 
     // Sign during the same build pass when configured — `build_and_sign`
     // embeds the PGP signature header before anything is written.
@@ -436,16 +465,42 @@ pub fn build_with_options(
         signer = None;
     }
 
-    let pkg = match &signer {
-        Some(s) => builder
-            .build_and_sign(s.clone())
-            .context("failed to build+sign rpm package")?,
-        None => builder.build().context("failed to build rpm package")?,
-    };
+    // Build unsigned first, then inject `file_info.lang` (the crate hardcodes
+    // every FILELANGS slot to empty), then apply any configured signature over
+    // the final header. With no languages to inject this is exactly
+    // `build()` followed by an optional `sign_with_timestamp`, i.e. the same
+    // output as the previous `build_and_sign` path.
+    let mut pkg = builder.build().context("failed to build rpm package")?;
+    let mut bytes = Vec::new();
+    pkg.write(&mut bytes).context("failed to serialize .rpm")?;
 
-    let mut out = std::fs::File::create(rpm_path)
-        .with_context(|| format!("failed to create '{}'", rpm_path.display()))?;
-    pkg.write(&mut out).context("failed to write .rpm")?;
+    if let Some(langs) = collect_file_langs(file_meta, &pkg)? {
+        let (patched, header_sha256) = inject_file_langs(bytes, &langs)?;
+        pkg =
+            rpm::Package::parse(&mut &patched[..]).context("failed to re-read the patched .rpm")?;
+        // Unsigned: the builder emits a digest-only signature header (SHA256
+        // over the main header); refresh it for the rewritten header. When a
+        // key is present the signature below covers the new header instead.
+        if signer.is_none() {
+            pkg.metadata.signature = rpm::Header::<rpm::IndexSignatureTag>::builder()
+                .add_digest(&header_sha256)
+                .build();
+        }
+        bytes = Vec::new();
+        pkg.write(&mut bytes)
+            .context("failed to serialize the patched .rpm")?;
+    }
+
+    if let Some(s) = &signer {
+        pkg.sign_with_timestamp(s.clone(), mtime.max(0) as u32)
+            .context("failed to sign rpm package")?;
+        bytes = Vec::new();
+        pkg.write(&mut bytes)
+            .context("failed to serialize the signed .rpm")?;
+    }
+
+    std::fs::write(rpm_path, &bytes)
+        .with_context(|| format!("failed to write '{}'", rpm_path.display()))?;
     Ok(())
 }
 
@@ -455,6 +510,7 @@ fn add_dir_recursive(
     builder: &mut rpm::PackageBuilder,
     empty_file: &Path,
     config: &std::collections::HashMap<String, bool>,
+    file_meta: &FileMetaMap,
 ) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read '{}'", dir.display()))?
@@ -468,15 +524,17 @@ fn add_dir_recursive(
             .expect("walked path must be under original_root");
         // RPM payload paths are absolute (e.g. /usr/bin/foo)
         let rpm_path = format!("/{}", rel.to_string_lossy());
+        let entry_meta = file_meta.get(&rpm_path);
 
         let ft = entry.file_type()?;
         if ft.is_symlink() {
             let target = std::fs::read_link(&fs_path)?;
             // rpm expects symlink target via FileOptions::symlink and a dummy
             // source file. Mode includes symlink type bits (0o120777).
-            let opts = rpm::FileOptions::new(rpm_path)
+            let mut opts = rpm::FileOptions::new(rpm_path)
                 .symlink(target.to_string_lossy().to_string())
                 .mode(0o120777i32);
+            opts = apply_rpm_ownership(opts, entry_meta);
             // Use empty file as source; content is ignored for symlink.
             let b = std::mem::replace(builder, rpm::PackageBuilder::new("", "", "", "", ""));
             let nb = b
@@ -486,21 +544,34 @@ fn add_dir_recursive(
         } else if ft.is_dir() {
             // RPM implicitly creates directories for files; we recurse but do
             // not add empty directory entries themselves.
-            add_dir_recursive(original_root, &fs_path, builder, empty_file, config)?;
+            add_dir_recursive(
+                original_root,
+                &fs_path,
+                builder,
+                empty_file,
+                config,
+                file_meta,
+            )?;
         } else if ft.is_file() {
             // Inherit mode from source file; rpm crate will read it if we
-            // don't override, but we set explicitly for determinism.
+            // don't override, but we set explicitly for determinism. A
+            // `file_info.mode` override wins.
             #[cfg(unix)]
-            let mode = {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::metadata(&fs_path)?.permissions().mode() & 0o777
-            };
+            let mode = entry_meta.and_then(|m| m.mode).unwrap_or_else(|| {
+                std::fs::metadata(&fs_path)
+                    .map(|m| {
+                        use std::os::unix::fs::PermissionsExt;
+                        m.permissions().mode() & 0o777
+                    })
+                    .unwrap_or(0o644)
+            });
             #[cfg(not(unix))]
-            let mode = 0o644u32;
+            let mode = entry_meta.and_then(|m| m.mode).unwrap_or(0o644);
 
             // FileMode expects full mode with type bits; regular file is 0o100000 + perms.
             let file_mode = 0o100000 | mode;
             let mut opts = rpm::FileOptions::new(rpm_path.clone()).mode(file_mode as i32);
+            opts = apply_rpm_ownership(opts, entry_meta);
             // `%config` / `%config(noreplace)` marking for contents entries.
             if let Some(&noreplace) = config.get(&rpm_path) {
                 opts = if noreplace {
@@ -517,6 +588,195 @@ fn add_dir_recursive(
         }
     }
     Ok(())
+}
+
+/// Apply `file_info.owner`/`group` names and `contents` `doc`/`license`/
+/// `readme` classification to an RPM file entry.
+///
+/// `file_info.lang` is handled separately: the crate exposes no `%lang`
+/// setter, so it is injected into the built header by [`inject_file_langs`].
+fn apply_rpm_ownership(
+    mut opts: rpm::FileOptionsBuilder,
+    meta: Option<&crate::filemeta::FileMeta>,
+) -> rpm::FileOptionsBuilder {
+    let Some(meta) = meta else {
+        return opts;
+    };
+    if let Some(owner) = &meta.owner {
+        opts = opts.user(owner.clone());
+    }
+    if let Some(group) = &meta.group {
+        opts = opts.group(group.clone());
+    }
+    match meta.rpm_kind {
+        Some(crate::filemeta::RpmFileKind::Doc) => opts = opts.is_doc(),
+        Some(crate::filemeta::RpmFileKind::License) => opts = opts.is_license(),
+        Some(crate::filemeta::RpmFileKind::Readme) => opts = opts.is_readme(),
+        None => {}
+    }
+    opts
+}
+
+// ---------------------------------------------------------------------------
+// `file_info.lang` → RPMTAG_FILELANGS
+//
+// The `rpm` crate hardcodes every language slot to `""` (builder.rs:
+// `file_langs.push("".to_string())`) and exposes no per-file setter, on any
+// release through 0.28. Rather than fork the crate, the built header is
+// rewritten: the language strings are appended to the data store and the
+// FILELANGS index entry is repointed at them. Nothing before the new strings
+// moves, so every other entry offset stays valid; the header digest is then
+// refreshed (and the package re-signed, when a key is configured).
+// ---------------------------------------------------------------------------
+
+/// `RPMTAG_FILELANGS`.
+const RPMTAG_FILELANGS: u32 = 1097;
+/// `RPMTAG_HEADERIMMUTABLE`: the header's region descriptor.
+const RPMTAG_HEADERIMMUTABLE: u32 = 63;
+/// Size of the region descriptor (`HEADERIMMUTABLE`).
+const RPM_REGION_DESCRIPTOR_LEN: usize = 16;
+/// Fixed RPM lead length preceding the signature header.
+const RPM_LEAD_LEN: usize = 96;
+/// Every RPM header opens with a 16-byte index header.
+const RPM_INDEX_HEADER_LEN: usize = 16;
+/// Every RPM index entry is 16 bytes.
+const RPM_INDEX_ENTRY_LEN: usize = 16;
+/// RPM header magic (3 bytes) plus the always-1 version byte.
+const RPM_HEADER_MAGIC: [u8; 4] = [0x8e, 0xad, 0xe8, 0x01];
+
+/// The fixed-size prefix of an RPM header.
+struct RpmIndexHeader {
+    num_entries: u32,
+    data_len: u32,
+}
+
+impl RpmIndexHeader {
+    /// On-disk length of the whole header (index header + entries + store).
+    fn total_len(&self) -> usize {
+        self.store_offset() + self.data_len as usize
+    }
+
+    /// Byte offset of the data store, relative to the header start.
+    fn store_offset(&self) -> usize {
+        RPM_INDEX_HEADER_LEN + self.num_entries as usize * RPM_INDEX_ENTRY_LEN
+    }
+}
+
+fn parse_rpm_index_header(slice: &[u8]) -> Result<RpmIndexHeader> {
+    if slice.len() < RPM_INDEX_HEADER_LEN {
+        bail!("truncated rpm header (need {RPM_INDEX_HEADER_LEN} bytes)");
+    }
+    if slice[..4] != RPM_HEADER_MAGIC {
+        bail!("unexpected rpm header magic");
+    }
+    Ok(RpmIndexHeader {
+        num_entries: u32::from_be_bytes(slice[8..12].try_into().expect("4 bytes")),
+        data_len: u32::from_be_bytes(slice[12..16].try_into().expect("4 bytes")),
+    })
+}
+
+/// Build the `%lang` array in RPM header order (parallel to BASENAMES and
+/// DIRNAMES), taking each entry's language from the `file_info` overrides.
+/// Returns `None` when no installed file sets a language.
+fn collect_file_langs(file_meta: &FileMetaMap, pkg: &rpm::Package) -> Result<Option<Vec<String>>> {
+    let entries = pkg
+        .metadata
+        .get_file_entries()
+        .context("failed to read rpm file entries for file_info.lang")?;
+    let langs: Vec<String> = entries
+        .iter()
+        .map(|entry| {
+            file_meta
+                .get(&entry.path.to_string_lossy().to_string())
+                .and_then(|m| m.lang.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    Ok(langs.iter().any(|l| !l.is_empty()).then_some(langs))
+}
+
+/// Rewrite a serialized `.rpm`'s main header to carry `langs`, returning the
+/// new file bytes plus the SHA256 (hex) of the rewritten header.
+fn inject_file_langs(bytes: Vec<u8>, langs: &[String]) -> Result<(Vec<u8>, String)> {
+    if bytes.len() < RPM_LEAD_LEN + RPM_INDEX_HEADER_LEN {
+        bail!("rpm file is too short to hold a header");
+    }
+
+    // Signature header: header + entries + store + 8-byte alignment padding.
+    let sig = parse_rpm_index_header(&bytes[RPM_LEAD_LEN..])?;
+    let sig_total = sig.total_len() + (8 - (sig.data_len as usize % 8)) % 8;
+    let main_start = RPM_LEAD_LEN + sig_total;
+
+    if main_start + RPM_INDEX_HEADER_LEN > bytes.len() {
+        bail!("rpm file is truncated before the main header");
+    }
+    let main = parse_rpm_index_header(&bytes[main_start..])?;
+    let main_len = main.total_len();
+    if main_start + main_len > bytes.len() {
+        bail!("rpm main header extends past the end of the file");
+    }
+
+    let mut header = bytes[main_start..main_start + main_len].to_vec();
+    let store_offset = main.store_offset();
+    let store = header[store_offset..].to_vec();
+
+    // Locate the FILELANGS entry and the header region descriptor
+    // (`HEADERIMMUTABLE`). The `rpm` crate appends the descriptor as the final
+    // 16 bytes of the store; the language strings are inserted before it and
+    // the descriptor is re-appended, so it stays the store's final entry.
+    let mut filelangs: Option<usize> = None;
+    let mut region: Option<usize> = None;
+    for i in 0..main.num_entries as usize {
+        let entry = RPM_INDEX_HEADER_LEN + i * RPM_INDEX_ENTRY_LEN;
+        let tag = u32::from_be_bytes(header[entry..entry + 4].try_into().expect("4 bytes"));
+        if tag == RPMTAG_FILELANGS {
+            filelangs = Some(entry);
+        } else if tag == RPMTAG_HEADERIMMUTABLE {
+            region = Some(entry);
+        }
+    }
+    let filelangs = filelangs.context("rpm main header has no RPMTAG_FILELANGS entry")?;
+    let region = region.context("rpm main header has no region descriptor")?;
+
+    let descriptor_offset =
+        i32::from_be_bytes(header[region + 8..region + 12].try_into().expect("4 bytes"));
+    let descriptor_offset =
+        usize::try_from(descriptor_offset).context("rpm region descriptor offset is negative")?;
+    let descriptor_end = descriptor_offset
+        .checked_add(RPM_REGION_DESCRIPTOR_LEN)
+        .filter(|end| *end <= store.len())
+        .context("rpm region descriptor runs past the store")?;
+    if descriptor_end != store.len() {
+        bail!("rpm region descriptor is not the last entry in the header store");
+    }
+
+    let mut new_store = store[..descriptor_offset].to_vec();
+    let langs_offset = i32::try_from(new_store.len()).context("rpm header store too large")?;
+    for lang in langs {
+        new_store.extend_from_slice(lang.as_bytes());
+        new_store.push(0);
+    }
+    let new_descriptor_offset =
+        i32::try_from(new_store.len()).context("rpm header store too large")?;
+    new_store.extend_from_slice(&store[descriptor_offset..descriptor_end]);
+
+    header[filelangs + 8..filelangs + 12].copy_from_slice(&langs_offset.to_be_bytes());
+    header[filelangs + 12..filelangs + 16].copy_from_slice(&(langs.len() as u32).to_be_bytes());
+    header[region + 8..region + 12].copy_from_slice(&new_descriptor_offset.to_be_bytes());
+
+    // Refresh the data-section size, then splice the new store back in.
+    let new_len = u32::try_from(new_store.len()).context("rpm header store too large")?;
+    header[12..16].copy_from_slice(&new_len.to_be_bytes());
+    header.truncate(store_offset);
+    header.extend_from_slice(&new_store);
+
+    let header_sha256 = hex::encode(sha2::Sha256::digest(&header));
+
+    let mut out = Vec::with_capacity(bytes.len() + header.len());
+    out.extend_from_slice(&bytes[..main_start]);
+    out.extend_from_slice(&header);
+    out.extend_from_slice(&bytes[main_start + main_len..]);
+    Ok((out, header_sha256))
 }
 
 /// Best-effort find-requires / find-provides over the staged payload.

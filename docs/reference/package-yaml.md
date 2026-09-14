@@ -34,6 +34,7 @@ version: ""                   # pin a specific upstream version (else: latest)
 build_version: "1"            # Debian revision
 epoch: ""                     # e.g. "1" -- for upstream version-numbering resets
 version_schema: semver        # semver (default; strips v-prefix) | none
+mtime: ""                     # reproducible-build timestamp override (RFC 3339 or epoch); nfpm's mtime
 umask: ""                     # octal umask for files, e.g. "0o002" (default: inherit)
 packager: ""                  # packager string; rpm: packager header tag, deb: Packager field
 
@@ -64,12 +65,42 @@ overrides:
   rpm:
     depends: ""               # override depends for rpm only
 
+# Extra files/dirs/symlinks layered into the staged install tree.
+contents:
+  - src: ./completions/mytool.bash   # build-environment path (globs allowed)
+    dst: /usr/share/bash-completion/completions/mytool
+    type: file                        # file | config | config|noreplace | config|missingok | config|tree | config|noreplace|tree | config|missingok|tree | tree | symlink | dir | ghost | doc | license | readme
+    packager: ""                      # optional: apply to one format only (deb/rpm/arch/apk/ipk/msix/osxpkg)
+    file_info:                        # per-file metadata (nfpm parity)
+      owner: root
+      group: root
+      mode: "0o644"                   # octal string
+      mtime: "2008-01-02T15:04:05Z"   # RFC 3339 or epoch seconds
+      lang: en                        # RPM %lang(<lang>) only; ignored elsewhere
+    expand: false                     # expand $VAR/${VAR} in src/dst at staging time
+  - src: ./vendor
+    dst: /usr/share/mytool
+    type: tree
+    disown_subtree: ["/usr/share/mytool/vendor"]  # dirs not owned by the package
+
+# MSIX (Windows) output (package_format/--format msix). Ignored by Linux formats.
+msix:
+  publisher: "CN=Acme, O=Acme, C=US"  # required
+  properties:
+    logo: Assets/Square150x150Logo.png
+  applications:                       # required
+    - id: MyTool
+      executable: VFS/usr/bin/mytool
+  # Native signing: signature.key_file (PKCS#8 RSA PEM) + signature.cert_file (PEM).
+
 # Local-only packaging (lx build --local); skips the forge download.
 # Existence is checked at build time. ${VAR} / ${VAR:-default} expand at parse.
 local_payload: ""             # path to an archive or directory
 
 signature:
-  key_file: ""                # ASCII-armored secret key (env-expandable); apk: RSA key
+  key_file: ""                # ASCII-armored secret key (env-expandable); apk: RSA key;
+                              # msix: PKCS#8 RSA key (PEM); osxpkg: PKCS#8 RSA/EC key (PEM)
+  cert_file: ""               # X.509 certificate (PEM) for msix/osxpkg signing
   key_id: ""                  # optional gpg --local-user
   method: detach              # deb: detach (sibling .sig) | debsign (embedded _gpg{type})
   type: origin                # debsign role: origin | maint | archive
@@ -101,6 +132,19 @@ rpm:
   auto_requires: true         # require shared-library sonames in the payload
   defines: []                 # rpmbuild macros — accepted but not applied by
                               # the in-process builder (warned, never silent)
+  buildhost: ""               # RPM BuildHost: header (nfpm rpm.buildhost)
+  group: ""                   # RPM Group: — accepted; the rpm crate hardcodes
+                              # it to "Unspecified" (warned, never silent)
+  prefixes: []                # relocatable Prefixes — accepted, not applied (warned)
+  requires_post: []           # Requires(post) — accepted, not applied (warned)
+
+# OpenWrt/opkg-specific (nfpm's `ipk:` block). Ignored by other formats.
+ipk:
+  abi_version: ""             # ABIVersion: control field
+  tags: []                    # Tags: control field
+  auto_installed: false       # Auto-Installed: yes
+  essential: false            # Essential: yes
+  alternatives: []            # opkg Alternatives: entries, each {priority, link_name, target}
 
 # Source builds (build_mode: source): fetch the upstream tag and compile on
 # the host instead of repacking release assets. Requires an explicit
@@ -192,12 +236,60 @@ an extracted directory without hitting GitHub/GitLab. Requires `version:`
 (default) writes `<pkg>.deb.sig` beside the artifact; `method: debsign`
 embeds an armored detach-signature as `_gpg{type}` (default `_gpgorigin`;
 `type:` may be `origin` / `maint` / `archive`). For `.rpm`, the signature
-is always embedded in the header when `key_file` is set. `${VAR}` /
-`${VAR:-default}` expand in the YAML at parse time (e.g.
-`key_file: ${SIGNING_KEY_FILE}`).
+is always embedded in the header when `key_file` is set. For `.apk`,
+`key_file` is an RSA private key (in-process RSA/SHA-1). For **`.msix`** and
+**`.pkg`**, set `key_file` (PKCS#8 key, PEM) and `cert_file` (X.509
+certificate, PEM) to write the format's native signature (see the MSIX /
+osxpkg notes below). `${VAR}` / `${VAR:-default}` expand in the YAML at
+parse time (e.g. `key_file: ${SIGNING_KEY_FILE}`).
 
-**`contents[].packager`** — restrict an overlay entry to one format
-(`deb` / `rpm` / `arch`). Omit to apply to every format.
+**`contents:`** — extra files/dirs/symlinks layered into the staged install
+tree. Entry types: `file` (copy), `config` / `config|noreplace` /
+`config|missingok` (copy + register a deb conffile / rpm `%config` / pacman
+`backup`), `config|tree` / `config|noreplace|tree` / `config|missingok|tree`
+(a tree whose every regular file is registered as a config file), `tree`
+(recursive directory), `symlink` (both paths are package-internal), `dir`,
+`ghost` (RPM-only, a no-op elsewhere), and `doc` / `license` / `readme`
+(RPM classifications; staged as plain files elsewhere).
+`contents[].packager` restricts an entry to one format
+(`deb` / `rpm` / `arch` / `apk` / `ipk` / `msix` / `osxpkg`). `disable_globbing: true`
+treats `src` patterns as literal paths.
+
+**`contents[].file_info`** — per-file metadata override (nfpm parity):
+`owner`, `group`, `mode` (octal string, e.g. `"0o644"`), `mtime` (RFC 3339
+or epoch seconds), and `lang` (RPM `%lang(<lang>)` only; other formats
+ignore it). For a `tree` entry the mode/ownership apply to every staged
+entry. Owner/group names are recorded in the archive header even when they
+do not exist on the build host; the `rpm` packager sets the file
+owner/group and emits `%lang` for `lang`. Unset fields fall back to the
+staged file's own mode and the reproducible build timestamp.
+
+**`contents[].expand: true`** — expand `$VAR` / `${VAR}` in `src` and `dst`
+at staging time (unknown variables become empty), mirroring nfpm.
+
+**`contents[].disown_subtree`** — for `type: tree`, directories whose
+installed path matches one of these globs are not owned by the package:
+their explicit directory entry is omitted (children are still packaged).
+
+**`msix:`** — Windows MSIX output (`--format msix` / `package_format: msix`).
+Requires `publisher` and at least one `applications:` entry; optional
+`properties` (display name / logo), `identity.resource_id`, `dependencies`
+target device families, and `capabilities`. **Native signing:** set
+`signature.key_file` (PKCS#8 RSA key, PEM) and `signature.cert_file` (X.509
+certificate, PEM) to embed a real `AppxSignature.p7x` (PKCS#7 over the
+Appx package digests; the certificate's Subject must match the manifest
+`Publisher`, as Windows requires). `msix.signature.pfx_file` is not
+supported; a `.pfx` is not needed.
+
+**`--format osxpkg`** (alias `--format pkg`) — macOS flat package, built
+in-process as a **xar** archive with a gzip-compressed newc **cpio**
+`Payload`, a `PackageInfo`, and (when `scripts.preinstall`/`postinstall`
+are set) a cpio `Scripts` member. `package_name` is the bundle identifier,
+`prefix:` sets the install location (default `/`). **Native signing:** set
+`signature.key_file` (PKCS#8 RSA/EC key, PEM) and `signature.cert_file`
+(X.509 certificate, PEM) to add the xar `Signature` member and archive
+checksum (the same scheme `productsign`/`rcodesign` implement). No `Bom`
+is generated, so very old `installer` paths may still require one.
 
 **`build_mode: source`** — for upstreams that publish no Linux binaries
 (e.g. quickshell). Fetches the source tag, compiles once on the host
@@ -321,6 +413,14 @@ GitHub), Arch dependency names kept verbatim for Debian mapping, AUR
 `makedepends` emitted as `build_depends:` (so `--install-build-deps` can
 install them), and `build()` presence mapped to `build_mode: source` hints.
 Recipes are never executed — PKGBUILD shell becomes comments, not code.
+
+**`lx init --from-nfpm <nfpm.yaml>`** — convert an nfpm config into a starter
+`package.yaml` (the nfpm→lx migration path). Maps name/version/arch,
+relations, scripts, per-format blocks, signing, `overrides`, and the
+`contents:` DSL including `file_info`, `expand`, and `disown_subtree`. Keys
+nfpm has and lx does not (`changelog`, `mtime`, `homepage`, …) are listed in
+a generated notes footer instead of being dropped silently, and the required
+`github_repo` gets an `OWNER/<name>` placeholder to review.
 
 **`lx repo <dir>`** — turn a directory of built packages into a repository
 the host package manager can consume. Defaults to apt (`Packages` +
