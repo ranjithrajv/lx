@@ -376,7 +376,8 @@ fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, Str
                 .unwrap_or("")
                 .to_string();
             match fname.as_str() {
-                "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates" | "triggers" => {
+                "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates"
+                | "triggers" => {
                     let mut s = String::new();
                     std::io::Read::read_to_string(&mut member, &mut s)?;
                     scripts.insert(fname, s);
@@ -1797,9 +1798,15 @@ mod tests {
     fn parses_deb_trigger_lines() {
         let t = parse_deb_triggers("# comment\ninterest cups\ninterest-await bar\nactivate baz\n");
         assert_eq!(t.len(), 3);
-        assert_eq!((t[0].kind.as_str(), t[0].name.as_str()), ("interest", "cups"));
+        assert_eq!(
+            (t[0].kind.as_str(), t[0].name.as_str()),
+            ("interest", "cups")
+        );
         assert_eq!(t[1].name, "bar");
-        assert_eq!((t[2].kind.as_str(), t[2].name.as_str()), ("activate", "baz"));
+        assert_eq!(
+            (t[2].kind.as_str(), t[2].name.as_str()),
+            ("activate", "baz")
+        );
     }
 
     #[test]

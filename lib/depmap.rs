@@ -50,35 +50,131 @@ pub fn resolve_deps_from_dir(
     resolved.into_iter().collect()
 }
 
+/// One registry ecosystem: accepted names/aliases, the dependency-file reader,
+/// and the hardcoded name mapping (a no-op where none exists).
+///
+/// Adding an ecosystem is one entry in [`ECOSYSTEMS`] plus its reader/mapper;
+/// the dispatch no longer needs a central `match` in two places.
+struct Ecosystem {
+    names: &'static [&'static str],
+    read: fn(&std::path::Path) -> Vec<(String, Option<String>)>,
+    map: fn(&str) -> Option<&'static str>,
+}
+
+const ECOSYSTEMS: &[Ecosystem] = &[
+    Ecosystem {
+        names: &["npm"],
+        read: read_npm_dir,
+        map: map_npm_dep,
+    },
+    Ecosystem {
+        names: &["python"],
+        read: read_python_dir,
+        map: map_python_dep,
+    },
+    Ecosystem {
+        names: &["cargo", "rust"],
+        read: read_cargo_dir,
+        map: map_cargo_dep,
+    },
+    Ecosystem {
+        names: &["gem", "ruby"],
+        read: read_gem_dir,
+        map: map_gem_dep,
+    },
+    Ecosystem {
+        names: &["cpan", "perl"],
+        read: read_cpan_dir,
+        map: map_cpan_dep,
+    },
+    Ecosystem {
+        names: &["composer", "php"],
+        read: read_composer_dir,
+        map: map_composer_dep,
+    },
+    Ecosystem {
+        names: &["maven"],
+        read: read_maven_dir,
+        map: no_map,
+    },
+    Ecosystem {
+        names: &["hex", "elixir"],
+        read: read_hex_dir,
+        map: map_hex_dep,
+    },
+    Ecosystem {
+        names: &["dart"],
+        read: read_dart_dir,
+        map: no_map,
+    },
+    Ecosystem {
+        names: &["go"],
+        read: read_go_dir,
+        map: no_map,
+    },
+];
+
+fn ecosystem_for(name: &str) -> Option<&'static Ecosystem> {
+    ECOSYSTEMS.iter().find(|e| e.names.contains(&name))
+}
+
 /// Read raw (name, version) pairs from the package's dependency files.
 fn read_raw_deps(ecosystem: &str, package_dir: &std::path::Path) -> Vec<(String, Option<String>)> {
-    match ecosystem {
-        "npm" => read_npm_deps(&package_dir.join("package.json")),
-        "python" => {
-            let req = package_dir.join("requirements.txt");
-            if req.exists() {
-                read_requirements_txt(&req)
-            } else {
-                read_setup_py_deps(&package_dir.join("setup.py"))
-            }
-        }
-        "cargo" => read_cargo_deps(&package_dir.join("Cargo.toml")),
-        "gem" => read_gemfile(&package_dir.join("Gemfile")),
-        "cpan" => {
-            let makefile = package_dir.join("Makefile.PL");
-            if makefile.exists() {
-                read_makefile_pl_deps(&makefile)
-            } else {
-                read_build_pl_deps(&package_dir.join("Build.PL"))
-            }
-        }
-        "composer" => read_composer_deps(&package_dir.join("composer.json")),
-        "maven" => read_maven_deps(&package_dir.join("pom.xml")),
-        "hex" => read_mix_deps(&package_dir.join("mix.exs")),
-        "dart" => read_pubspec_deps(&package_dir.join("pubspec.yaml")),
-        "go" => read_go_mod_deps(&package_dir.join("go.mod")),
-        _ => Vec::new(),
+    ecosystem_for(ecosystem).map_or_else(Vec::new, |e| (e.read)(package_dir))
+}
+
+fn no_map(_: &str) -> Option<&'static str> {
+    None
+}
+
+fn read_npm_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_npm_deps(&dir.join("package.json"))
+}
+
+fn read_python_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let req = dir.join("requirements.txt");
+    if req.exists() {
+        read_requirements_txt(&req)
+    } else {
+        read_setup_py_deps(&dir.join("setup.py"))
     }
+}
+
+fn read_cargo_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_cargo_deps(&dir.join("Cargo.toml"))
+}
+
+fn read_gem_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_gemfile(&dir.join("Gemfile"))
+}
+
+fn read_cpan_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    let makefile = dir.join("Makefile.PL");
+    if makefile.exists() {
+        read_makefile_pl_deps(&makefile)
+    } else {
+        read_build_pl_deps(&dir.join("Build.PL"))
+    }
+}
+
+fn read_composer_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_composer_deps(&dir.join("composer.json"))
+}
+
+fn read_maven_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_maven_deps(&dir.join("pom.xml"))
+}
+
+fn read_hex_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_mix_deps(&dir.join("mix.exs"))
+}
+
+fn read_dart_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_pubspec_deps(&dir.join("pubspec.yaml"))
+}
+
+fn read_go_dir(dir: &std::path::Path) -> Vec<(String, Option<String>)> {
+    read_go_mod_deps(&dir.join("go.mod"))
 }
 
 /// Normalize a version constraint string to Debian/RPM format.
@@ -170,16 +266,7 @@ pub(crate) fn hardcoded_or_repology(
 
 /// Hardcoded ecosystem → Debian package mapping (fast path).
 fn hardcoded_mapping(ecosystem: &str, dep_name: &str) -> Option<&'static str> {
-    match ecosystem {
-        "npm" => map_npm_dep(dep_name),
-        "python" => map_python_dep(dep_name),
-        "gem" | "ruby" => map_gem_dep(dep_name),
-        "hex" | "elixir" => map_hex_dep(dep_name),
-        "cargo" | "rust" => map_cargo_dep(dep_name),
-        "composer" | "php" => map_composer_dep(dep_name),
-        "cpan" | "perl" => map_cpan_dep(dep_name),
-        _ => None,
-    }
+    ecosystem_for(ecosystem).and_then(|e| (e.map)(dep_name))
 }
 
 /// Convert package format to Repology distro family name.
