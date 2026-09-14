@@ -55,9 +55,11 @@ pub fn resolve_deps_from_dir(
 ///
 /// Adding an ecosystem is one entry in [`ECOSYSTEMS`] plus its reader/mapper;
 /// the dispatch no longer needs a central `match` in two places.
+type DepReader = fn(&std::path::Path) -> Vec<(String, Option<String>)>;
+
 struct Ecosystem {
     names: &'static [&'static str],
-    read: fn(&std::path::Path) -> Vec<(String, Option<String>)>,
+    read: DepReader,
     map: fn(&str) -> Option<&'static str>,
 }
 
