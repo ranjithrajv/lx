@@ -2,7 +2,7 @@
 
 //! CMake build-system plugin.
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -55,19 +55,17 @@ impl BuildSystem for CmakeBuildSystem {
             cmd.arg(f);
         }
         println!("configuring: cmake {}", cfg.cmake_flags.join(" "));
-        let st = cmd.status().context("failed to run cmake configure")?;
-        if !st.success() {
-            bail!("cmake configure failed");
-        }
-        Command::new("cmake")
-            .args(["--build", &build_dir.to_string_lossy()])
-            .status()
-            .context("cmake build failed")?;
-        Command::new("cmake")
+        super::run(cmd, "cmake configure")?;
+
+        let mut build = Command::new("cmake");
+        build.args(["--build", &build_dir.to_string_lossy()]);
+        super::run(build, "cmake build")?;
+
+        let mut install = Command::new("cmake");
+        install
             .args(["--install", &build_dir.to_string_lossy()])
-            .env("DESTDIR", &stage)
-            .status()
-            .context("cmake install failed")?;
+            .env("DESTDIR", &stage);
+        super::run(install, "cmake install")?;
         Ok(stage)
     }
 }

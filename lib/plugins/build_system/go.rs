@@ -2,7 +2,7 @@
 
 //! Go build-system plugin.
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -50,13 +50,8 @@ impl BuildSystem for GoBuildSystem {
             // glibc dependency — runs on any Linux regardless of distro age.
             cmd.env("CGO_ENABLED", "0");
         }
-        let st = cmd
-            .current_dir(src_dir)
-            .status()
-            .context("failed to run `go build`")?;
-        if !st.success() {
-            bail!("go build failed (exit code {})", st);
-        }
+        cmd.current_dir(src_dir);
+        super::run(cmd, "go build")?;
         Ok(stage)
     }
 }

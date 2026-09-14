@@ -19,8 +19,9 @@ pub mod go;
 pub mod make;
 pub mod meson;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::{Plugin, PluginSet};
@@ -82,4 +83,40 @@ pub fn build_system_names() -> Vec<&'static str> {
 /// [`BuildSystem::recognize`] returns true wins. `custom` never auto-detects.
 pub fn detect_build_system(src_dir: &Path) -> Option<Box<dyn BuildSystem>> {
     PluginSet::new(all_build_systems()).take_first(|b| b.recognize(src_dir))
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers for build-system plugins
+// ---------------------------------------------------------------------------
+
+/// Run a configured build command, streaming its output, and fail with
+/// `label` on a non-zero exit. Build systems use `status()` (rather than
+/// capturing output) so the tool's progress is visible to the user.
+pub(crate) fn run(mut cmd: Command, label: &str) -> Result<()> {
+    let status = cmd
+        .status()
+        .with_context(|| format!("failed to run {label}"))?;
+    if !status.success() {
+        match status.code() {
+            Some(code) => bail!("{label} failed (exit code {code})"),
+            None => bail!("{label} failed (terminated by signal)"),
+        }
+    }
+    Ok(())
+}
+
+/// Apply the musl static-linking compiler environment for `musl: true`.
+pub(crate) fn apply_musl_env(cmd: &mut Command, cfg: &PackageConfig) {
+    if cfg.musl {
+        cmd.env("CC", "musl-gcc")
+            .env("CXX", "musl-g++")
+            .env("LDFLAGS", "-static");
+    }
+}
+
+/// Available parallelism for `-jN` builds, defaulting to 1.
+pub(crate) fn available_parallelism() -> usize {
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
 }

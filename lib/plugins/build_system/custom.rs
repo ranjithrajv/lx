@@ -2,7 +2,7 @@
 
 //! Custom build-system plugin: user-supplied build/install commands.
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -33,15 +33,11 @@ impl BuildSystem for CustomBuildSystem {
         );
         for cmd_str in &cfg.build_commands {
             println!("  $ {cmd_str}");
-            let st = Command::new("sh")
-                .args(["-c", cmd_str])
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", cmd_str])
                 .current_dir(src_dir)
-                .env("DESTDIR", destdir.as_str())
-                .status()
-                .with_context(|| format!("failed to run build command: {cmd_str}"))?;
-            if !st.success() {
-                bail!("custom build command failed: {cmd_str}");
-            }
+                .env("DESTDIR", destdir.as_str());
+            super::run(cmd, &format!("custom build command: {cmd_str}"))?;
         }
         println!(
             "running {} custom install command(s)",
@@ -49,15 +45,11 @@ impl BuildSystem for CustomBuildSystem {
         );
         for cmd_str in &cfg.install_commands {
             println!("  $ {cmd_str}");
-            let st = Command::new("sh")
-                .args(["-c", cmd_str])
+            let mut cmd = Command::new("sh");
+            cmd.args(["-c", cmd_str])
                 .current_dir(src_dir)
-                .env("DESTDIR", destdir.as_str())
-                .status()
-                .with_context(|| format!("failed to run install command: {cmd_str}"))?;
-            if !st.success() {
-                bail!("custom install command failed: {cmd_str}");
-            }
+                .env("DESTDIR", destdir.as_str());
+            super::run(cmd, &format!("custom install command: {cmd_str}"))?;
         }
         Ok(stage)
     }

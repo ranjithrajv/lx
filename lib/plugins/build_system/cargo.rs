@@ -49,14 +49,9 @@ impl BuildSystem for CargoBuildSystem {
             args.push(target);
         }
 
-        let st = Command::new("cargo")
-            .args(&args)
-            .current_dir(src_dir)
-            .output()
-            .context("failed to run `cargo install`")?;
-        if !st.status.success() {
-            bail!("cargo install failed (exit code {})", st.status);
-        }
+        let mut cmd = Command::new("cargo");
+        cmd.args(&args).current_dir(src_dir);
+        super::run(cmd, "cargo install")?;
 
         // cargo install may produce no binaries (library crate) or place them
         // somewhere unexpected. Verify something landed in bin/.

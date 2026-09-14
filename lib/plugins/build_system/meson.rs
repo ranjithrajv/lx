@@ -8,7 +8,7 @@
 //! The plugin recognizes `meson.build` and invokes:
 //!   meson setup <builddir> && meson compile -C <builddir> && meson install -C <builddir> --destdir <stage>
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -59,23 +59,19 @@ impl BuildSystem for MesonBuildSystem {
             cmd.arg(format!("-D{f}"));
         }
         println!("configuring: meson setup {}", cfg.cmake_flags.join(" "));
-        let st = cmd.status().context("failed to run meson setup")?;
-        if !st.success() {
-            bail!("meson setup failed");
-        }
+        super::run(cmd, "meson setup")?;
 
         // meson compile builds the project.
-        Command::new("meson")
-            .args(["compile", "-C", &build_dir.to_string_lossy()])
-            .status()
-            .context("meson compile failed")?;
+        let mut compile = Command::new("meson");
+        compile.args(["compile", "-C", &build_dir.to_string_lossy()]);
+        super::run(compile, "meson compile")?;
 
         // meson install stages into DESTDIR.
-        Command::new("meson")
+        let mut install = Command::new("meson");
+        install
             .args(["install", "-C", &build_dir.to_string_lossy(), "--destdir"])
-            .arg(&*stage.to_string_lossy())
-            .status()
-            .context("meson install failed")?;
+            .arg(&*stage.to_string_lossy());
+        super::run(install, "meson install")?;
 
         Ok(stage)
     }

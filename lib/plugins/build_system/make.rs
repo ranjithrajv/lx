@@ -11,7 +11,7 @@
 //! Extra `cmake_flags:` entries are passed through as additional make
 //! arguments (variable overrides like `PREFIX=/usr` or targets).
 
-use anyhow::{bail, Context, Result};
+use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -42,24 +42,19 @@ impl BuildSystem for MakeBuildSystem {
         let stage = workdir.join("stage");
         std::fs::create_dir_all(&stage)?;
 
-        let jobs = super::autotools::available_parallelism();
+        let jobs = super::available_parallelism();
         let mut cmd = Command::new("make");
         cmd.arg(format!("-j{jobs}")).arg("PREFIX=/usr");
         for f in &cfg.cmake_flags {
             cmd.arg(f);
         }
-        apply_musl_env(&mut cmd, cfg);
+        super::apply_musl_env(&mut cmd, cfg);
         println!(
             "building: make -j{jobs} PREFIX=/usr {}",
             cfg.cmake_flags.join(" ")
         );
-        let st = cmd
-            .current_dir(src_dir)
-            .status()
-            .context("failed to run make")?;
-        if !st.success() {
-            bail!("make failed");
-        }
+        cmd.current_dir(src_dir);
+        super::run(cmd, "make")?;
 
         let mut cmd = Command::new("make");
         cmd.arg(format!("DESTDIR={}", stage.to_string_lossy()))
@@ -68,23 +63,10 @@ impl BuildSystem for MakeBuildSystem {
             cmd.arg(f);
         }
         cmd.arg("install");
-        apply_musl_env(&mut cmd, cfg);
-        let st = cmd
-            .current_dir(src_dir)
-            .status()
-            .context("failed to run make install")?;
-        if !st.success() {
-            bail!("make install failed");
-        }
+        super::apply_musl_env(&mut cmd, cfg);
+        cmd.current_dir(src_dir);
+        super::run(cmd, "make install")?;
 
         Ok(stage)
-    }
-}
-
-fn apply_musl_env(cmd: &mut Command, cfg: &PackageConfig) {
-    if cfg.musl {
-        cmd.env("CC", "musl-gcc")
-            .env("CXX", "musl-g++")
-            .env("LDFLAGS", "-static");
     }
 }

@@ -11,7 +11,7 @@
 //! Extra `cmake_flags:` entries are passed through as additional
 //! `./configure` flags (the shared "extra build flags" field, as meson does).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -74,33 +74,21 @@ impl BuildSystem for AutotoolsBuildSystem {
         println!("configuring: ./configure {}", args.join(" "));
         let mut cmd = Command::new("./configure");
         cmd.args(&args).current_dir(src_dir);
-        apply_musl_env(&mut cmd, cfg);
-        let st = cmd.status().context("failed to run ./configure")?;
-        if !st.success() {
-            bail!("autotools configure failed");
-        }
+        super::apply_musl_env(&mut cmd, cfg);
+        super::run(cmd, "autotools configure")?;
 
         // make -jN
-        let jobs = available_parallelism();
-        let st = Command::new("make")
-            .arg(format!("-j{jobs}"))
-            .current_dir(src_dir)
-            .status()
-            .context("failed to run make")?;
-        if !st.success() {
-            bail!("autotools make failed");
-        }
+        let jobs = super::available_parallelism();
+        let mut cmd = Command::new("make");
+        cmd.arg(format!("-j{jobs}")).current_dir(src_dir);
+        super::run(cmd, "autotools make")?;
 
         // make DESTDIR=<stage> install
-        let st = Command::new("make")
-            .arg(format!("DESTDIR={}", stage.to_string_lossy()))
+        let mut cmd = Command::new("make");
+        cmd.arg(format!("DESTDIR={}", stage.to_string_lossy()))
             .arg("install")
-            .current_dir(src_dir)
-            .status()
-            .context("failed to run make install")?;
-        if !st.success() {
-            bail!("autotools make install failed");
-        }
+            .current_dir(src_dir);
+        super::run(cmd, "autotools make install")?;
 
         Ok(stage)
     }
@@ -117,27 +105,6 @@ fn run_in(
 ) -> Result<()> {
     let mut cmd = Command::new(program);
     cmd.args(args).current_dir(dir);
-    apply_musl_env(&mut cmd, cfg);
-    let st = cmd
-        .status()
-        .with_context(|| format!("failed to run {label}"))?;
-    if !st.success() {
-        bail!("{label} failed");
-    }
-    Ok(())
-}
-
-fn apply_musl_env(cmd: &mut Command, cfg: &PackageConfig) {
-    if cfg.musl {
-        cmd.env("CC", "musl-gcc")
-            .env("CXX", "musl-g++")
-            .env("LDFLAGS", "-static");
-    }
-}
-
-/// Available parallelism for `make -jN`, defaulting to 1.
-pub(crate) fn available_parallelism() -> usize {
-    std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
+    super::apply_musl_env(&mut cmd, cfg);
+    super::run(cmd, label)
 }
