@@ -14,6 +14,9 @@ repo_forge_source_with_repo_info!(
     Some("GITHUB_TOKEN"),
     None,
     |_| None,
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_github(&cfg.github_repo)
+    },
     parse_github_url,
 );
 

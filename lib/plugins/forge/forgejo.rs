@@ -12,6 +12,12 @@ repo_forge_source!(
     Some("FORGEJO_TOKEN"),
     Some("FORGEJO_HOST"),
     |cfg: &crate::config::PackageConfig| cfg.forgejo_host.clone(),
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_forgejo(
+            &cfg.github_repo,
+            cfg.forgejo_host.as_deref().unwrap_or(""),
+        )
+    },
     parse_forgejo_url,
 );
 

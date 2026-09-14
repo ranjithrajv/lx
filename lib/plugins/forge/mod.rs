@@ -48,6 +48,13 @@ pub trait ForgeSource: Plugin {
         None
     }
 
+    /// Project homepage URL for `cfg.github_repo`, honouring this provider's
+    /// host conventions and self-hosted overrides. Providers override this so
+    /// `resolve_homepage` needs no central match. Default: GitHub.
+    fn homepage(&self, cfg: &crate::config::PackageConfig) -> String {
+        crate::constants::homepage_for_github(&cfg.github_repo)
+    }
+
     /// Parse a provider URL into `owner/repo` (for zero-config `lx build https://…`).
     /// Returns `None` if the URL does not belong to this provider.
     fn parse_url(&self, url: &str) -> Option<String>;
@@ -207,7 +214,7 @@ pub fn parse_host_url(s: &str, host: &str) -> Option<String> {
 /// `ForgeSource` impl so the repo-info variant can add its three methods
 /// without duplicating this body.
 macro_rules! repo_forge_source_impl {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident, $($extra:item),* $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $homepage:expr, $parse:ident, $($extra:item),* $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name
@@ -232,6 +239,10 @@ macro_rules! repo_forge_source_impl {
                 cfg: &$crate::config::PackageConfig,
             ) -> Option<String> {
                 ($host_override)(cfg)
+            }
+
+            fn homepage(&self, cfg: &$crate::config::PackageConfig) -> String {
+                ($homepage)(self, cfg)
             }
 
             fn parse_url(&self, url: &str) -> Option<String> {
@@ -306,7 +317,7 @@ pub(crate) use repo_forge_source_impl;
 /// back to the trait defaults instead of being generated as stubs. Providers
 /// that do offer repo-info use [`repo_forge_source_with_repo_info!`].
 macro_rules! repo_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $homepage:expr, $parse:ident $(,)?) => {
         $crate::plugins::forge::repo_forge_source_impl!(
             $ty,
             $client,
@@ -315,6 +326,7 @@ macro_rules! repo_forge_source {
             $token_env,
             $host_env,
             $host_override,
+            $homepage,
             $parse,
         );
     };
@@ -323,7 +335,7 @@ macro_rules! repo_forge_source {
 /// The repo-info variant of [`repo_forge_source!`], for providers whose API
 /// actually exposes license / root-listing / raw-file reads (today GitHub).
 macro_rules! repo_forge_source_with_repo_info {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $homepage:expr, $parse:ident $(,)?) => {
         $crate::plugins::forge::repo_forge_source_impl!(
             $ty,
             $client,
@@ -332,6 +344,7 @@ macro_rules! repo_forge_source_with_repo_info {
             $token_env,
             $host_env,
             $host_override,
+            $homepage,
             $parse,
             fn repo_license(
                 &self,
@@ -375,7 +388,7 @@ pub(crate) use repo_forge_source_with_repo_info;
 /// SourceForge identify a package by a bare project name (which may itself
 /// contain slashes), so no `owner/repo` split is applied.
 macro_rules! project_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $parse:ident $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_env:expr, $host_override:expr, $homepage:expr, $parse:ident $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name
@@ -397,6 +410,10 @@ macro_rules! project_forge_source {
 
             fn host_override(&self, cfg: &$crate::config::PackageConfig) -> Option<String> {
                 ($host_override)(cfg)
+            }
+
+            fn homepage(&self, cfg: &$crate::config::PackageConfig) -> String {
+                ($homepage)(self, cfg)
             }
 
             fn parse_url(&self, url: &str) -> Option<String> {

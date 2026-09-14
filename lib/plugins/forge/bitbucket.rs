@@ -12,6 +12,9 @@ repo_forge_source!(
     Some("BITBUCKET_TOKEN"),
     Some("BITBUCKET_HOST"),
     |cfg: &crate::config::PackageConfig| cfg.bitbucket_host.clone(),
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_bitbucket(&cfg.github_repo)
+    },
     parse_bitbucket_url,
 );
 

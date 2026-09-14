@@ -12,6 +12,12 @@ repo_forge_source!(
     Some("GITEA_TOKEN"),
     Some("GITEA_HOST"),
     |cfg: &crate::config::PackageConfig| cfg.gitea_host.clone(),
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_gitea(
+            &cfg.github_repo,
+            cfg.gitea_host.as_deref().unwrap_or(""),
+        )
+    },
     parse_gitea_url,
 );
 

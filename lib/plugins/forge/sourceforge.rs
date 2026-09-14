@@ -12,6 +12,9 @@ project_forge_source!(
     None,
     None,
     |_| None,
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_sourceforge(&cfg.github_repo)
+    },
     parse_sourceforge_url,
 );
 

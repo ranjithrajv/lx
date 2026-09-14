@@ -78,22 +78,14 @@ pub struct BuildContext<'a> {
 // Shared helpers for packager plugins (DRY: deb/rpm/arch all used to duplicate these)
 // ---------------------------------------------------------------------------
 
-/// Resolve the homepage URL from config, accounting for each provider's
-/// host conventions and self-hosted overrides.
+/// Resolve the homepage URL from config. Delegates to the selected forge
+/// provider's [`homepage`](crate::plugins::forge::ForgeSource::homepage), so
+/// adding a provider needs no edit here; unknown/`custom` sources fall back
+/// to the GitHub-style URL.
 pub fn resolve_homepage(cfg: &PackageConfig) -> String {
-    use lx_lib::constants::*;
-    match cfg.effective_forge_source().as_str() {
-        "gitlab" => homepage_for_gitlab(&cfg.github_repo, cfg.gitlab_host.as_deref().unwrap_or("")),
-        "gitea" => homepage_for_gitea(&cfg.github_repo, cfg.gitea_host.as_deref().unwrap_or("")),
-        "forgejo" => {
-            homepage_for_forgejo(&cfg.github_repo, cfg.forgejo_host.as_deref().unwrap_or(""))
-        }
-        "bitbucket" => homepage_for_bitbucket(&cfg.github_repo),
-        "gerrit" => homepage_for_gerrit(&cfg.github_repo, cfg.gerrit_host.as_deref().unwrap_or("")),
-        "gitee" => homepage_for_gitee(&cfg.github_repo, cfg.gitee_host.as_deref().unwrap_or("")),
-        "sourceforge" => homepage_for_sourceforge(&cfg.github_repo),
-        _ => homepage_for_github(&cfg.github_repo),
-    }
+    crate::plugins::forge::get_forge_source(&cfg.effective_forge_source())
+        .map(|source| source.homepage(cfg))
+        .unwrap_or_else(|| crate::constants::homepage_for_github(&cfg.github_repo))
 }
 
 /// Compute `{build_version}+{dist}` formatted for non-debian release strings

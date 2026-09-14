@@ -12,6 +12,12 @@ project_forge_source!(
     Some("GERRIT_TOKEN"),
     Some("GERRIT_HOST"),
     |cfg: &crate::config::PackageConfig| cfg.gerrit_host.clone(),
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_gerrit(
+            &cfg.github_repo,
+            cfg.gerrit_host.as_deref().unwrap_or(""),
+        )
+    },
     parse_gerrit_url,
 );
 

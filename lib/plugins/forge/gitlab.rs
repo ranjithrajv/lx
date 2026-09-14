@@ -12,6 +12,12 @@ repo_forge_source!(
     Some("GITLAB_TOKEN"),
     Some("GITLAB_HOST"),
     |cfg: &crate::config::PackageConfig| cfg.gitlab_host.clone(),
+    |_s, cfg: &crate::config::PackageConfig| {
+        lx_lib::constants::homepage_for_gitlab(
+            &cfg.github_repo,
+            cfg.gitlab_host.as_deref().unwrap_or(""),
+        )
+    },
     parse_gitlab_url,
 );
 
