@@ -266,6 +266,11 @@ pub fn generate_schema() -> serde_json::Value {
                 "type": "string",
                 "description": "Debian arch variant appended to Architecture (e.g. amd64v3). Mirrors nfpm deb.arch_variant."
             },
+            "architecture": {
+                "type": "string",
+                "enum": ["auto", "all", "any"],
+                "description": "Override package architecture (default: auto). all = pure code (arch-independent), any = compiled binary. Auto-detected from registry source."
+            },
             "version_schema": {
                 "type": "string",
                 "enum": ["semver", "none"],

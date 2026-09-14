@@ -64,6 +64,8 @@ pub fn generate_checksum_sidecars(dir: &Path) -> Result<Vec<String>> {
 pub fn is_package_file(name: &str) -> bool {
     name.ends_with(".deb")
         || name.ends_with(".rpm")
+        || name.ends_with(".apk")
+        || name.ends_with(".ipk")
         || name.ends_with(".pkg.tar.zst")
         || name.ends_with(".pkg.tar.xz")
         || name.ends_with(".tar.gz")

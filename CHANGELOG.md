@@ -96,6 +96,22 @@
    using per-ecosystem mapping tables. Covers npm, python, gem, cargo,
    composer, cpan, hex, and more.
 
+### Binary dependency detection and auto-dep-mapping
+
+- **Binary dependency detection** (`--bindep`): Scans ELF binaries for
+  DT_NEEDED shared-library entries, maps sonames to system packages via
+  dpkg/rpm/pacman. Catches ACTUAL dependencies (what the binary links
+  against) rather than guessing. 53 tests.
+- **Full dependency resolution**: Reads dependency files from all 9
+  registry ecosystems, parses version constraints (~, ^, >=), resolves
+  to system packages with three-way Debian/RPM/Arch conversion.
+- **Repology fallback**: When hardcoded mappings don't cover a dependency,
+  queries Repology's API for 200+ distributions.
+- **Package naming conventions**: Auto-derives convention-compliant names
+  (libjson-perl, ruby-rake, python3-requests) per ecosystem and format.
+- **Architecture auto-detection**: Pure-code packages get `Architecture: all`,
+  compiled tools get `Architecture: any`. Manual override via `architecture:`.
+
 ### Meson build-system plugin
 
 - New `build_system: meson` plugin for projects using the Meson build system

@@ -461,6 +461,10 @@ pub struct PackageConfig {
     /// `GERRIT_HOST` env var is consulted.
     #[serde(default)]
     pub gerrit_host: Option<String>,
+    /// Optional Gitee host for self-hosted/enterprise instances
+    /// (default `gitee.com`). Only used when `source = "gitee"`.
+    #[serde(default)]
+    pub gitee_host: Option<String>,
 
     // ---- Legacy debian-multiarch-builder keys ---------------------------
     // The bash action's templates and zero-config wizard emitted these key
@@ -823,7 +827,9 @@ impl PackageConfig {
         if self.github_repo.trim().is_empty() {
             bail!("github_repo is required");
         }
-        if !self.github_repo.contains('/') {
+        // SourceForge projects have no owner namespace (a bare project name),
+        // so the `owner/repo` shape is only required for the other providers.
+        if !self.github_repo.contains('/') && self.effective_forge_source() != "sourceforge" {
             bail!(
                 "github_repo must be in 'owner/repo' form, got '{}'",
                 self.github_repo
@@ -863,15 +869,18 @@ impl PackageConfig {
         }
         if !self.package_format.trim().is_empty() {
             match self.package_format.trim().to_ascii_lowercase().as_str() {
-                "deb" | "rpm" | "arch" => {}
-                other => bail!("unsupported package_format '{other}' (expected deb, rpm, or arch)"),
+                "deb" | "rpm" | "arch" | "apk" | "ipk" => {}
+                other => bail!(
+                    "unsupported package_format '{other}' (expected deb, rpm, arch, apk, or ipk)"
+                ),
             }
         }
         if !self.source.trim().is_empty() {
             match self.source.trim().to_ascii_lowercase().as_str() {
-                "github" | "github-sync" | "gitlab" | "gitea" | "forgejo" | "bitbucket" | "gerrit" | "custom" => {}
+                "github" | "github-sync" | "gitlab" | "gitea" | "forgejo" | "bitbucket"
+                | "gerrit" | "gitee" | "sourceforge" | "custom" => {}
                 other => bail!(
-                    "unsupported source '{other}' (expected github, github-sync, gitlab, gitea, forgejo, bitbucket, gerrit, or custom)"
+                    "unsupported source '{other}' (expected github, github-sync, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge, or custom)"
                 ),
             }
             if self.source.trim().eq_ignore_ascii_case("custom")
@@ -902,8 +911,10 @@ impl PackageConfig {
         }
         for key in self.overrides.keys() {
             let k = key.trim().to_ascii_lowercase();
-            if !matches!(k.as_str(), "deb" | "rpm" | "arch") {
-                bail!("unsupported overrides format '{key}' (expected deb, rpm, or arch)");
+            if !matches!(k.as_str(), "deb" | "rpm" | "arch" | "apk" | "ipk") {
+                bail!(
+                    "unsupported overrides format '{key}' (expected deb, rpm, arch, apk, or ipk)"
+                );
             }
         }
         for entry in &self.contents {
@@ -938,9 +949,9 @@ impl PackageConfig {
             }
             if !entry.packager.trim().is_empty() {
                 match entry.packager.trim().to_ascii_lowercase().as_str() {
-                    "deb" | "rpm" | "arch" => {}
+                    "deb" | "rpm" | "arch" | "apk" | "ipk" => {}
                     other => bail!(
-                        "unsupported contents packager '{other}' (expected deb, rpm, or arch)"
+                        "unsupported contents packager '{other}' (expected deb, rpm, arch, apk, or ipk)"
                     ),
                 }
             }
@@ -983,9 +994,9 @@ impl PackageConfig {
         }
         if self.is_source_mode() {
             match self.build_system.trim().to_ascii_lowercase().as_str() {
-                "" | "cmake" | "cargo" | "go" | "meson" | "custom" => {}
+                "" | "cmake" | "cargo" | "go" | "meson" | "autotools" | "make" | "custom" => {}
                 other => bail!(
-                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, meson, custom)"
+                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, meson, autotools, make, custom)"
                 ),
             }
             if self.effective_build_system() == "custom" && self.install_commands.is_empty() {
@@ -1222,6 +1233,8 @@ impl PackageConfig {
         let defaults: &[&str] = match format.to_ascii_lowercase().as_str() {
             "rpm" => lx_lib::constants::DEFAULT_RPM_DISTRIBUTIONS,
             "arch" => lx_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS,
+            "apk" => lx_lib::constants::DEFAULT_APK_DISTRIBUTIONS,
+            "ipk" => lx_lib::constants::DEFAULT_IPK_DISTRIBUTIONS,
             _ => lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS,
         };
         defaults.iter().map(|s| s.to_string()).collect()

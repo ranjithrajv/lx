@@ -101,6 +101,39 @@ impl Relations {
         ]
         .concat()
     }
+
+    /// Add a dependency to the Depends field, deduplicating and merging with
+    /// existing content. Handles comma-separated lists.
+    pub fn add_depends(&mut self, dep: &str) {
+        let dep = dep.trim();
+        if dep.is_empty() {
+            return;
+        }
+        let existing: Vec<String> = if self.depends.trim().is_empty() {
+            Vec::new()
+        } else {
+            self.depends
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        };
+        // Extract package name without version constraint for dedup.
+        let dep_name = dep
+            .split(&[' ', '(', '<', '>'])
+            .next()
+            .unwrap_or(dep)
+            .trim();
+        let already_present = existing.iter().any(|e| {
+            let e_name = e.split(&[' ', '(', '<', '>']).next().unwrap_or(e).trim();
+            e_name == dep_name
+        });
+        if !already_present {
+            let mut merged = existing;
+            merged.push(dep.to_string());
+            self.depends = merged.join(", ");
+        }
+    }
 }
 
 /// Timestamp source for reproducible package metadata (changelog date,

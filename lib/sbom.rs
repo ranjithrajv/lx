@@ -36,7 +36,12 @@ pub fn collect_artifacts(out_dir: &Path) -> Result<Vec<Artifact>> {
         let path = entry.path();
         let is_artifact = path
             .extension()
-            .map(|e| matches!(e.to_string_lossy().as_ref(), "deb" | "rpm" | "dsc"))
+            .map(|e| {
+                matches!(
+                    e.to_string_lossy().as_ref(),
+                    "deb" | "rpm" | "apk" | "ipk" | "dsc"
+                )
+            })
             .unwrap_or(false);
         if !is_artifact || !entry.file_type()?.is_file() {
             continue;

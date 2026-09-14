@@ -259,6 +259,11 @@ pub struct BuildArgs {
     /// static linking when the build system supports it.
     #[arg(long, value_name = "ARCH")]
     pub cross_target: Option<String>,
+
+    /// Detect binary dependencies via ELF analysis + distro package lookup.
+    /// Maps shared-library links (DT_NEEDED) to system packages. Default: true.
+    #[arg(long, default_value_t = true)]
+    pub bindep: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -937,6 +942,9 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         match effective_format.as_str() {
             "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
             "arch" => crate::source::generate_arch(&args.output, &pkg)?,
+            "apk" | "ipk" => bail!(
+                "--source is not supported for '{effective_format}' packages (no source-package format)"
+            ),
             _ => crate::source::generate(&args.output, &pkg)?,
         }
     }
@@ -1245,6 +1253,9 @@ fn run_local(
         match effective_format {
             "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
             "arch" => crate::source::generate_arch(&args.output, &pkg)?,
+            "apk" | "ipk" => bail!(
+                "--source is not supported for '{effective_format}' packages (no source-package format)"
+            ),
             _ => crate::source::generate(&args.output, &pkg)?,
         }
     }
@@ -1893,8 +1904,9 @@ fn build_one(
     // Packager stages the install tree and creates the archive.
     let plugin = crate::plugins::get_packager(&format).ok_or_else(|| {
         anyhow!(
-            "unsupported package format '{}' (expected deb or rpm)",
-            format
+            "unsupported package format '{}' (expected one of: {})",
+            format,
+            crate::plugins::packager_names().join(", ")
         )
     })?;
     let raw_version = if cfg.version.is_empty() {
@@ -1915,6 +1927,19 @@ fn build_one(
     // Signing: rpm embeds natively; deb debsign embeds via the plugin;
     // deb detach signs post-build (.sig).
     let sign_passphrase = resolve_sign_passphrase();
+
+    // Detect binary dependencies from the binaries being packaged.
+    // Done before staging so the format plugin can include them in metadata.
+    let detected_deps = if args.bindep {
+        let deps = crate::bindep::detect_binary_deps(&binary_dir).unwrap_or_default();
+        if !deps.is_empty() {
+            println!("  detected binary deps: {}", deps.join(", "));
+        }
+        deps
+    } else {
+        Vec::new()
+    };
+
     let ctx = crate::plugins::BuildContext {
         cfg: effective_cfg,
         job,
@@ -1928,6 +1953,7 @@ fn build_one(
         sign_key_id: &sign_key_id,
         sign_passphrase: sign_passphrase.as_deref(),
         sign_method: &sign_method,
+        detected_deps,
     };
     let built = plugin.build(&ctx)?;
     let final_path = args.output.join(built.file_name().unwrap());

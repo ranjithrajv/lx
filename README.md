@@ -544,6 +544,10 @@ back to a `+musl_{arch}.deb` asset when no distro-specific build exists.
 (e.g., `--cross-target arm64` on an amd64 host). Automatically enables
 musl-static linking for reproducible multi-arch builds.
 
+**`--bindep`** — detect binary dependencies via ELF analysis (default: on).
+Scans built binaries for shared-library links and maps them to system
+packages. Catches ACTUAL dependencies rather than guessing.
+
 **`--cosign`** — sign built packages with cosign (Sigstore keyless signing).
 Requires `cosign` on PATH and an OIDC token (e.g., in GitHub Actions).
 Produces `.sig` signature files alongside each artifact.
@@ -557,8 +561,21 @@ that detects the user's OS/distro/arch, downloads the matching package,
 verifies its checksum, and installs it via the native package manager
 (`dpkg`/`rpm`/`pacman`). Usage: `curl -sSL <url>/install.sh | sh`.
 
-**Dependency mapping** — when using `registry_source` without specifying
-`depends:`, lx auto-infers system package dependencies from the registry
+**Dependency resolution** — reads dependency files from registry packages,
+parses version constraints, maps to system packages across 9 ecosystems
+with 60+ known mappings and three-way Debian/RPM/Arch conversion. Falls
+back to Repology for unknown packages.
+
+**`architecture:`** — override the package architecture field. `"auto"`
+(default) uses the target architecture. `"all"` forces `Architecture: all`
+for pure-code packages. `"any"` forces `Architecture: any` for compiled
+tools. Auto-detected from registry source when not set.
+
+**Package naming conventions** — auto-derives convention-compliant names
+(libjson-perl, ruby-rake, python3-requests) per ecosystem and format.
+
+**Relocatable binaries** — ELF binaries are automatically patched with
+`patchelf` to use `$ORIGIN/../lib` RPATH, so they work from any install path.
 package's dependency files (package.json, requirements.txt, Cargo.toml, etc.)
 using per-ecosystem mapping tables.
 

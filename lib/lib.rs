@@ -44,7 +44,9 @@
 // using `lx_lib::` qualified paths unchanged after the merge.
 extern crate self as lx_lib;
 
+pub mod apkarchive;
 pub mod archarchive;
+pub mod bindep;
 pub mod bitbucket;
 pub mod build;
 pub mod cache;
@@ -63,6 +65,7 @@ pub mod elfdeps;
 pub mod forgejo;
 pub mod gerrit;
 pub mod gitea;
+pub mod gitee;
 pub mod github;
 pub mod gitlab;
 pub mod go_native;
@@ -70,6 +73,7 @@ pub mod http;
 pub mod index;
 pub mod install;
 pub mod install_pkg;
+pub mod ipkarchive;
 pub mod lintian;
 pub mod list;
 pub mod lock;
@@ -97,6 +101,7 @@ pub mod sign;
 pub mod source;
 pub mod source_client;
 pub mod sourcebuild;
+pub mod sourceforge;
 pub mod summary;
 pub mod telemetry;
 pub mod templating;

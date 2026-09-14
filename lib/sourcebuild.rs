@@ -202,6 +202,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             sign_key_id: &sign_key_id,
             sign_passphrase: None,
             sign_method: &sign_method,
+            detected_deps: Vec::new(),
         };
         let deb_tmp = crate::plugins::deb::archive_staged_tree(&ctx)
             .with_context(|| format!("wrapping {dist}/{host}"))?;

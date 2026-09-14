@@ -278,6 +278,7 @@ fn deb_and_rpm_plugins_build_valid_archives() {
             sign_key_id: "",
             sign_passphrase: None,
             sign_method: "detach",
+            detected_deps: Vec::new(),
         };
         let out = plugin.build(&ctx).unwrap();
         assert!(out.exists(), "plugin {format} did not produce output");
@@ -373,6 +374,7 @@ fn deb_with_new_control_fields_and_compression_is_valid() {
         sign_key_id: "",
         sign_passphrase: None,
         sign_method: "detach",
+        detected_deps: Vec::new(),
     };
     let out = plugin.build(&ctx).unwrap();
     assert!(out.exists());
@@ -550,6 +552,7 @@ fn deb_contents_scripts_conffiles_end_to_end() {
         sign_key_id: "",
         sign_passphrase: None,
         sign_method: "detach",
+        detected_deps: Vec::new(),
     };
     let out = plugin.build(&ctx).unwrap();
     assert!(out.exists());

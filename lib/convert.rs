@@ -122,10 +122,21 @@ pub fn run(args: ConvertArgs) -> Result<()> {
     extract_install_tree(source_format, &args.input, &install_tree)?;
 
     // Scan ELF files in the install tree and fill in missing deps.
-    let meta = scan_and_fill_deps(meta, &install_tree)?;
+    let mut meta = scan_and_fill_deps(meta, &install_tree)?;
+
+    // Interpreter-aware relocation: detect ecosystem, move payloads to the
+    // target format's canonical lib root, normalize shebangs, ensure the
+    // runtime dep, then translate dep names across formats.
+    let ecosystem = detect_ecosystem(&install_tree, &meta.package);
+    if !ecosystem.is_empty() {
+        relocate_install_tree(&install_tree, &ecosystem, &target)?;
+        let _ = rewrite_shebangs(&install_tree);
+    }
+    ensure_interpreter_dep(&mut meta, &ecosystem, &target);
 
     // Map dependency syntax from source format to target format.
-    let meta = convert_deps_syntax(meta, source_format, &target);
+    let mut meta = convert_deps_syntax(meta, source_format, &target);
+    meta = convert_dep_names(meta, &ecosystem, &target);
 
     // Apply overrides. Bind resolved values first so we don't partially
     // move `args` (which is borrowed later by `build_target`).
@@ -402,6 +413,244 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
     })
 }
 
+/// Detect the interpreter ecosystem from install-tree layout + package name.
+/// Returns "npm" | "gem" | "cpan" | "python" | "" (unknown/compiled).
+fn detect_ecosystem(install_tree: &Path, package: &str) -> String {
+    // Name-prefix hints (conventional names per lib/pkgname.rs).
+    let p = package.to_ascii_lowercase();
+    let mut hint = String::new();
+    if p.starts_with("node-") || p.starts_with("nodejs-") {
+        hint = "npm".into();
+    } else if p.starts_with("ruby-") {
+        hint = "gem".into();
+    } else if p.ends_with("-perl") || p.starts_with("perl-") || p.starts_with("lib") {
+        // lib*-perl (deb) / perl-* (rpm/arch) — only firm if tree confirms.
+        hint = "cpan".into();
+    } else if p.starts_with("python3-") || p.starts_with("python-") {
+        hint = "python".into();
+    }
+    // Tree-layout confirmation wins over the hint.
+    if has_marker(install_tree, "package.json")
+        || install_tree.join("usr/share/nodejs").exists()
+        || install_tree.join("usr/lib/nodejs").exists()
+    {
+        return "npm".to_string();
+    }
+    if has_marker(install_tree, ".gemspec")
+        || install_tree.join("usr/lib/ruby").exists()
+        || install_tree.join("usr/share/rubygems").exists()
+    {
+        return "gem".to_string();
+    }
+    if has_marker(install_tree, ".pm")
+        || install_tree.join("usr/share/perl5").exists()
+        || install_tree.join("usr/lib/perl5").exists()
+    {
+        return "cpan".to_string();
+    }
+    if has_marker(install_tree, "METADATA")
+        || has_marker(install_tree, "PKG-INFO")
+        || install_tree.join("usr/lib/python3").exists()
+        || install_tree.join("usr/lib/python3.12").exists()
+    {
+        return "python".to_string();
+    }
+    hint
+}
+
+/// True if any file under `root` (depth ≤ 4) ends with `suffix`.
+fn has_marker(root: &Path, suffix: &str) -> bool {
+    fn walk(dir: &Path, depth: u8, suffix: &str) -> bool {
+        if depth > 4 {
+            return false;
+        }
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_file() {
+                if path.to_string_lossy().ends_with(suffix) {
+                    return true;
+                }
+            } else if path.is_dir() && walk(&path, depth + 1, suffix) {
+                return true;
+            }
+        }
+        false
+    }
+    walk(root, 0, suffix)
+}
+
+/// Canonical library root per ecosystem + target format.
+fn lib_root(ecosystem: &str, target: &str) -> Option<String> {
+    match (ecosystem, target) {
+        ("npm", "deb") => Some("usr/share/nodejs".into()),
+        ("npm", _) => Some("usr/lib/nodejs".into()),
+        ("gem", _) => Some("usr/lib/ruby/gems".into()),
+        ("cpan", "deb") => Some("usr/share/perl5".into()),
+        ("cpan", _) => Some("usr/lib/perl5".into()),
+        ("python", "deb") => Some("usr/lib/python3/dist-packages".into()),
+        ("python", "rpm") => Some("usr/lib/python3/site-packages".into()),
+        ("python", _) => Some("usr/lib/python/site-packages".into()),
+        _ => None,
+    }
+}
+
+/// Relocate interpreter payloads to the target format's canonical path.
+/// Source trees from another format/ecosystem often carry the wrong prefix
+/// (e.g. rpm `usr/lib/python3/site-packages` → deb expects
+/// `usr/lib/python3/dist-packages`). Moves the first matching source dir
+/// verbatim; compiled binaries elsewhere in the tree are untouched.
+fn relocate_install_tree(install_tree: &Path, ecosystem: &str, target: &str) -> Result<()> {
+    if ecosystem.is_empty() {
+        return Ok(());
+    }
+    let dest_rel = match lib_root(ecosystem, target) {
+        Some(r) => r,
+        None => return Ok(()),
+    };
+    // Candidate source dirs holding the interpreter payload.
+    let candidates = match ecosystem {
+        "npm" => vec!["usr/share/nodejs", "usr/lib/nodejs", "usr/lib/node_modules"],
+        "gem" => vec!["usr/lib/ruby/gems", "usr/share/rubygems", "var/lib/gems"],
+        "cpan" => vec![
+            "usr/share/perl5",
+            "usr/lib/perl5",
+            "usr/share/perl",
+            "usr/lib/x86_64-linux-gnu/perl5",
+        ],
+        "python" => vec![
+            "usr/lib/python3/dist-packages",
+            "usr/lib/python3/site-packages",
+            "usr/lib/python/site-packages",
+            "usr/lib/python3.12/site-packages",
+            "usr/lib/python3.11/site-packages",
+        ],
+        _ => return Ok(()),
+    };
+    for cand in candidates {
+        if cand == dest_rel {
+            return Ok(()); // already canonical
+        }
+        let src = install_tree.join(cand);
+        if src.is_dir() {
+            let dest = install_tree.join(&dest_rel);
+            fs::create_dir_all(&dest)?;
+            for entry in fs::read_dir(&src)? {
+                let entry = entry?;
+                let to = dest.join(entry.file_name());
+                if to.exists() {
+                    continue; // never clobber; keep first copy
+                }
+                fs::rename(entry.path(), &to)
+                    .with_context(|| format!("relocating {} → {}", cand, dest_rel))?;
+            }
+            // Remove now-empty source dir (ignore failure).
+            let _ = fs::remove_dir(&src);
+            println!("  ↔ relocated {cand} → {dest_rel} ({ecosystem})");
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
+/// Normalize `#!` lines to `/usr/bin/env <interp>` so scripts survive
+/// prefix moves across formats (deb↔rpm↔arch ship interpreters at the
+/// same `/usr/bin` names but payloads may embed versioned paths).
+fn rewrite_shebangs(install_tree: &Path) -> Result<usize> {
+    fn walk(dir: &Path, count: &mut usize) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let path = e.path();
+            if path.is_dir() {
+                walk(&path, count);
+            } else if path.is_file() && rewrite_one(&path) {
+                *count += 1;
+            }
+        }
+    }
+    fn rewrite_one(path: &Path) -> bool {
+        let Ok(bytes) = fs::read(path) else {
+            return false;
+        };
+        if !bytes.starts_with(b"#!") {
+            return false;
+        }
+        let end = bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .unwrap_or(bytes.len());
+        let line = String::from_utf8_lossy(&bytes[..end]).to_string();
+        // Map versioned/absolute interpreter paths to /usr/bin/env form.
+        let interp = if line.contains("python") {
+            Some("python3")
+        } else if line.contains("perl") {
+            Some("perl")
+        } else if line.contains("ruby") {
+            Some("ruby")
+        } else if line.contains("node") {
+            Some("node")
+        } else {
+            None
+        };
+        let Some(interp) = interp else {
+            return false;
+        };
+        let want = format!("#!/usr/bin/env {interp}");
+        if line.trim() == want {
+            return false;
+        }
+        let mut out = want.into_bytes();
+        out.extend_from_slice(&bytes[end..]);
+        if fs::write(path, out).is_ok() {
+            return true;
+        }
+        false
+    }
+    let mut count = 0;
+    walk(install_tree, &mut count);
+    if count > 0 {
+        println!("  ↔ normalized {count} shebang(s) to /usr/bin/env");
+    }
+    Ok(count)
+}
+
+/// Ensure the interpreter runtime dep for `ecosystem` is present in
+/// target-format syntax, translating names (node→nodejs, python→python).
+fn ensure_interpreter_dep(meta: &mut SourceMeta, ecosystem: &str, target: &str) {
+    if ecosystem.is_empty() {
+        return;
+    }
+    let runtime = match (ecosystem, target) {
+        ("npm", "deb") => "nodejs",
+        ("npm", _) => "nodejs",
+        ("gem", _) => "ruby",
+        ("cpan", "deb") => "perl",
+        ("cpan", _) => "perl",
+        ("python", "deb") => "python3",
+        ("python", "rpm") => "python3",
+        ("python", _) => "python",
+        _ => return,
+    };
+    let lower = meta.depends.to_ascii_lowercase();
+    // Heuristic: runtime already declared if the token appears.
+    if lower
+        .split([',', '|', '(', ')', ' '])
+        .any(|t| t.trim() == runtime)
+    {
+        return;
+    }
+    if meta.depends.trim().is_empty() {
+        meta.depends = runtime.to_string();
+    } else {
+        meta.depends = format!("{}, {}", meta.depends.trim(), runtime);
+    }
+    println!("  ℹ added runtime dep '{runtime}' for {ecosystem}");
+}
+
 /// Scan ELF files in the install tree and fill in missing `depends:`.
 /// If the source package left deps empty (common for rpm/arch conversions),
 /// populate from non-essential sonames resolved via `pkg_owner`.
@@ -468,6 +717,235 @@ fn scan_and_fill_deps(mut meta: SourceMeta, install_tree: &Path) -> Result<Sourc
     }
 
     Ok(meta)
+}
+
+/// Translate dependency *names* across formats for interpreter ecosystems.
+///
+/// `convert_deps_syntax` only rewrites operators; names like `nodejs`
+/// (rpm/arch) vs `nodejs`/`node-*` (deb) and `python3-*` vs `python-*`
+/// need mapping via `pkgname::conventional_name` heuristics + the
+/// `depmap` deb→rpm/arch tables. Unknown names pass through untouched.
+fn convert_dep_names(mut meta: SourceMeta, ecosystem: &str, target: &str) -> SourceMeta {
+    if meta.depends.trim().is_empty() {
+        return meta;
+    }
+    let eco = if ecosystem.is_empty() {
+        infer_ecosystem_from_dep(&meta.depends)
+    } else {
+        ecosystem.to_string()
+    };
+    let deps: Vec<String> = meta
+        .depends
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|dep| map_dep_name(dep, &eco, target))
+        .collect();
+    meta.depends = deps.join(", ");
+    meta
+}
+
+/// Guess ecosystem from dep tokens when tree detection found nothing.
+fn infer_ecosystem_from_dep(depends: &str) -> String {
+    let l = depends.to_ascii_lowercase();
+    if l.contains("nodejs") || l.contains("node-") {
+        "npm".into()
+    } else if l.contains("ruby") || l.contains("rubygem") {
+        "gem".into()
+    } else if l.contains("perl") {
+        "cpan".into()
+    } else if l.contains("python") {
+        "python".into()
+    } else {
+        String::new()
+    }
+}
+
+fn map_dep_name(dep: &str, ecosystem: &str, target: &str) -> String {
+    // Split `name (constraint)` / `name op ver` / bare name.
+    let (name, constraint) = split_dep(dep);
+    if name.is_empty() {
+        return dep.to_string();
+    }
+    let mapped = translate_name(&name, ecosystem, target);
+    match constraint {
+        Some(c) => match target {
+            "deb" => format!("{mapped} ({c})"),
+            "rpm" => format!("{mapped} {c}"),
+            "arch" => format!("{mapped}{c}"),
+            _ => dep.to_string(),
+        },
+        None => mapped,
+    }
+}
+
+fn split_dep(dep: &str) -> (String, Option<String>) {
+    let dep = dep.split('|').next().unwrap_or(dep).trim();
+    if let Some(idx) = dep.find('(') {
+        let name = dep[..idx].trim().to_string();
+        let c = dep[idx..]
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim()
+            .to_string();
+        if c.is_empty() {
+            (name, None)
+        } else {
+            (name, Some(c))
+        }
+    } else {
+        // rpm `name >= ver` / arch `name>=ver` / bare
+        for op in &[
+            " >= ", " <= ", " > ", " < ", " = ", ">=", "<=", ">", "<", "=",
+        ] {
+            if let Some(idx) = dep.find(op) {
+                let name = dep[..idx].trim().to_string();
+                let ver = dep[idx..].trim().to_string();
+                return (name, Some(ver));
+            }
+        }
+        (dep.to_string(), None)
+    }
+}
+
+/// Translate one bare package name into `target` conventions.
+fn translate_name(name: &str, ecosystem: &str, target: &str) -> String {
+    let l = name.to_ascii_lowercase();
+    // Interpreter runtimes.
+    if l == "nodejs" || l == "node" || l == "node-js" {
+        return "nodejs".to_string();
+    }
+    if l == "ruby" || l == "ruby-interpreter" {
+        return "ruby".to_string();
+    }
+    if l == "perl" || l == "perl-interpreter" {
+        return "perl".to_string();
+    }
+    if l == "python3" && target == "arch" {
+        return "python".to_string();
+    }
+    if l == "python" && target == "deb" {
+        return "python3".to_string();
+    }
+    // Ecosystem-prefixed names → target conventions via pkgname helpers.
+    // Strip the source prefix, re-apply the target prefix.
+    if !ecosystem.is_empty() {
+        let stripped = strip_eco_prefix(&l, ecosystem);
+        if stripped != l {
+            return crate::pkgname::conventional_name(ecosystem, stripped, target, None);
+        }
+        // Already-conventional names from another format (e.g. deb
+        // `libfoo-perl` → rpm `perl-Foo`): normalize through conventional_name.
+        if matches!(ecosystem, "cpan" | "gem" | "npm" | "python") {
+            let base = l
+                .trim_start_matches("lib")
+                .trim_matches('-')
+                .trim_end_matches("-perl")
+                .trim_start_matches("perl-")
+                .trim_start_matches("ruby-")
+                .trim_start_matches("node-")
+                .trim_start_matches("nodejs-")
+                .trim_start_matches("python3-")
+                .trim_start_matches("python-");
+            if base != l {
+                return crate::pkgname::conventional_name(ecosystem, base, target, None);
+            }
+        }
+    }
+    // System-library names via depmap tables (deb→rpm/arch).
+    if target == "rpm" || target == "arch" {
+        if let Some(mapped) = depmap_lookup(name, target) {
+            return mapped;
+        }
+    }
+    name.to_string()
+}
+
+fn strip_eco_prefix<'a>(name: &'a str, ecosystem: &str) -> &'a str {
+    let prefixes: &[&str] = match ecosystem {
+        "npm" => &["nodejs-", "node-"],
+        "gem" => &["ruby-"],
+        "cpan" => &["lib", "perl-", "lib"],
+        "python" => &["python3-", "python-"],
+        _ => &[],
+    };
+    for p in prefixes {
+        if let Some(s) = name.strip_prefix(p) {
+            if ecosystem == "cpan" {
+                return s.trim_end_matches("-perl").trim_end_matches("perl");
+            }
+            return s;
+        }
+    }
+    name
+}
+
+/// Look up deb→rpm/arch system-library translation via depmap's tables.
+fn depmap_lookup(name: &str, target: &str) -> Option<String> {
+    // depmap::map_dependency maps registry→system; here we need
+    // system→system. Reuse its deb→rpm/arch tables indirectly: probe each
+    // known deb name — small table, cheap.
+    const KNOWN_DEB: &[&str] = &[
+        "libssl3",
+        "libsqlite3-0",
+        "libpq5",
+        "libmariadb3",
+        "libcurl4",
+        "libgd3",
+        "libxml2",
+        "libvips",
+        "libcairo2",
+        "zlib1g",
+        "libffi8",
+        "libgit2-1.7",
+        "libicu74",
+        "libnss3",
+        "libsodium23",
+        "libgrpc++1",
+        "libonig5",
+        "libzip4",
+        "libopenblas0",
+        "libargon2-1",
+        "libmagickwand-6.q16-6",
+        "libsass",
+        "libyaml-0-2",
+    ];
+    // Reverse direction: if `name` is already an rpm/arch name, keep it.
+    // Only translate exact deb-name hits.
+    for deb in KNOWN_DEB {
+        if name.eq_ignore_ascii_case(deb) {
+            // Reuse depmap by mapping a sentinel registry dep is awkward;
+            // duplicate the small table via map_dependency on known probes.
+            return Some(system_name_for(deb, target));
+        }
+    }
+    None
+}
+
+fn system_name_for(deb: &str, target: &str) -> String {
+    match (deb, target) {
+        ("libssl3", "rpm") => "openssl-libs".into(),
+        ("libssl3", _) => "openssl".into(),
+        ("libsqlite3-0", _) => "sqlite".into(),
+        ("libpq5", "rpm") => "postgresql-libs".into(),
+        ("libpq5", _) => "postgresql-libs".into(),
+        ("libmariadb3", "rpm") => "mariadb-connector-c".into(),
+        ("libmariadb3", _) => "mariadb-libs".into(),
+        ("libcurl4", "rpm") => "libcurl".into(),
+        ("libcurl4", _) => "curl".into(),
+        ("zlib1g", _) => "zlib".into(),
+        ("libffi8", _) => "libffi".into(),
+        ("libnss3", _) => "nss".into(),
+        ("libsodium23", _) => "libsodium".into(),
+        ("libicu74", "rpm") => "libicu".into(),
+        ("libicu74", _) => "icu".into(),
+        ("libzip4", _) => "libzip".into(),
+        ("libyaml-0-2", _) => "libyaml".into(),
+        ("libxml2", _) => "libxml2".into(),
+        ("libcairo2", _) => "cairo".into(),
+        ("libvips", _) => "vips".into(),
+        _ => deb.to_string(),
+    }
 }
 
 /// Convert dependency syntax from source format to target format.
@@ -710,6 +1188,7 @@ fn build_target(
         sign_key_id: "",
         sign_passphrase: None,
         sign_method: "detach",
+        detected_deps: Vec::new(),
     };
 
     plugin.build(&ctx)
@@ -811,7 +1290,25 @@ fn apply_scripts_to_config(
                 config.scripts.verify = s.clone();
             }
         }
-        _ => {} // arch: no script carry-over (arch uses .INSTALL, set separately)
+        _ => {
+            // arch: carry scripts into .INSTALL pre/post hooks instead of dropping.
+            if let Some(s) = scripts.get("pre").or_else(|| scripts.get("preinst")) {
+                config.scripts.preupgrade_script = s.clone();
+            }
+            if let Some(s) = scripts.get("post").or_else(|| scripts.get("postinst")) {
+                config.scripts.postupgrade_script = s.clone();
+            }
+            if let Some(s) = scripts.get("preun").or_else(|| scripts.get("prerm")) {
+                if config.scripts.preupgrade_script.is_empty() {
+                    config.scripts.preupgrade_script = s.clone();
+                }
+            }
+            if let Some(s) = scripts.get("postun").or_else(|| scripts.get("postrm")) {
+                if config.scripts.postupgrade_script.is_empty() {
+                    config.scripts.postupgrade_script = s.clone();
+                }
+            }
+        }
     }
 }
 

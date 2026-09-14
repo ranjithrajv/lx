@@ -12,9 +12,11 @@ pub mod custom;
 pub mod forgejo;
 pub mod gerrit;
 pub mod gitea;
+pub mod gitee;
 pub mod github;
 pub mod github_sync;
 pub mod gitlab;
+pub mod sourceforge;
 
 use anyhow::Result;
 use std::path::Path;
@@ -123,6 +125,8 @@ pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
         Box::new(gitea::GiteaForgeSource),
         Box::new(forgejo::ForgejoForgeSource),
         Box::new(bitbucket::BitbucketForgeSource),
+        Box::new(gitee::GiteeForgeSource),
+        Box::new(sourceforge::SourceForgeForgeSource),
         Box::new(custom::CustomForgeSource),
         Box::new(gerrit::GerritForgeSource),
     ]
@@ -162,6 +166,7 @@ fn cfg_host<'a>(cfg: &'a crate::config::PackageConfig, key: &str) -> Option<&'a 
         "forgejo_host" => cfg.forgejo_host.as_deref(),
         "bitbucket_host" => cfg.bitbucket_host.as_deref(),
         "gerrit_host" => cfg.gerrit_host.as_deref(),
+        "gitee_host" => cfg.gitee_host.as_deref(),
         _ => None,
     }
 }

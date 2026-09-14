@@ -11,10 +11,12 @@
 //! [`crate::sourcebuild`] resolves which plugin to use (`build_system:` in
 //! package.yaml) and calls [`build`] to produce the install tree.
 
+pub mod autotools;
 pub mod cargo;
 pub mod cmake;
 pub mod custom;
 pub mod go;
+pub mod make;
 pub mod meson;
 
 use anyhow::Result;
@@ -62,6 +64,11 @@ pub fn all_build_systems() -> Vec<Box<dyn BuildSystem>> {
         Box::new(cargo::CargoBuildSystem),
         Box::new(go::GoBuildSystem),
         Box::new(meson::MesonBuildSystem),
+        Box::new(autotools::AutotoolsBuildSystem),
+        // `make` is deliberately last among auto-detecting systems: it
+        // matches any tree with a Makefile, so the more specific systems
+        // get first claim.
+        Box::new(make::MakeBuildSystem),
         Box::new(custom::CustomBuildSystem),
     ]
 }

@@ -379,6 +379,7 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
             sbom: false,
             cosign: false,
             cross_target: None,
+            bindep: true,
         },
         None,
     )?;

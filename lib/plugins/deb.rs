@@ -57,7 +57,13 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
     let conffiles = super::apply_contents(cfg, ctx.staging_root, "deb")?;
 
     // Render control/changelog/copyright.
-    let control = render_control(cfg, job, ctx.debian_version, ctx.build_version);
+    let control = render_control(
+        cfg,
+        job,
+        ctx.debian_version,
+        ctx.build_version,
+        &ctx.detected_deps,
+    );
     let changelog = render_changelog(cfg, job, ctx.debian_version, ctx.build_version);
     let doc_dir = ctx
         .staging_root
@@ -145,13 +151,21 @@ pub fn render_control(
     job: &crate::build::ResolvedJob,
     version: &str,
     build_version: &str,
+    detected_deps: &[String],
 ) -> String {
     let full_version = lx_lib::pkgmeta::with_epoch(
         &cfg.epoch,
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
     // Per-format overrides applied for "deb".
-    let relations = cfg.effective_relations("deb").render();
+    let mut relations = cfg.effective_relations("deb");
+    // Merge detected binary dependencies into Depends.
+    for dep in detected_deps {
+        if !dep.trim().is_empty() {
+            relations.add_depends(dep.trim());
+        }
+    }
+    let relations = relations.render();
     let homepage = super::resolve_homepage(cfg);
     let extra_fields = super::render_extra_fields(&cfg.fields);
     // Determine architecture: explicit override > arch variant > job arch.

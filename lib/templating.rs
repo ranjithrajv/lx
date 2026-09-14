@@ -81,15 +81,9 @@ pub fn build_context(
 }
 
 /// Resolve the homepage URL for the package based on its source provider.
+/// Delegates to the one provider-aware resolver so this can't drift.
 fn homepage_for(cfg: &crate::config::PackageConfig) -> String {
-    if cfg.effective_forge_source() == "gitlab" {
-        lx_lib::constants::homepage_for_gitlab(
-            &cfg.github_repo,
-            cfg.gitlab_host.as_deref().unwrap_or(""),
-        )
-    } else {
-        lx_lib::constants::homepage_for_github(&cfg.github_repo)
-    }
+    crate::plugins::resolve_homepage(cfg)
 }
 
 /// Resolve the vendor string from the config's extra fields.

@@ -40,7 +40,7 @@ fn render_control_includes_depends_when_set() {
         depends: "libatomic1, libgtk-3-0".into(),
         ..PackageConfig::default()
     };
-    let text = render_control(&cfg, &job(), "1.0.0", "1");
+    let text = render_control(&cfg, &job(), "1.0.0", "1", &[]);
     assert!(text.contains("Depends: libatomic1, libgtk-3-0\n"));
     // Matches the bash action's image build, which `>>`-appended Depends
     // after the control file (including Description) was rendered.
@@ -54,7 +54,7 @@ fn render_control_omits_depends_when_empty() {
         github_repo: "eza-community/eza".into(),
         ..PackageConfig::default()
     };
-    let text = render_control(&cfg, &job(), "1.0.0", "1");
+    let text = render_control(&cfg, &job(), "1.0.0", "1", &[]);
     assert!(!text.contains("Depends:"));
 }
 
@@ -71,7 +71,7 @@ fn render_control_includes_all_relation_fields_when_set() {
         breaks: "foo-legacy (<< 2.0)".into(),
         ..PackageConfig::default()
     };
-    let text = render_control(&cfg, &job(), "1.0.0", "1");
+    let text = render_control(&cfg, &job(), "1.0.0", "1", &[]);
     assert!(text.contains("Depends: libatomic1\n"));
     assert!(text.contains("Recommends: bash-completion\n"));
     assert!(text.contains("Conflicts: foo-legacy\n"));
@@ -88,7 +88,7 @@ fn render_control_prefixes_version_with_epoch_but_not_filename() {
         epoch: "1".into(),
         ..PackageConfig::default()
     };
-    let text = render_control(&cfg, &job(), "2.0.0", "1");
+    let text = render_control(&cfg, &job(), "2.0.0", "1", &[]);
     assert!(text.contains("Version: 1:2.0.0-1+trixie\n"));
 }
 
@@ -99,7 +99,7 @@ fn render_control_omits_epoch_prefix_when_unset() {
         github_repo: "owner/foo".into(),
         ..PackageConfig::default()
     };
-    let text = render_control(&cfg, &job(), "2.0.0", "1");
+    let text = render_control(&cfg, &job(), "2.0.0", "1", &[]);
     // Exactly "Version: 2.0.0-..." -- no epoch prefix sneaking in
     // before the version number itself.
     assert!(text.contains("Version: 2.0.0-1+trixie\n"));

@@ -10,6 +10,8 @@ pub const DEFAULT_GITEA_HOST: &str = "codeberg.org";
 pub const DEFAULT_FORGEJO_HOST: &str = "codeberg.org";
 pub const DEFAULT_BITBUCKET_HOST: &str = "bitbucket.org";
 pub const DEFAULT_GERRIT_HOST: &str = "review.gerrithub.io";
+pub const DEFAULT_GITEE_HOST: &str = "gitee.com";
+pub const DEFAULT_SOURCEFORGE_HOST: &str = "sourceforge.net";
 
 /// Default API base URLs
 pub const DEFAULT_GITHUB_API_URL: &str = "https://api.github.com";
@@ -18,6 +20,8 @@ pub const DEFAULT_GITEA_API_URL: &str = "https://codeberg.org/api/v1";
 pub const DEFAULT_FORGEJO_API_URL: &str = "https://codeberg.org/api/v1";
 pub const DEFAULT_BITBUCKET_API_URL: &str = "https://api.bitbucket.org/2.0";
 pub const DEFAULT_GERRIT_API_URL: &str = "https://review.gerrithub.io/a";
+pub const DEFAULT_GITEE_API_URL: &str = "https://gitee.com/api/v5";
+pub const DEFAULT_SOURCEFORGE_API_URL: &str = "https://sourceforge.net";
 
 /// Registry org for `lx install`'s `latest-debs` workflow
 pub const LATEST_DEBS_ORG: &str = "latest-debs";
@@ -94,6 +98,12 @@ pub const DEFAULT_RPM_DISTRIBUTIONS: &[&str] = &["fedora", "el9", "el8", "opensu
 
 /// Arch rolling
 pub const DEFAULT_ARCH_DISTRIBUTIONS: &[&str] = &["arch"];
+
+/// Alpine Linux (apk). Rolling release, one suite.
+pub const DEFAULT_APK_DISTRIBUTIONS: &[&str] = &["alpine"];
+
+/// OpenWrt / opkg (ipk). Embedded Linux, one target family.
+pub const DEFAULT_IPK_DISTRIBUTIONS: &[&str] = &["openwrt"];
 
 /// All Debian architectures the tool can target
 pub const DEFAULT_ARCHITECTURES: &[&str] = &[
@@ -181,6 +191,27 @@ pub fn homepage_for_gerrit(repo: &str, host: &str) -> String {
     homepage_for(h, repo)
 }
 
+pub fn homepage_for_gitee(repo: &str, host: &str) -> String {
+    let h = if host.is_empty() {
+        DEFAULT_GITEE_HOST
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
+/// SourceForge projects are identified by a bare project name (no owner),
+/// so the homepage is the project page rather than a `host/repo` path.
+pub fn homepage_for_sourceforge(project: &str) -> String {
+    format!(
+        "https://{}/projects/{}/",
+        DEFAULT_SOURCEFORGE_HOST,
+        project.trim_matches('/')
+    )
+}
+
 /// Map Debian arch to RPM arch (reproducible, static)
 pub fn to_rpm_arch(debian_arch: &str) -> &'static str {
     match debian_arch {
@@ -190,6 +221,45 @@ pub fn to_rpm_arch(debian_arch: &str) -> &'static str {
         "armel" => "armhfp",
         "i386" => "i386",
         "ppc64el" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        "loong64" => "loongarch64",
+        other => Box::leak(other.to_string().into_boxed_str()) as &str,
+    }
+}
+
+/// Map Debian arch to Alpine (apk) arch.
+///
+/// Alpine names differ from Debian for the 32-bit ARM family (`armv7`/
+/// `armhf`) and `i386` (`x86`); everything else matches RPM-style names.
+pub fn to_alpine_arch(debian_arch: &str) -> &'static str {
+    match debian_arch {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64",
+        "armhf" => "armv7",
+        "armel" => "armhf",
+        "i386" => "x86",
+        "ppc64el" => "ppc64le",
+        "s390x" => "s390x",
+        "riscv64" => "riscv64",
+        "loong64" => "loongarch64",
+        other => Box::leak(other.to_string().into_boxed_str()) as &str,
+    }
+}
+
+/// Map Debian arch to OpenWrt (ipk) arch.
+///
+/// OpenWrt arch names are target-specific (`aarch64_generic`,
+/// `arm_cortex-a9`, …); this is a best-effort default that callers can
+/// override with `arch_variant:`. x86_64/s390x/riscv64 map 1:1.
+pub fn to_openwrt_arch(debian_arch: &str) -> &'static str {
+    match debian_arch {
+        "amd64" => "x86_64",
+        "arm64" => "aarch64_generic",
+        "armhf" => "arm_cortex-a9",
+        "armel" => "arm_cortex-a9",
+        "i386" => "i386_pentium4",
+        "ppc64el" => "powerpc64",
         "s390x" => "s390x",
         "riscv64" => "riscv64",
         "loong64" => "loongarch64",

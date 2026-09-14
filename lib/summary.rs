@@ -62,6 +62,8 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
     let pattern = match inputs.package_format.as_str() {
         "rpm" => format!("{}-*.rpm", inputs.package),
         "arch" => format!("{}-*.pkg.tar.*", inputs.package),
+        "apk" => format!("{}-*.apk", inputs.package),
+        "ipk" => format!("{}_*.ipk", inputs.package),
         _ => format!("{}_*.deb", inputs.package),
     };
     let matcher = glob::Pattern::new(&pattern)?;

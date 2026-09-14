@@ -11,10 +11,12 @@
 //! format is just implementing `Packager` and registering it in
 //! [`registry`] / [`all_packagers`].
 
+pub mod apk;
 pub mod arch;
 pub mod build_system;
 pub mod deb;
 pub mod forge;
+pub mod ipk;
 pub mod registry;
 pub mod rpm;
 
@@ -58,21 +60,30 @@ pub struct BuildContext<'a> {
     /// Deb signing method: `"detach"` (post-build `.sig`) or `"debsign"`
     /// (embedded `_gpgorigin`). Ignored by rpm/arch.
     pub sign_method: &'a str,
+    /// Binary dependencies detected via ELF analysis. Merged into Depends:
+    /// by the format plugins (deb only; rpm/arch handle deps differently).
+    pub detected_deps: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
 // Shared helpers for packager plugins (DRY: deb/rpm/arch all used to duplicate these)
 // ---------------------------------------------------------------------------
 
-/// Resolve the homepage URL from config, accounting for self-hosted GitLab.
+/// Resolve the homepage URL from config, accounting for each provider's
+/// host conventions and self-hosted overrides.
 pub fn resolve_homepage(cfg: &PackageConfig) -> String {
-    if cfg.effective_forge_source() == "gitlab" {
-        lx_lib::constants::homepage_for_gitlab(
-            &cfg.github_repo,
-            cfg.gitlab_host.as_deref().unwrap_or(""),
-        )
-    } else {
-        lx_lib::constants::homepage_for_github(&cfg.github_repo)
+    use lx_lib::constants::*;
+    match cfg.effective_forge_source().as_str() {
+        "gitlab" => homepage_for_gitlab(&cfg.github_repo, cfg.gitlab_host.as_deref().unwrap_or("")),
+        "gitea" => homepage_for_gitea(&cfg.github_repo, cfg.gitea_host.as_deref().unwrap_or("")),
+        "forgejo" => {
+            homepage_for_forgejo(&cfg.github_repo, cfg.forgejo_host.as_deref().unwrap_or(""))
+        }
+        "bitbucket" => homepage_for_bitbucket(&cfg.github_repo),
+        "gerrit" => homepage_for_gerrit(&cfg.github_repo, cfg.gerrit_host.as_deref().unwrap_or("")),
+        "gitee" => homepage_for_gitee(&cfg.github_repo, cfg.gitee_host.as_deref().unwrap_or("")),
+        "sourceforge" => homepage_for_sourceforge(&cfg.github_repo),
+        _ => homepage_for_github(&cfg.github_repo),
     }
 }
 
@@ -134,6 +145,8 @@ pub fn all_packagers() -> Vec<Box<dyn Packager>> {
         Box::new(deb::DebPackager),
         Box::new(rpm::RpmPackager),
         Box::new(arch::ArchPackager),
+        Box::new(apk::ApkPackager),
+        Box::new(ipk::IpkPackager),
     ]
 }
 
@@ -233,6 +246,9 @@ pub fn stage_install_tree(
 
     // Make binaries relocatable (RPATH = $ORIGIN/../lib).
     super::relocatable::make_relocatable(&usr_bin)?;
+
+    // Detect binary dependencies via ELF analysis + distro package lookup.
+    let _detected_deps = super::bindep::detect_binary_deps(root).unwrap_or_default();
 
     Ok(())
 }
