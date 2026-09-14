@@ -308,7 +308,7 @@ Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/pack
 
 *Extension* `apk`, *defaults* `alpine` (rolling), permissive matrix.
 
-Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar.gz]`, where the control member holds `.PKGINFO` and the data member holds the payload. `pkgver` is `{version}-r{build_version}` and `datahash` pins the SHA-256 of the compressed data member. Arch maps Debian → Alpine (`amd64→x86_64`, `armhf→armv7`, `i386→x86`). Because Alpine is musl-only, this is the natural output for `musl: true` builds. Signing (RSA via `abuild`) is not implemented; unsigned packages install with `apk add --allow-untrusted`.
+Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar.gz]`, where the control member holds `.PKGINFO` and the data member holds the payload. `pkgver` is `{version}-r{build_version}` and `datahash` pins the SHA-256 of the compressed data member. Arch maps Debian → Alpine (`amd64→x86_64`, `armhf→armv7`, `i386→x86`). Because Alpine is musl-only, this is the natural output for `musl: true` builds. When `--sign-key` is an RSA private key, the control segment is signed and a `.SIGN.RSA.<keyname>` segment is prepended; unsigned packages install with `apk add --allow-untrusted`. (Signed packages are verified against real `apk-tools` in the test suite when `LX_APK_STATIC` points at an `apk.static`.)
 
 ### ipk — `lib/plugins/ipk.rs` + `lib/ipkarchive.rs`
 
@@ -528,7 +528,7 @@ what does it become."* Four more cover cross-cutting lifecycles and the
   (`gpg-detach`); embedded backends declare `embedded()` and the packager
   writes the signature while building the artifact (`rpm-pgp`,
   `deb-debsign`, and `apk-rsa` — Alpine's `.SIGN.RSA.<keyname>` over the
-  control segment, signed through `openssl`).
+  control segment, signed in-process via the `rsa` crate).
 * **DependencyMapper** — each target format owns its package-name translation
   and version-operator syntax. Deb/RPM/Arch delegate to the shared
   ecosystem→Debian tables in `depmap.rs`; Alpine renders `name>=ver` and
@@ -545,7 +545,7 @@ what does it become."* Four more cover cross-cutting lifecycles and the
   `build_index`): apt `InRelease` (inline-clearsigned) + `Release.gpg`, opkg
   `Packages.sig`, pacman `<repo>.db.tar.gz.sig`, rpm
   `repodata/repomd.xml.asc`, and apk a prepended `.SIGN.RSA.<keyname>`
-  segment (RSA/SHA-1 via `openssl`). **Read** (`lx index
+  segment (in-process RSA/SHA-1). **Read** (`lx index
   search/info/install/update`): fans out over every enabled source, looked
   up by canonical id in the registry (`get_index_backend`) rather than a
   hardcoded `match`; the LX community index and the AUR build/install,

@@ -89,12 +89,20 @@
   `.zip` assets work via `artifact_format: zip` or filename auto-detection,
   preserving unix modes and rejecting traversal entries.
 - **Alpine apk signing** (`Signer` backend `apk-rsa`): with `--sign-key`
-  pointing at an RSA private key, the apk packager signs the compressed
-  control segment (`openssl dgst -sha1 -sign`) and prepends a
-  `.SIGN.RSA.<keyname>` segment. `sign_key_id` overrides the key name
-  (default: `<key file>.pub`).
+  pointing at an RSA PEM private key, the apk packager signs the compressed
+  control segment with in-process RSA/SHA-1 (the `rsa` crate — no host
+  `openssl` needed) and prepends a `.SIGN.RSA.<keyname>` segment.
+  `sign_key_id` overrides the key name (default: `<key file>.pub`).
 - **Alpine index signing**: `lx repo --format apk --sign-key` RSA-signs the
   whole `APKINDEX.tar.gz` and prepends the signature segment.
+- **Fixed apk v2 tar segmentation**: non-final segments (signature, control)
+  must not carry end-of-archive records, but `tar::Builder` writes them on
+  drop. Real `apk-tools` rejected the result as a bad archive; they are now
+  stripped. Verified with `apk-tools` 2.14 and 3.0 (`apk verify`); an
+  env-gated test (`LX_APK_STATIC=<apk.static>`) checks a signed package.
+- `deny.toml`: the direct-`rsa` ban is dropped — it was already violated
+  transitively by `rpm` → `pgp`, and apk signing now uses `rsa` directly.
+  The RUSTSEC-2023-0071 exception in `[advisories]` still applies.
 - apk control/signature tar segments now omit end-of-archive records, as
   the format requires (the data segment remains the terminator).
 

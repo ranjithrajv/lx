@@ -21,7 +21,7 @@ impl Signer for ApkRsa {
     }
 
     fn description(&self) -> &'static str {
-        "Alpine apk v2 RSA/SHA-1 signature (`.SIGN.RSA.<keyname>`, via openssl)"
+        "Alpine apk v2 RSA/SHA-1 signature (`.SIGN.RSA.<keyname>`, in-process)"
     }
 
     fn supports(&self, format: &str, _method: &str) -> bool {

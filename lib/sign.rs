@@ -109,41 +109,41 @@ fn gpg_filter(payload: &[u8], req: &SignRequest, mode: &[&str]) -> Result<Vec<u8
     Ok(out.stdout)
 }
 
-/// DER-encoded PKCS#1 v1.5 RSA signature over the SHA-1 hash of `payload`,
-/// via `openssl dgst -sha1 -sign`.
+/// DER-encoded PKCS#1 v1.5 RSA signature over the SHA-1 hash of `payload`.
 ///
 /// This is the signature primitive Alpine's apk v2 uses: `abuild` signs the
 /// package *control* segment — and, for a repository, the whole
-/// `APKINDEX.tar.gz` — with the repository's RSA key.
-pub fn rsa_sha1_sign(payload: &[u8], key_file: &Path, passphrase: Option<&str>) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("openssl");
-    cmd.args(["dgst", "-sha1", "-sign"]).arg(key_file);
-    if let Some(p) = passphrase.filter(|p| !p.is_empty()) {
-        cmd.arg("-passin").arg(format!("pass:{p}"));
-    }
-    cmd.stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .context("failed to run `openssl` (install openssl to sign apk packages)")?;
-    {
-        let stdin = child.stdin.as_mut().expect("piped stdin");
-        stdin
-            .write_all(payload)
-            .context("failed to write payload to openssl stdin")?;
-    }
-    let out = child.wait_with_output().context("openssl signing failed")?;
-    if !out.status.success() {
-        bail!(
-            "openssl signing failed: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    if out.stdout.is_empty() {
-        bail!("openssl produced empty signature");
-    }
-    Ok(out.stdout)
+/// `APKINDEX.tar.gz` — with the repository's RSA key. Signing is fully
+/// in-process (the `rsa` crate); no host tool is required.
+///
+/// `key_file` must be an **unencrypted** PEM RSA private key (PKCS#8
+/// `BEGIN PRIVATE KEY` or PKCS#1 `BEGIN RSA PRIVATE KEY`). `passphrase` is
+/// ignored (encrypted PEM keys are not supported).
+pub fn rsa_sha1_sign(
+    payload: &[u8],
+    key_file: &Path,
+    _passphrase: Option<&str>,
+) -> Result<Vec<u8>> {
+    use rsa::pkcs1::DecodeRsaPrivateKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+
+    let pem = std::fs::read_to_string(key_file)
+        .with_context(|| format!("failed to read RSA key '{}'", key_file.display()))?;
+    let key = rsa::RsaPrivateKey::from_pkcs8_pem(&pem)
+        .or_else(|_| rsa::RsaPrivateKey::from_pkcs1_pem(&pem))
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "failed to parse RSA private key '{}': {e} \
+                 (expected an unencrypted PEM key: PKCS#8 or PKCS#1)",
+                key_file.display()
+            )
+        })?;
+    let signing_key = rsa::pkcs1v15::SigningKey::<sha1::Sha1>::new(key);
+    let signature = signing_key
+        .try_sign(payload)
+        .context("RSA/SHA-1 signing failed")?;
+    Ok(signature.to_vec())
 }
 
 /// The apk `<keyname>` used in a `.SIGN.RSA.<keyname>` member: `key_id` when

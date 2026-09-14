@@ -11,8 +11,9 @@
 //! `control.tar.gz` carries `.PKGINFO` — the key/value metadata apk reads
 //! to install the package; `data.tar.gz` carries the payload. The
 //! `datahash` line in `.PKGINFO` pins the SHA-256 of the *compressed* data
-//! member, which apk verifies on install. Signing is not implemented (that
-//! needs an RSA key emitted by `abuild`); unsigned packages install with
+//! member, which apk verifies on install. When an RSA key is supplied the
+//! control segment is signed and a `.SIGN.RSA.<keyname>` segment is
+//! prepended ([`build_with_signature`]); unsigned packages install with
 //! `apk add --allow-untrusted`.
 //!
 //! Mirrors `debarchive.rs` / `archarchive.rs`: deterministic tar+gzip,
@@ -115,10 +116,19 @@ pub fn signature_segment(member_name: &str, signature: &[u8], mtime: i64) -> Res
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_file_bytes(&mut builder, member_name, signature, 0o644, mtime)?;
-        // Deliberately no `finish()`: apk segments (except the last) carry no
-        // end-of-archive records.
     }
-    deterministic_gzip(&tar_bytes, mtime, 9)
+    // `tar::Builder` appends end-of-archive records even without `finish()`;
+    // apk wants them only on the final data segment.
+    deterministic_gzip(&strip_end_of_archive(tar_bytes), mtime, 9)
+}
+
+/// Drop the trailing 512-byte zero end-of-archive records (`tar::Builder`
+/// writes them on drop). Non-final apk tar segments must not carry them.
+fn strip_end_of_archive(mut tar_bytes: Vec<u8>) -> Vec<u8> {
+    while tar_bytes.len() >= 512 && tar_bytes[tar_bytes.len() - 512..].iter().all(|&b| b == 0) {
+        tar_bytes.truncate(tar_bytes.len() - 512);
+    }
+    tar_bytes
 }
 
 /// Render the `.PKGINFO` body.
@@ -186,9 +196,10 @@ fn build_control_tar(pkginfo: &str, mtime: i64) -> Result<Vec<u8>> {
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_file_bytes(&mut builder, ".PKGINFO", pkginfo.as_bytes(), 0o644, mtime)?;
-        // No `finish()` on purpose (see doc comment).
     }
-    Ok(tar_bytes)
+    // No end-of-archive records: the data segment (which keeps them) is the
+    // only terminator of the concatenated apk tar.
+    Ok(strip_end_of_archive(tar_bytes))
 }
 
 fn build_data_tar_gz(root: &Path, mtime: i64) -> Result<Vec<u8>> {

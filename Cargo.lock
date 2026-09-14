@@ -1691,6 +1691,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rpm",
+ "rsa",
  "serde",
  "serde_json",
  "serde_yaml",

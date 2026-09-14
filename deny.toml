@@ -40,10 +40,10 @@ git-fetch-with-cli = true
 multiple-versions = "warn"
 wildcards = "allow"
 deny = [
-  # The vulnerable Rust `rsa` crate (RUSTSEC-2023-0071) must never be
-  # pulled in directly. octocrab uses jwt-aws-lc-rs (BoringSSL C) as
-  # its RSA backend, not this crate.
-  { name = "rsa" },
+  # `rsa` is intentionally NOT banned: `rpm`'s PGP feature pulls it in
+  # transitively (RPM signing) regardless, and the `apk-rsa` Signer uses
+  # it directly for Alpine apk RSA/SHA-1 signing. The RUSTSEC-2023-0071
+  # (Marvin) advisory is an accepted exception in `[advisories]` above.
   # Unmaintained, replaced by `ignore` crate.
   { name = "walkdir" },
 ]

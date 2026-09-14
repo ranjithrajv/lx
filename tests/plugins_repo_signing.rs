@@ -270,6 +270,62 @@ fn apk_package_is_rsa_signed() {
     assert!(extract_sign_member(&std::fs::read(&plain).unwrap()).is_none());
 }
 
+/// Verify a signed apk with a real `apk` binary when one is provided via
+/// `LX_APK_STATIC` (e.g. Alpine's `apk-tools-static`). Skipped otherwise,
+/// so normal runs don't need network or Alpine tooling.
+#[test]
+fn apk_verifies_with_real_apk_static() {
+    let Some(apk_static) = std::env::var_os("LX_APK_STATIC") else {
+        eprintln!("skipping: set LX_APK_STATIC=<path to apk.static> to run");
+        return;
+    };
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    stage(&root);
+    let Some((priv_key, pub_key)) = openssl_keypair(tmp.path()) else {
+        eprintln!("skipping: openssl unavailable");
+        return;
+    };
+
+    let key_name = lx_lib::sign::apk_key_name(&priv_key, "");
+    let member = format!(".SIGN.RSA.{key_name}");
+    let sign = |cgz: &[u8]| lx_lib::sign::rsa_sha1_sign(cgz, &priv_key, None);
+    let apk = tmp.path().join("hello-1.0.0-r1.apk");
+    let signer = lx_lib::apkarchive::ApkSigner {
+        member_name: &member,
+        sign: &sign,
+    };
+    lx_lib::apkarchive::build_with_signature(
+        &root,
+        &apk_meta(),
+        "x86_64",
+        1_735_689_600,
+        &apk,
+        Some(signer),
+    )
+    .unwrap();
+
+    // apk looks the signing key up as `<keys-dir>/<keyname>`.
+    let keys = tmp.path().join("keys");
+    std::fs::create_dir_all(&keys).unwrap();
+    std::fs::copy(&pub_key, keys.join(&key_name)).unwrap();
+
+    let out = std::process::Command::new(&apk_static)
+        .arg("--keys-dir")
+        .arg(&keys)
+        .arg("verify")
+        .arg(&apk)
+        .output()
+        .expect("failed to run apk.static");
+    assert!(
+        out.status.success(),
+        "apk verify failed ({}):\n{}{}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 fn apk_meta() -> lx_lib::apkarchive::PackageMeta<'static> {
     lx_lib::apkarchive::PackageMeta {
         name: "hello",
