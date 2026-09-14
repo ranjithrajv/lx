@@ -13,6 +13,15 @@
 - New `docs/README.md` hub and `docs/decisions/README.md` index; all
   cross-document links updated.
 
+### Evaluation docs
+
+- New `docs/evaluation/` with an index and two evidence-based
+  quality-attribute evaluations: `interoperability.md` (exchange with the
+  packaging ecosystem in both directions) and `composability.md` (the
+  plugin dimensions as selectable, combinable, extensible parts). Each
+  fixes its rubric, names the code and tests behind every verdict, and
+  records the partial/unmet criteria.
+
 ### Real-client and live-endpoint verification
 
 - New `tests/verify_clients.rs` closes the last verification gaps:

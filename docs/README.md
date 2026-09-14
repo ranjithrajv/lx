@@ -31,6 +31,13 @@ pick a section below.
 - [Linux packaging landscape](analysis/landscape.md)
 - [Dogfooding roadmap](analysis/dogfooding-roadmap.md)
 
+## Evaluation
+
+- [Interoperability](evaluation/interoperability.md) — exchange with the
+  rest of the ecosystem, in both directions
+- [Composability](evaluation/composability.md) — independent parts that
+  select, combine, and extend
+
 ## Outreach
 
 - [Outreach posts](outreach/README.md)

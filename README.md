@@ -31,6 +31,7 @@ Full docs live in [`docs/`](docs/README.md):
 - [Package indexes](docs/reference/indexes.md) — `lx index`, repology, coverage
 - [GitHub Action](docs/guides/github-action.md) · [Reproducible builds](docs/guides/reproducible-builds.md)
 - [Architecture](docs/architecture/overview.md) — plugin dimensions, catalog, tooling
+- [Evaluations](docs/evaluation/README.md) — [Interoperability](docs/evaluation/interoperability.md) · [Composability](docs/evaluation/composability.md)
 - [Comparisons](docs/comparison/lx-vs-nfpm.md) · [Landscape](docs/analysis/landscape.md) · [Decisions](docs/decisions/README.md)
 
 ## Requirements
