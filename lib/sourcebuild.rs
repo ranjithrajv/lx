@@ -69,22 +69,19 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             .as_deref()
             .unwrap_or(&cfg.effective_package_format()),
     );
-    // Resolve the packager once; source builds need a format that can wrap a
-    // tree the build system already staged. Which formats those are comes
-    // from the plugins themselves, not a central list.
-    let packager = crate::plugins::get_packager(&format)
-        .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{format}'"))?;
-    if !packager.supports_source_build() {
-        let supported: Vec<&str> = crate::plugins::all_packagers()
+    // Resolve the source-capable packager once; source builds need a format
+    // that can wrap a tree the build system already staged. Which formats
+    // those are comes from the plugin roles themselves, not a central list.
+    let packager = crate::plugins::get_source_packager(&format).ok_or_else(|| {
+        let supported: Vec<&str> = crate::plugins::all_source_packagers()
             .iter()
-            .filter(|p| p.supports_source_build())
             .map(|p| p.name())
             .collect();
-        bail!(
+        anyhow::anyhow!(
             "build_mode: source supports {} (got '{format}')",
             supported.join(", ")
-        );
-    }
+        )
+    })?;
 
     // Suites: configured distributions (or --distributions) minus skips,
     // with expired suites dropped — same pipeline as binary builds. Defaults

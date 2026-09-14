@@ -143,31 +143,22 @@ pub trait Packager: Plugin {
     fn artifact_glob(&self, package: &str) -> String {
         format!("{package}_*.{}", self.file_extension())
     }
+}
 
-    /// Whether this format can wrap a tree the source-build pipeline already
-    /// staged (via a [`BuildSystem`](crate::plugins::build_system::BuildSystem)
-    /// rather than [`stage_install_tree`]).
-    fn supports_source_build(&self) -> bool {
-        false
-    }
-
+/// The source-package role, implemented only by the formats that can produce
+/// one (`deb`, `rpm`, `arch`). Kept separate from [`Packager`] so a binary-only
+/// format (`apk`, `ipk`, `msix`, `osxpkg`) is never handed these methods and
+/// cannot be selected for a source build.
+pub trait SourcePackager: Packager {
     /// Archive an already-populated `staging_root` into this format.
     ///
     /// The source-build pipeline stages via the build system, so it cannot
-    /// call [`build`](Self::build) (which stages from `binary_dir`); it calls
-    /// this instead. Default: the format does not support source builds.
-    fn archive_staged_tree(&self, _ctx: &BuildContext) -> Result<PathBuf> {
-        anyhow::bail!("format '{}' does not support source builds", self.name())
-    }
+    /// call [`build`](Packager::build) (which stages from `binary_dir`); it
+    /// calls this instead.
+    fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf>;
 
-    /// Emit this format's source package from a built binary. Default: the
-    /// format has no source-package representation.
-    fn generate_source_package(&self, _out_dir: &Path, _pkg: &crate::source::Pkg) -> Result<()> {
-        anyhow::bail!(
-            "--source is not supported for '{}' packages (no source-package format)",
-            self.name()
-        )
-    }
+    /// Emit this format's source package from a built binary.
+    fn generate_source_package(&self, out_dir: &Path, pkg: &crate::source::Pkg) -> Result<()>;
 }
 
 /// All known plugins, in registration order.
@@ -183,10 +174,27 @@ pub fn all_packagers() -> Vec<Box<dyn Packager>> {
     ]
 }
 
+/// All packagers that can produce a source package, in registration order.
+/// The `--source` pipeline selects from this set rather than testing a
+/// `supports_source_build()` flag.
+pub fn all_source_packagers() -> Vec<Box<dyn SourcePackager>> {
+    vec![
+        Box::new(deb::DebPackager),
+        Box::new(rpm::RpmPackager),
+        Box::new(arch::ArchPackager),
+    ]
+}
+
 /// Look up a plugin by name (case-insensitive, aliases resolved: `pkg` →
 /// `osxpkg`). Returns `None` for unknown.
 pub fn get_packager(name: &str) -> Option<Box<dyn Packager>> {
     PluginSet::new(all_packagers()).take(&crate::config::canonical_format(name))
+}
+
+/// Look up a source-capable plugin by name (case-insensitive, aliases
+/// resolved). Returns `None` for formats without a source-package role.
+pub fn get_source_packager(name: &str) -> Option<Box<dyn SourcePackager>> {
+    PluginSet::new(all_source_packagers()).take(&crate::config::canonical_format(name))
 }
 
 /// Available plugin names for error messages / help text.

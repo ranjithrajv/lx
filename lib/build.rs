@@ -949,8 +949,8 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             published_at: release.published_at,
             license: license.clone(),
         };
-        crate::plugins::get_packager(&effective_format)
-            .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{effective_format}'"))?
+        crate::plugins::get_source_packager(&effective_format)
+            .ok_or_else(|| anyhow::anyhow!("'{effective_format}' has no source-package format"))?
             .generate_source_package(&args.output, &pkg)?;
     }
 
@@ -1256,8 +1256,8 @@ fn run_local(
                 })
             },
         };
-        crate::plugins::get_packager(effective_format)
-            .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{effective_format}'"))?
+        crate::plugins::get_source_packager(effective_format)
+            .ok_or_else(|| anyhow::anyhow!("'{effective_format}' has no source-package format"))?
             .generate_source_package(&args.output, &pkg)?;
     }
     Ok(())

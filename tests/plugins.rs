@@ -335,18 +335,15 @@ fn default_distributions_differ_by_format() {
 }
 
 #[test]
-fn source_build_support_is_declared_by_packagers() {
+fn source_build_support_is_its_own_packager_role() {
     // Source mode wraps a tree the build system already staged; which
-    // formats can do that is declared by the plugins, so the caller has no
-    // central list to keep in sync when a packager is added.
-    let formats: Vec<&'static str> = all_packagers()
-        .iter()
-        .filter(|p| p.supports_source_build())
-        .map(|p| p.name())
-        .collect();
+    // formats can do that is its own plugin role, so a binary-only format is
+    // never selected and the caller has no central list to keep in sync.
+    let formats: Vec<&'static str> = all_source_packagers().iter().map(|p| p.name()).collect();
     assert_eq!(formats, vec!["deb", "rpm", "arch"]);
-    assert!(!get_packager("apk").unwrap().supports_source_build());
-    assert!(!get_packager("msix").unwrap().supports_source_build());
+    assert!(get_source_packager("deb").is_some());
+    assert!(get_source_packager("apk").is_none());
+    assert!(get_source_packager("msix").is_none());
 }
 
 #[test]

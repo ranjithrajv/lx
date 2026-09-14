@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::{BuildContext, Packager, PACKAGED_FROM_LINE};
+use super::{BuildContext, Packager, SourcePackager, PACKAGED_FROM_LINE};
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
 
@@ -42,11 +42,9 @@ impl Packager for DebPackager {
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
         self.archive_staged_tree(ctx)
     }
+}
 
-    fn supports_source_build(&self) -> bool {
-        true
-    }
-
+impl SourcePackager for DebPackager {
     fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf> {
         build_archive(ctx)
     }

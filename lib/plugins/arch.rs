@@ -9,7 +9,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::{BuildContext, Packager};
+use super::{BuildContext, Packager, SourcePackager};
 use crate::plugins::plugin::plugin_identity;
 
 pub struct ArchPackager;
@@ -41,11 +41,9 @@ impl Packager for ArchPackager {
     fn artifact_glob(&self, package: &str) -> String {
         format!("{package}-*.pkg.tar.*")
     }
+}
 
-    fn supports_source_build(&self) -> bool {
-        true
-    }
-
+impl SourcePackager for ArchPackager {
     fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf> {
         build_archive(ctx)
     }
