@@ -324,6 +324,74 @@ fn apk_verifies_with_real_apk_static() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
+
+    // A signed APKINDEX is consumed by `apk update` against a local repo
+    // laid out as <repo>/<arch>/APKINDEX.tar.gz (+ the package).
+    let arch_dir = tmp.path().join("repo/x86_64");
+    std::fs::create_dir_all(&arch_dir).unwrap();
+    let repo_apk = arch_dir.join(apk.file_name().unwrap());
+    std::fs::copy(&apk, &repo_apk).unwrap();
+    let indexer = get_index_backend("apk").unwrap().make("apk");
+    indexer
+        .build_index(
+            &arch_dir,
+            std::slice::from_ref(&repo_apk),
+            &IndexOptions {
+                suite: "alpine",
+                origin: "test",
+                components: "main",
+                sign_key: None,
+                sign_key_id: "",
+            },
+        )
+        .unwrap();
+    indexer
+        .sign_index(
+            &arch_dir,
+            &IndexOptions {
+                suite: "alpine",
+                origin: "test",
+                components: "main",
+                sign_key: Some(&priv_key),
+                sign_key_id: "",
+            },
+        )
+        .unwrap();
+
+    let root = tmp.path().join("apkroot");
+    std::fs::create_dir_all(&root).unwrap();
+    // Initialize the (empty) apk database so `update` can write its cache.
+    let _ = std::process::Command::new(&apk_static)
+        .arg("--root")
+        .arg(&root)
+        .arg("--arch")
+        .arg("x86_64")
+        .arg("--no-network")
+        .arg("add")
+        .arg("--initdb")
+        .output();
+    let out = std::process::Command::new(&apk_static)
+        .arg("--root")
+        .arg(&root)
+        .arg("--arch")
+        .arg("x86_64")
+        .arg("--keys-dir")
+        .arg(&keys)
+        .arg("--repositories-file")
+        .arg("/dev/null")
+        .arg("--repository")
+        .arg(tmp.path().join("repo"))
+        .arg("--no-network")
+        .arg("update")
+        .output()
+        .expect("failed to run apk.static");
+    assert!(
+        out.status.success(),
+        "apk update failed ({}):\n{}{}",
+        out.status,
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 fn apk_meta() -> lx_lib::apkarchive::PackageMeta<'static> {

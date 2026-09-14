@@ -41,7 +41,7 @@ impl Packager for IpkPackager {
         let job = ctx.job;
 
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let _conffiles = super::apply_contents(cfg, ctx.staging_root, "ipk")?;
+        let conffiles = super::apply_contents(cfg, ctx.staging_root, "ipk")?;
 
         let version = ctx.debian_version.to_string();
         let build = if ctx.build_version.trim().is_empty() {
@@ -55,10 +55,31 @@ impl Packager for IpkPackager {
 
         let control = render_control(cfg, ctx, &full_version, arch);
 
+        // opkg maintainer scripts (`preinst`/`postinst`/`prerm`/`postrm`)
+        // plus a `conffiles` list, all as control.tar.gz members.
+        let mut extras: Vec<lx_lib::debarchive::ControlMember> =
+            super::maintainer_script_members(ctx)?
+                .into_iter()
+                .filter(|m| matches!(m.name.as_str(), "preinst" | "postinst" | "prerm" | "postrm"))
+                .collect();
+        if !conffiles.is_empty() {
+            extras.push(lx_lib::debarchive::ControlMember {
+                name: "conffiles".to_string(),
+                content: format!("{}\n", conffiles.join("\n")).into_bytes(),
+                mode: 0o644,
+            });
+        }
+
         let out_dir = super::output_dir(ctx.staging_root)?;
         let dest = out_dir.join(&file_name);
-        lx_lib::ipkarchive::build(ctx.staging_root, control.as_bytes(), ctx.mtime, &dest)
-            .with_context(|| format!("failed to build {}", dest.display()))?;
+        lx_lib::ipkarchive::build_with_scripts(
+            ctx.staging_root,
+            control.as_bytes(),
+            &extras,
+            ctx.mtime,
+            &dest,
+        )
+        .with_context(|| format!("failed to build {}", dest.display()))?;
 
         Ok(dest)
     }

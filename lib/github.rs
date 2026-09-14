@@ -187,6 +187,26 @@ pub struct GitHubAssetRaw {
     #[serde(default)]
     pub size: Option<u64>,
     pub browser_download_url: String,
+    /// GitHub's inline asset digest (`"sha256:<hex>"`), when present.
+    #[serde(default)]
+    pub digest: Option<String>,
+}
+
+/// Parse a provider asset `digest` (`"sha256:<hex>"`) into a checksums map
+/// (`algorithm → hex`). Returns an empty map when the digest is absent or
+/// malformed.
+pub fn digest_checksums(digest: Option<&str>) -> std::collections::BTreeMap<String, String> {
+    let mut m = std::collections::BTreeMap::new();
+    if let Some(d) = digest {
+        if let Some((algo, hex)) = d.split_once(':') {
+            let algo = algo.trim().to_ascii_lowercase();
+            let hex = hex.trim().to_ascii_lowercase();
+            if !algo.is_empty() && !hex.is_empty() {
+                m.insert(algo, hex);
+            }
+        }
+    }
+    m
 }
 
 impl From<GitHubReleaseRaw> for Release {
@@ -200,6 +220,7 @@ impl From<GitHubReleaseRaw> for Release {
                 .assets
                 .into_iter()
                 .map(|a| Asset {
+                    checksums: digest_checksums(a.digest.as_deref()),
                     name: a.name,
                     size: a.size,
                     browser_download_url: a.browser_download_url,
@@ -299,4 +320,9 @@ pub struct Asset {
     pub name: String,
     pub size: Option<u64>,
     pub browser_download_url: String,
+    /// Inline checksums the provider already published, as algorithm → hex
+    /// (e.g. `sha256` from a GitHub/Gitea asset `digest`, or `md5` from a
+    /// SourceForge feed). Verified after download when no sidecar is found.
+    #[serde(default)]
+    pub checksums: std::collections::BTreeMap<String, String>,
 }

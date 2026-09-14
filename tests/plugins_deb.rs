@@ -13,6 +13,7 @@ fn job() -> lx_lib::build::ResolvedJob {
             name: "pkg.tar.gz".into(),
             size: None,
             browser_download_url: String::new(),
+            checksums: Default::default(),
         },
         tag: "v1.0.0".into(),
         published_at: Some(1_735_689_600), // 2025-01-01T00:00:00Z

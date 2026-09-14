@@ -90,6 +90,67 @@ pub fn verify_sha256(path: &Path, expected: &str) -> Result<()> {
     Ok(())
 }
 
+/// Verify a downloaded file against an **inline** checksum the provider
+/// published (GitHub/Gitea asset `digest`, SourceForge feed `md5`).
+///
+/// Returns the algorithm that matched, or `None` when the map has no
+/// supported entry. A mismatch is always a hard `Err`.
+pub fn check_inline(
+    checksums: &std::collections::BTreeMap<String, String>,
+    path: &Path,
+) -> Result<Option<&'static str>> {
+    if let Some(h) = checksums.get("sha256") {
+        verify_sha256(path, h)?;
+        return Ok(Some("sha256"));
+    }
+    if let Some(h) = checksums.get("sha512") {
+        verify_sha512(path, h)?;
+        return Ok(Some("sha512"));
+    }
+    if let Some(h) = checksums.get("md5") {
+        verify_md5(path, h)?;
+        return Ok(Some("md5"));
+    }
+    Ok(None)
+}
+
+/// Verify a downloaded file against an expected SHA-512 digest (a prefix is
+/// accepted, like [`verify_sha256`]).
+pub fn verify_sha512(path: &Path, expected: &str) -> Result<()> {
+    let actual = sha512_file(path)?.to_ascii_lowercase();
+    let expected = expected.trim().to_ascii_lowercase();
+    if expected.len() < 8 {
+        return Err(anyhow!("checksum too short: '{expected}'"));
+    }
+    if !actual.starts_with(&expected[..expected.len()]) {
+        return Err(anyhow!(
+            "checksum mismatch for '{}':\n  expected {expected}\n  actual   {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Verify a downloaded file against an expected MD5 digest (a prefix is
+/// accepted). MD5 is what SourceForge publishes inline; it is weaker than
+/// SHA-256 but still catches corruption and most tampering.
+pub fn verify_md5(path: &Path, expected: &str) -> Result<()> {
+    let data =
+        std::fs::read(path).with_context(|| format!("failed to read '{}'", path.display()))?;
+    let actual = format!("{:x}", md5::compute(&data)).to_ascii_lowercase();
+    let expected = expected.trim().to_ascii_lowercase();
+    if expected.len() < 8 {
+        return Err(anyhow!("checksum too short: '{expected}'"));
+    }
+    if !actual.starts_with(&expected[..expected.len()]) {
+        return Err(anyhow!(
+            "checksum mismatch for '{}':\n  expected {expected}\n  actual   {actual}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Outcome of probing for a live sidecar checksum next to a release asset.
 #[derive(Debug)]
 pub enum SidecarCheck {

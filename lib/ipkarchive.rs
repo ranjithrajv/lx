@@ -15,10 +15,25 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
+use crate::debarchive::ControlMember;
+
 /// Build an `.ipk` from a staged filesystem tree and a rendered control
 /// file. `control` is the already-rendered OpenWrt control content.
 pub fn build(root: &Path, control: &[u8], mtime: i64, ipk_path: &Path) -> Result<()> {
-    crate::debarchive::build_with_compression(root, control, mtime, ipk_path, "gzip")
+    build_with_scripts(root, control, &[], mtime, ipk_path)
+}
+
+/// Build an `.ipk` with extra control members: opkg maintainer scripts
+/// (`preinst`/`postinst`/`prerm`/`postrm`) and a `conffiles` list. Extra
+/// members ride along in `control.tar.gz`, exactly like a `.deb`.
+pub fn build_with_scripts(
+    root: &Path,
+    control: &[u8],
+    extras: &[ControlMember],
+    mtime: i64,
+    ipk_path: &Path,
+) -> Result<()> {
+    crate::debarchive::build_full(root, control, mtime, ipk_path, "gzip", extras, None)
         .with_context(|| format!("failed to build {}", ipk_path.display()))
 }
 

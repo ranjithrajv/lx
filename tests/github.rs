@@ -15,6 +15,7 @@ fn maps_raw_release_to_common() {
             size: Some(123),
             browser_download_url: "https://github.com/.../eza_x86_64-unknown-linux-gnu.tar.gz"
                 .into(),
+            digest: Some("sha256:deadbeef".into()),
         }],
         body: None,
     };
@@ -25,6 +26,10 @@ fn maps_raw_release_to_common() {
     assert_eq!(r.assets[0].name, "eza_x86_64-unknown-linux-gnu.tar.gz");
     assert_eq!(r.assets[0].size, Some(123));
     assert_eq!(r.published_at, Some(1_735_689_600));
+    assert_eq!(
+        r.assets[0].checksums.get("sha256").map(String::as_str),
+        Some("deadbeef")
+    );
 }
 
 #[test]

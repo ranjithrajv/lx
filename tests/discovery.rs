@@ -9,6 +9,7 @@ fn asset(name: &str) -> Asset {
         name: name.to_string(),
         size: None,
         browser_download_url: format!("https://github.com/x/y/releases/download/v1/{name}"),
+        checksums: Default::default(),
     }
 }
 

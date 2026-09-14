@@ -264,6 +264,12 @@ pub fn verify_sidecar_or_require_flag(
     allow_unverified: bool,
 ) -> Result<()> {
     use lx_lib::checksum::SidecarCheck;
+    // Provider-published inline checksums are checked before probing for a
+    // sidecar (no extra network round-trip).
+    if let Some(algo) = lx_lib::checksum::check_inline(&asset.checksums, path)? {
+        println!("    ✓ checksum verified ({algo})");
+        return Ok(());
+    }
     match lx_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)? {
         SidecarCheck::Verified => {
             println!("    ✓ checksum verified");

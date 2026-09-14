@@ -55,6 +55,11 @@ fn parses_rss_items_into_sorted_assets() {
     assert!(assets[0]
         .browser_download_url
         .ends_with("/7z2603-linux-x64.tar.xz/download"));
+    // The feed's inline md5 is carried on the asset for verification.
+    assert_eq!(
+        assets[0].checksums.get("md5").map(String::as_str),
+        Some("e8ad00bc2b732b7f030949ffecd1dcc0")
+    );
 }
 
 #[test]

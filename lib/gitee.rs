@@ -183,6 +183,7 @@ impl GiteeClient {
                 name: a.name,
                 size: a.size,
                 browser_download_url: a.browser_download_url,
+                checksums: Default::default(),
             })
             .collect();
 

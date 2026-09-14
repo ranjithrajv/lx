@@ -18,6 +18,25 @@
 - The old names keep working as hidden aliases, so existing scripts and
   `action.yml` are unaffected.
 
+### Plugin caveat fixes: scripts, apk index checksum, inline verification
+
+- **apk/ipk maintainer scripts**: `scripts:` (pre/post-install,
+  pre/post-remove, and the upgrade hooks) are now emitted for apk
+  (`.pre-install`, `.post-install`, `.pre-deinstall`, `.post-deinstall`,
+  `.pre-upgrade`, `.post-upgrade`) and ipk (`preinst`/`postinst`/`prerm`/
+  `postrm`). ipk also writes a `conffiles` control member from config-typed
+  `contents:` entries.
+- **apk `APKINDEX` `C:` checksum** is now the `Q1`-prefixed base64 SHA-1 of
+  the package's compressed *control* segment (not the whole file), and the
+  indexer reads `.PKGINFO` from the control segment of signed packages.
+  Verified end-to-end: `apk update` from an lx-generated, RSA-signed local
+  repository succeeds under real `apk-tools`.
+- **Inline checksum verification**: `Asset` carries provider-published
+  checksums — the GitHub/Gitea asset `digest` (`sha256:…`) and SourceForge's
+  feed `md5` — verified after download, before sidecar probing, so those
+  sources no longer fail closed for want of a `.sha256` sidecar. Build
+  provenance records the method as `inline`.
+
 ### `lx info` and host-aware defaults
 
 - New `lx info` command auto-detects the host OS and package system

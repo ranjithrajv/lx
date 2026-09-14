@@ -295,6 +295,7 @@ mod tests {
             name: name.to_string(),
             browser_download_url: format!("https://example.invalid/{name}"),
             size: Some(1),
+            checksums: Default::default(),
         }
     }
 

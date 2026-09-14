@@ -308,13 +308,13 @@ Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/pack
 
 *Extension* `apk`, *defaults* `alpine` (rolling), permissive matrix.
 
-Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar.gz]`, where the control member holds `.PKGINFO` and the data member holds the payload. `pkgver` is `{version}-r{build_version}` and `datahash` pins the SHA-256 of the compressed data member. Arch maps Debian → Alpine (`amd64→x86_64`, `armhf→armv7`, `i386→x86`). Because Alpine is musl-only, this is the natural output for `musl: true` builds. When `--sign-key` is an RSA private key, the control segment is signed and a `.SIGN.RSA.<keyname>` segment is prepended; unsigned packages install with `apk add --allow-untrusted`. (Signed packages are verified against real `apk-tools` in the test suite when `LX_APK_STATIC` points at an `apk.static`.)
+Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar.gz]`, where the control member holds `.PKGINFO` and the data member holds the payload. `pkgver` is `{version}-r{build_version}` and `datahash` pins the SHA-256 of the compressed data member. Arch maps Debian → Alpine (`amd64→x86_64`, `armhf→armv7`, `i386→x86`). Because Alpine is musl-only, this is the natural output for `musl: true` builds. `scripts:` entries are staged as dotted control-segment files (`.pre-install`, `.post-install`, `.pre-deinstall`, `.post-deinstall`, `.pre-upgrade`, `.post-upgrade`). When `--sign-key` is an RSA private key, the control segment is signed and a `.SIGN.RSA.<keyname>` segment is prepended; unsigned packages install with `apk add --allow-untrusted`. (Signed packages are verified against real `apk-tools` in the test suite when `LX_APK_STATIC` points at an `apk.static`.)
 
 ### ipk — `lib/plugins/ipk.rs` + `lib/ipkarchive.rs`
 
 *Extension* `ipk`, *defaults* `openwrt`, permissive matrix.
 
-OpenWrt/opkg `.ipk` shares the `.deb` `ar` layout (`debian-binary` + `control.tar.gz` + `data.tar.gz`), so archiving delegates to `debarchive` and only the control dialect (`Package/Version/Architecture/Installed-Size/License/Depends/Provides/Conflicts`) and filename (`name_version_arch.ipk`) differ. Gzip is pinned regardless of `compression:` since it is the only format opkg has always accepted.
+OpenWrt/opkg `.ipk` shares the `.deb` `ar` layout (`debian-binary` + `control.tar.gz` + `data.tar.gz`), so archiving delegates to `debarchive` and only the control dialect (`Package/Version/Architecture/Installed-Size/License/Depends/Provides/Conflicts`) and filename (`name_version_arch.ipk`) differ. `scripts:` are emitted as `preinst`/`postinst`/`prerm`/`postrm` control members, and config-typed `contents:` entries are listed in a `conffiles` member. Gzip is pinned regardless of `compression:` since it is the only format opkg has always accepted.
 
 ## 7. BuildSystem Plugins (Compile Source)
 
@@ -426,7 +426,7 @@ Bootstraps `configure` via `autogen.sh` or `autoreconf -fi` when the release tar
 * Wraps `SourceForgeClient` (no auth).
 * Projects are identified by a **bare name** (`github_repo: sevenzip`), not `owner/repo`; `parse_url` accepts `https://sourceforge.net/projects/{project}/…` and `https://{project}.sourceforge.net/`.
 * `latest_release` → parse `GET /projects/{project}/rss?limit=100` into a pseudo-`Release {tag_name: "latest", assets}` (each `<item>` → asset named by the path basename, with `filesize`); `release_by_tag` returns the same file set tagged with the requested version and lets `match_assets` select by filename.
-* SourceForge publishes no `.sha256` sidecars, so builds from it are fail-closed unless `--allow-unverified` or a pinned `package.lock` is supplied.
+* The feed's inline `md5` is carried on each asset and verified after download (no `.sha256` sidecar needed).
 
 Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lx_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`ForgeSource::raw_get` → `RawGetter`).
 

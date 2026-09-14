@@ -65,6 +65,7 @@ pub fn synthetic_release(
                 name,
                 size: None,
                 browser_download_url: url,
+                checksums: Default::default(),
             }
         })
         .collect();

@@ -81,40 +81,59 @@ impl Packager for ApkPackager {
             provides: &provides,
             replaces: &replaces,
         };
+        // apk install scripts go in the control segment (dotted names).
+        let mut control_owned: Vec<(String, Vec<u8>, u32)> = Vec::new();
+        for m in super::maintainer_script_members(ctx)? {
+            let apk_name = match m.name.as_str() {
+                "preinst" => ".pre-install",
+                "postinst" => ".post-install",
+                "prerm" => ".pre-deinstall",
+                "postrm" => ".post-deinstall",
+                "preupgrade" => ".pre-upgrade",
+                "postupgrade" => ".post-upgrade",
+                _ => continue,
+            };
+            control_owned.push((apk_name.to_string(), m.content, 0o755));
+        }
+        let control_files: Vec<lx_lib::apkarchive::ApkControlFile> = control_owned
+            .iter()
+            .map(|(name, content, mode)| lx_lib::apkarchive::ApkControlFile {
+                name: name.as_str(),
+                content,
+                mode: *mode,
+            })
+            .collect();
+
         // apk v2 signing: sign the compressed control segment and prepend a
         // `.SIGN.RSA.<keyname>` segment. `sign_key` must be an RSA private
         // key (PEM); `sign_key_id`, when set, is the key name in the member.
-        let signed = if let Some(key) = ctx.sign_key {
-            let member = format!(
+        let member;
+        let sign;
+        let signer = if let Some(key) = ctx.sign_key {
+            member = format!(
                 ".SIGN.RSA.{}",
                 lx_lib::sign::apk_key_name(key, ctx.sign_key_id)
             );
-            let sign = |control_gz: &[u8]| {
+            sign = |control_gz: &[u8]| {
                 lx_lib::sign::rsa_sha1_sign(control_gz, key, ctx.sign_passphrase)
             };
-            let signer = lx_lib::apkarchive::ApkSigner {
+            Some(lx_lib::apkarchive::ApkSigner {
                 member_name: &member,
                 sign: &sign,
-            };
-            lx_lib::apkarchive::build_with_signature(
-                ctx.staging_root,
-                &meta,
-                arch,
-                ctx.mtime,
-                &dest,
-                Some(signer),
-            )
+            })
         } else {
-            lx_lib::apkarchive::build_with_signature(
-                ctx.staging_root,
-                &meta,
-                arch,
-                ctx.mtime,
-                &dest,
-                None,
-            )
+            None
         };
-        signed.with_context(|| format!("failed to build {}", dest.display()))?;
+        lx_lib::apkarchive::build_full(
+            ctx.staging_root,
+            &meta,
+            arch,
+            ctx.mtime,
+            &dest,
+            signer,
+            &control_files,
+        )
+        .with_context(|| format!("failed to build {}", dest.display()))?;
 
         Ok(dest)
     }

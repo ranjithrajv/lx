@@ -195,6 +195,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
                 name: String::new(),
                 browser_download_url: String::new(),
                 size: None,
+                checksums: Default::default(),
             },
             tag: version.clone(),
             published_at: None,

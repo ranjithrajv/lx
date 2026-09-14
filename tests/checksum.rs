@@ -158,3 +158,56 @@ fn real_mismatch_is_never_reported_as_not_found() {
         "expected a checksum-mismatch error, got: {msg}"
     );
 }
+
+#[test]
+fn check_inline_verifies_supported_algorithms() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("asset");
+    std::fs::write(&path, b"hello world").unwrap();
+
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(
+        "md5".to_string(),
+        format!("{:x}", md5::compute(b"hello world")),
+    );
+    assert_eq!(
+        lx_lib::checksum::check_inline(&m, &path).unwrap(),
+        Some("md5")
+    );
+
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(
+        "sha256".to_string(),
+        lx_lib::checksum::sha256_file(&path).unwrap(),
+    );
+    assert_eq!(
+        lx_lib::checksum::check_inline(&m, &path).unwrap(),
+        Some("sha256")
+    );
+
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(
+        "sha512".to_string(),
+        lx_lib::checksum::sha512_file(&path).unwrap(),
+    );
+    assert_eq!(
+        lx_lib::checksum::check_inline(&m, &path).unwrap(),
+        Some("sha512")
+    );
+
+    // An empty map has no supported entry.
+    assert_eq!(
+        lx_lib::checksum::check_inline(&Default::default(), &path).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn check_inline_mismatch_is_a_hard_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("asset");
+    std::fs::write(&path, b"hello world").unwrap();
+    let mut m = std::collections::BTreeMap::new();
+    m.insert("sha256".to_string(), "00".repeat(32));
+    assert!(lx_lib::checksum::check_inline(&m, &path).is_err());
+}

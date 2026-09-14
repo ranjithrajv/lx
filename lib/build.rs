@@ -743,6 +743,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                     name,
                     size: None,
                     browser_download_url: url,
+                    checksums: Default::default(),
                 },
             );
         }
@@ -1114,6 +1115,7 @@ fn run_local(
         name: asset_name,
         size: payload_path.metadata().ok().map(|m| m.len()),
         browser_download_url: String::new(),
+        checksums: Default::default(),
     };
 
     let mut jobs: Vec<ResolvedJob> = Vec::new();
@@ -1455,6 +1457,7 @@ fn asset_from_name(release: &lx_lib::github::Release, name: &str) -> Asset {
             name: name.to_string(),
             size: None,
             browser_download_url: String::new(),
+            checksums: Default::default(),
         })
 }
 
@@ -2120,6 +2123,9 @@ pub enum VerifyMethod {
     Pinned,
     /// Matched a `package.lock` entry for this architecture.
     Locked,
+    /// Matched an inline checksum the provider published (GitHub/Gitea asset
+    /// `digest`, SourceForge feed hash).
+    Inline,
     /// Matched a live `.sha256`/`.sha256sum` sidecar next to the asset.
     Sidecar,
     /// No pin and no sidecar existed; proceeded anyway because
@@ -2134,6 +2140,7 @@ impl VerifyMethod {
         match self {
             VerifyMethod::Pinned => "pinned",
             VerifyMethod::Locked => "locked",
+            VerifyMethod::Inline => "inline",
             VerifyMethod::Sidecar => "sidecar",
             VerifyMethod::UnverifiedAllowed => "unverified (--allow-unverified)",
             VerifyMethod::SkippedNoVerify => "skipped (--no-verify)",
@@ -2157,6 +2164,12 @@ fn verify_sidecar_or_require_flag(
     allow_unverified: bool,
 ) -> Result<VerifyMethod> {
     use lx_lib::checksum::SidecarCheck;
+    // Provider-published inline checksums first (no network round-trip), then
+    // a live sidecar probe.
+    if let Some(algo) = lx_lib::checksum::check_inline(&asset.checksums, path)? {
+        println!("    ✓ checksum verified ({algo})");
+        return Ok(VerifyMethod::Inline);
+    }
     match lx_lib::checksum::check_sidecar(client, &asset.browser_download_url, &asset.name, path)? {
         SidecarCheck::Verified => {
             println!("    ✓ checksum verified");

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
 use super::{parse_key_value, Capabilities, IndexOptions, PackageIndex};
@@ -40,7 +40,9 @@ impl PackageIndex for ApkIndexer {
             let size = std::fs::metadata(apk)?.len();
             // Best-effort package checksum (sha1 of the artifact, base64),
             // `Q1` marks the APKv2 sha1 format.
-            let csum = apk_checksum(apk)?;
+            // `C:` is the `Q1`-prefixed SHA-1 of the compressed control
+            // segment (not the whole file), as apk computes it.
+            let csum = lx_lib::apkarchive::control_checksum(apk)?;
             index.push_str(&format!("C:{csum}\n"));
             index.push_str(&format!("P:{name}\n"));
             index.push_str(&format!("V:{version}\n"));
@@ -116,55 +118,25 @@ fn append<W: std::io::Write>(
     Ok(())
 }
 
-fn apk_checksum(apk: &Path) -> Result<String> {
-    use base64::Engine as _;
-    use sha1::Digest;
-    let data = std::fs::read(apk)?;
-    let mut h = sha1::Sha1::new();
-    h.update(&data);
-    Ok(format!(
-        "Q1{}",
-        base64::engine::general_purpose::STANDARD.encode(h.finalize())
-    ))
-}
-
 struct ApkInfo {
     single: std::collections::BTreeMap<String, String>,
     depends: Vec<String>,
     provides: Vec<String>,
 }
 
-/// Read `.PKGINFO` from the first gzip member (the control tar) of an `.apk`.
+/// Read `.PKGINFO` from an `.apk`'s control segment. Handles signed
+/// packages, whose first gzip member is the `.SIGN.*` segment.
 fn read_apk_pkginfo(apk: &Path) -> Result<ApkInfo> {
-    use std::io::Read;
-    let data = std::fs::read(apk).with_context(|| format!("reading '{}'", apk.display()))?;
-    let mut gz = flate2::read::GzDecoder::new(data.as_slice());
-    let mut control = Vec::new();
-    // GzDecoder stops after the first member, which is the control tar.
-    gz.read_to_end(&mut control)
-        .with_context(|| format!("decompressing control member of '{}'", apk.display()))?;
-    let mut tar = tar::Archive::new(control.as_slice());
-    for member in tar.entries()? {
-        let mut member = member?;
-        let path = member.path()?.to_string_lossy().to_string();
-        if path != ".PKGINFO" {
-            continue;
-        }
-        let mut text = String::new();
-        member.read_to_string(&mut text)?;
-        let single = parse_key_value(&text);
-        let collect = |prefix: &str| -> Vec<String> {
-            text.lines()
-                .filter_map(|l| l.trim().strip_prefix(prefix).map(str::to_string))
-                .collect()
-        };
-        let depends = collect("depend = ");
-        let provides = collect("provides = ");
-        return Ok(ApkInfo {
-            single,
-            depends,
-            provides,
-        });
-    }
-    bail!("'{}' has no .PKGINFO member", apk.display())
+    let text = lx_lib::apkarchive::read_pkginfo(apk)?;
+    let single = parse_key_value(&text);
+    let collect = |prefix: &str| -> Vec<String> {
+        text.lines()
+            .filter_map(|l| l.trim().strip_prefix(prefix).map(str::to_string))
+            .collect()
+    };
+    Ok(ApkInfo {
+        single,
+        depends: collect("depend = "),
+        provides: collect("provides = "),
+    })
 }

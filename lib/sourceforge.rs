@@ -150,6 +150,9 @@ pub fn parse_rss_assets(xml: &str) -> Result<Vec<Asset>> {
     let title_re = Regex::new(r"(?s)<title>(.*?)</title>").expect("valid title regex");
     let link_re = Regex::new(r"(?s)<link>(.*?)</link>").expect("valid link regex");
     let size_re = Regex::new(r#"filesize="(\d+)""#).expect("valid filesize regex");
+    // The feed publishes an inline digest: `<media:hash algo="md5">…</media:hash>`.
+    let hash_re = Regex::new(r#"<media:hash algo="([^"]+)">([0-9a-fA-F]+)</media:hash>"#)
+        .expect("valid media:hash regex");
 
     let mut assets = Vec::new();
     for cap in item_re.captures_iter(xml) {
@@ -180,7 +183,12 @@ pub fn parse_rss_assets(xml: &str) -> Result<Vec<Asset>> {
         let size = size_re
             .captures(item)
             .and_then(|c| c[1].parse::<u64>().ok());
+        let mut checksums = std::collections::BTreeMap::new();
+        if let Some(c) = hash_re.captures(item) {
+            checksums.insert(c[1].to_ascii_lowercase(), c[2].to_ascii_lowercase());
+        }
         assets.push(Asset {
+            checksums,
             name,
             size,
             browser_download_url: link,

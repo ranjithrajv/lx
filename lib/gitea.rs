@@ -152,6 +152,7 @@ impl GiteaClient {
             .assets
             .into_iter()
             .map(|a| Asset {
+                checksums: crate::github::digest_checksums(a.digest.as_deref()),
                 name: a.name,
                 size: a.size,
                 browser_download_url: a.browser_download_url,
@@ -258,6 +259,9 @@ pub struct GiteaAssetRaw {
     pub browser_download_url: String,
     #[serde(default)]
     pub size: Option<u64>,
+    /// Gitea/Forgejo inline asset digest (`"sha256:<hex>"`), when present.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 /// Uniform construction for the `ForgeSource` glue (`ClientNew`).

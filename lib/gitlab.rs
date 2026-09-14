@@ -159,6 +159,7 @@ impl GitlabClient {
                 name: l.name,
                 size: None,
                 browser_download_url: l.direct_asset_url.unwrap_or(l.url),
+                checksums: Default::default(),
             })
             .collect();
 

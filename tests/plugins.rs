@@ -259,6 +259,7 @@ fn deb_and_rpm_plugins_build_valid_archives() {
             name: "hello.tar.gz".into(),
             size: None,
             browser_download_url: "".into(),
+            checksums: Default::default(),
         };
         let job = lx_lib::build::ResolvedJob {
             dist: match format {
@@ -373,6 +374,7 @@ fn deb_with_new_control_fields_and_compression_is_valid() {
         name: "hello.tar.gz".into(),
         size: None,
         browser_download_url: "".into(),
+        checksums: Default::default(),
     };
     let job = lx_lib::build::ResolvedJob {
         dist: "trixie".into(),
@@ -551,6 +553,7 @@ fn deb_contents_scripts_conffiles_end_to_end() {
         name: "hello.tar.gz".into(),
         size: None,
         browser_download_url: "".into(),
+        checksums: Default::default(),
     };
     let job = lx_lib::build::ResolvedJob {
         dist: "trixie".into(),
@@ -724,6 +727,7 @@ fn arch_plugin_emits_relations_and_backup() {
             name: "hello.tar.gz".into(),
             size: None,
             browser_download_url: String::new(),
+            checksums: Default::default(),
         },
         tag: "v1.0.0".into(),
         published_at: Some(1_735_689_600),

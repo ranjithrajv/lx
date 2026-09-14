@@ -220,6 +220,7 @@ impl GerritClient {
                 name: asset_name,
                 size: None,
                 browser_download_url: download_url,
+                checksums: Default::default(),
             }],
             published_at: tag
                 .created

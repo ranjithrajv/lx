@@ -139,6 +139,7 @@ impl BitbucketClient {
                     .and_then(|l| l.download)
                     .and_then(|d| d.href)
                     .unwrap_or_default(),
+                checksums: Default::default(),
             })
             .collect();
 

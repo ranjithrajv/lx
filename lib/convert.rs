@@ -1185,6 +1185,7 @@ fn build_target(
             name: args.input.to_string_lossy().to_string(),
             size: None,
             browser_download_url: String::new(),
+            checksums: Default::default(),
         },
         tag: meta.version.clone(),
         published_at: None,
