@@ -243,3 +243,44 @@ fn osxpkg_native_signing_adds_a_xar_signature() {
         "signature should embed the certificate: {toc}"
     );
 }
+
+#[test]
+fn osxpkg_output_is_deterministic_for_a_fixed_mtime() {
+    // The payload cpio must stamp every entry with the build mtime, not the
+    // staged file's own mtime, or the same inputs produce different bytes.
+    let tmp = tempfile::tempdir().unwrap();
+    let stage = tmp.path().join("stage/usr/bin");
+    std::fs::create_dir_all(&stage).unwrap();
+    std::fs::write(stage.join("mytool"), fake_elf()).unwrap();
+
+    let info = lx_lib::osxpkgarchive::OsxPackageInfo {
+        identifier: "com.example.mytool",
+        version: "1.2.3",
+        install_location: "/usr/local",
+        postinstall_action: "none",
+        scripts: &[],
+    };
+    let out1 = tmp.path().join("a.pkg");
+    let out2 = tmp.path().join("b.pkg");
+    lx_lib::osxpkgarchive::build(
+        tmp.path().join("stage").as_path(),
+        &info,
+        &[],
+        &out1,
+        1_735_689_600,
+    )
+    .unwrap();
+    lx_lib::osxpkgarchive::build(
+        tmp.path().join("stage").as_path(),
+        &info,
+        &[],
+        &out2,
+        1_735_689_600,
+    )
+    .unwrap();
+    assert_eq!(
+        std::fs::read(&out1).unwrap(),
+        std::fs::read(&out2).unwrap(),
+        "osxpkg output must be byte-identical for the same mtime"
+    );
+}

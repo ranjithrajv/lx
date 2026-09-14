@@ -52,7 +52,7 @@ pub fn build(
     out: &Path,
     mtime: i64,
 ) -> Result<()> {
-    let (cpio, file_count, installed_kbytes) = payload_cpio(root)?;
+    let (cpio, file_count, installed_kbytes) = payload_cpio(root, mtime)?;
     let payload_gz = gzip(&cpio)?;
     let package_info = render_package_info(info, file_count, installed_kbytes);
     let package_info_bytes = package_info.into_bytes();
@@ -122,9 +122,9 @@ fn render_package_info(
 
 /// Walk `root`, producing a newc `cpio` archive with `./`-prefixed relative
 /// paths. Returns (cpio bytes, file count, installed KiB).
-fn payload_cpio(root: &Path) -> Result<(Vec<u8>, u64, u64)> {
+fn payload_cpio(root: &Path, mtime: i64) -> Result<(Vec<u8>, u64, u64)> {
     let mut entries: Vec<CpioEntry> = Vec::new();
-    collect_cpio(root, root, &mut entries)?;
+    collect_cpio(root, root, &mut entries, mtime.max(0) as u32)?;
     entries.sort_by(|a, b| a.name.cmp(&b.name));
 
     let mut out = Vec::new();
@@ -164,7 +164,7 @@ struct CpioEntry {
     data: Option<Vec<u8>>,
 }
 
-fn collect_cpio(root: &Path, dir: &Path, out: &mut Vec<CpioEntry>) -> Result<()> {
+fn collect_cpio(root: &Path, dir: &Path, out: &mut Vec<CpioEntry>, mtime: u32) -> Result<()> {
     let mut children: Vec<_> = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
     children.sort_by_key(|e| e.file_name());
     for child in children {
@@ -172,12 +172,6 @@ fn collect_cpio(root: &Path, dir: &Path, out: &mut Vec<CpioEntry>) -> Result<()>
         let rel = path.strip_prefix(root).expect("walked path under root");
         let name = format!("./{}", rel.to_string_lossy());
         let meta = std::fs::symlink_metadata(&path)?;
-        let mtime = meta
-            .modified()
-            .ok()
-            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as u32)
-            .unwrap_or(0);
         let ft = meta.file_type();
         if ft.is_symlink() {
             let target = std::fs::read_link(&path)?;
@@ -200,7 +194,7 @@ fn collect_cpio(root: &Path, dir: &Path, out: &mut Vec<CpioEntry>) -> Result<()>
                 link: String::new(),
                 data: None,
             });
-            collect_cpio(root, &path, out)?;
+            collect_cpio(root, &path, out, mtime)?;
         } else if ft.is_file() {
             let mode = {
                 use std::os::unix::fs::PermissionsExt;
