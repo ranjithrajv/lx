@@ -680,15 +680,12 @@ pub fn pkg_installed_version(package: &str) -> Option<String> {
                 return None;
             }
             let text = String::from_utf8(out.stdout).ok()?;
-            for line in text.lines() {
-                if let Some(v) = line.strip_prefix("Version         : ") {
-                    let v = v.trim().to_string();
-                    if !v.is_empty() {
-                        return Some(v);
-                    }
-                }
+            let v = pacman_field(&text, "Version")?;
+            if v.is_empty() {
+                None
+            } else {
+                Some(v)
             }
-            None
         }
     }
 }
@@ -752,42 +749,7 @@ pub fn pkg_depends(package: &str) -> Vec<String> {
             let Ok(text) = String::from_utf8(out.stdout) else {
                 return Vec::new();
             };
-            let mut in_deps = false;
-            let mut deps = Vec::new();
-            for line in text.lines() {
-                if line.starts_with("Depends On     : ") {
-                    let val = line.split_once(':').map(|(_, v)| v).unwrap_or("").trim();
-                    if val == "None" || val.is_empty() {
-                        return Vec::new();
-                    }
-                    // Depends On is space-separated on one line.
-                    for dep in val.split_whitespace() {
-                        // Strip version: "libfoo>=1.0" → "libfoo"
-                        let name = dep
-                            .split_once(['>', '<', '='])
-                            .map(|(n, _)| n)
-                            .unwrap_or(dep);
-                        if !name.is_empty() {
-                            deps.push(name.to_string());
-                        }
-                    }
-                    in_deps = true;
-                } else if in_deps && line.starts_with(' ') {
-                    // Continuation line (rare but possible).
-                    for dep in line.split_whitespace() {
-                        let name = dep
-                            .split_once(['>', '<', '='])
-                            .map(|(n, _)| n)
-                            .unwrap_or(dep);
-                        if !name.is_empty() {
-                            deps.push(name.to_string());
-                        }
-                    }
-                } else if in_deps {
-                    break;
-                }
-            }
-            deps
+            parse_pacman_depends(&pacman_field(&text, "Depends On").unwrap_or_default())
         }
         None => Vec::new(),
     }
@@ -851,6 +813,44 @@ pub fn pkg_files(package: &str) -> Vec<String> {
     }
 }
 
+/// Read a single field from `pacman -Qi <pkg>` output by label, independent of
+/// the padding pacman applies before the colon. The first ':' on a line is
+/// the label/value split; the label is trimmed before comparing.
+pub fn pacman_field(info: &str, label: &str) -> Option<String> {
+    for line in info.lines() {
+        let Some((k, v)) = line.split_once(':') else {
+            continue;
+        };
+        if k.trim() == label {
+            return Some(v.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Parse a `pacman -Qi` "Depends On" value into bare package names, stripping
+/// version constraints ("libfoo>=1.0" → "libfoo"). Empty or "None" → empty vec.
+pub fn parse_pacman_depends(value: &str) -> Vec<String> {
+    if value.is_empty() || value == "None" {
+        return Vec::new();
+    }
+    value
+        .split_whitespace()
+        .filter_map(|dep| {
+            // Strip version: "libfoo>=1.0" → "libfoo".
+            let name = dep
+                .split_once(['>', '<', '='])
+                .map(|(n, _)| n)
+                .unwrap_or(dep);
+            if name.is_empty() {
+                None
+            } else {
+                Some(name.to_string())
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -865,5 +865,69 @@ mod tests {
         assert_eq!(pkg_mgr_for(Some(HostPm::Apk)), None);
         assert_eq!(pkg_mgr_for(Some(HostPm::Xbps)), None);
         assert_eq!(pkg_mgr_for(None), None);
+    }
+
+    // Real `pacman -Qi kwallet` output (padded labels before the colon). These
+    // helpers must parse it regardless of the exact padding width.
+    const PACMAN_QI_KWALLET: &str = "\
+Name            : kwallet
+Version         : 6.29.0-1
+Description     : Secure and unified container for user passwords
+Architecture    : x86_64
+Depends On      : libgcc  libstdc++  glib2  glibc  gpgmepp  kcolorscheme  kconfig  kcoreaddons  kcrash  kdbusaddons  ki18n  knotifications  kwidgetsaddons  kwindowsystem  libgcrypt  libsecret  qca-qt6  qt6-base
+Optional Deps   : kwalletmanager: Configuration GUI
+Conflicts With  : None
+Replaces        : None
+";
+
+    #[test]
+    fn pacman_field_reads_version_and_depends() {
+        assert_eq!(
+            pacman_field(PACMAN_QI_KWALLET, "Version").as_deref(),
+            Some("6.29.0-1")
+        );
+        assert_eq!(
+            pacman_field(PACMAN_QI_KWALLET, "Depends On").as_deref(),
+            Some("libgcc  libstdc++  glib2  glibc  gpgmepp  kcolorscheme  kconfig  kcoreaddons  kcrash  kdbusaddons  ki18n  knotifications  kwidgetsaddons  kwindowsystem  libgcrypt  libsecret  qca-qt6  qt6-base")
+        );
+        assert_eq!(pacman_field(PACMAN_QI_KWALLET, "Not A Field"), None);
+    }
+
+    #[test]
+    fn parse_pacman_depends_strips_versions_and_handles_none() {
+        assert_eq!(
+            parse_pacman_depends("libgcc>=12  libstdc++  glibc"),
+            vec!["libgcc", "libstdc++", "glibc"]
+        );
+        assert!(parse_pacman_depends("None").is_empty());
+        assert!(parse_pacman_depends("").is_empty());
+    }
+
+    #[test]
+    fn pacman_depends_end_to_end_for_kwallet_fixture() {
+        let val = pacman_field(PACMAN_QI_KWALLET, "Depends On").unwrap();
+        assert_eq!(
+            parse_pacman_depends(&val),
+            vec![
+                "libgcc",
+                "libstdc++",
+                "glib2",
+                "glibc",
+                "gpgmepp",
+                "kcolorscheme",
+                "kconfig",
+                "kcoreaddons",
+                "kcrash",
+                "kdbusaddons",
+                "ki18n",
+                "knotifications",
+                "kwidgetsaddons",
+                "kwindowsystem",
+                "libgcrypt",
+                "libsecret",
+                "qca-qt6",
+                "qt6-base",
+            ]
+        );
     }
 }
