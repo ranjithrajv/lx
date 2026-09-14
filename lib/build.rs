@@ -1674,6 +1674,155 @@ struct BuildInputs<'a> {
     lock: Option<&'a lx_lib::lock::LockFile>,
 }
 
+/// Resolve the payload for `job`: a local path, an already-downloaded asset,
+/// or a fresh download through the source plugin, then verify it per the
+/// pinned / lock / sidecar / allow-unverified / no-verify policy and record a
+/// provenance entry. Returns the path on disk.
+#[allow(clippy::too_many_arguments)]
+fn resolve_asset(
+    args: &BuildArgs,
+    cfg: &PackageConfig,
+    source: Option<&dyn crate::plugins::forge::ForgeSource>,
+    token: Option<&str>,
+    pin: Option<&lx_lib::checksum::PinnedMetadata>,
+    lock: Option<&lx_lib::lock::LockFile>,
+    job: &ResolvedJob,
+    tmp: &Path,
+    downloaded: &mut std::collections::HashMap<String, PathBuf>,
+    provenance: &std::sync::Mutex<Vec<crate::summary::ProvenanceEntry>>,
+) -> Result<PathBuf> {
+    if args.local || args.from_dir.is_some() || args.from_file.is_some() {
+        let p = PathBuf::from(cfg.local_payload.trim());
+        if !p.exists() {
+            bail!("local_payload '{}' does not exist", p.display());
+        }
+        return Ok(p);
+    }
+    let source = source.expect("source plugin required for non-local builds");
+    if let Some(p) = downloaded.get(&job.asset.name) {
+        return Ok(p.clone());
+    }
+
+    let path = tmp.join(&job.asset.name);
+    println!(
+        "  ↓ {} ({})",
+        job.asset.name,
+        human_size(job.asset.size.unwrap_or(0))
+    );
+    match &args.cache_dir {
+        Some(dir) => {
+            let expected = pin.and_then(|p| p.sha256_for(&job.tag, &job.asset.name));
+            let cache = lx_lib::cache::DownloadCache::new(dir.clone())?;
+            let source_cloned = source.name().to_string();
+            let token_cloned = token.map(|s| s.to_string());
+            cache.fetch(
+                &job.asset.browser_download_url,
+                &path,
+                expected.as_deref(),
+                &|url, out| {
+                    let src = crate::plugins::forge::get_forge_source(&source_cloned)
+                        .expect("unknown source");
+                    let mut body = src
+                        .raw_get(url, token_cloned.as_deref())
+                        .with_context(|| format!("GET {url} failed"))?;
+                    let mut file = std::fs::File::create(out)?;
+                    std::io::copy(&mut body, &mut file)?;
+                    Ok(())
+                },
+            )?;
+        }
+        None => {
+            let mut body = source
+                .raw_get(&job.asset.browser_download_url, token)
+                .with_context(|| format!("GET {} failed", job.asset.browser_download_url))?;
+            let mut file = std::fs::File::create(&path)?;
+            std::io::copy(&mut body, &mut file)?;
+        }
+    }
+
+    let method = if args.no_verify {
+        VerifyMethod::SkippedNoVerify
+    } else if let Some(pin) = pin {
+        if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
+            lx_lib::checksum::verify_sha256(&path, &expected)?;
+            println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
+            VerifyMethod::Pinned
+        } else {
+            eprintln!(
+                "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
+                job.asset.name, job.tag
+            );
+            verify_sidecar_or_require_flag_source(
+                source,
+                token,
+                &job.asset,
+                &path,
+                args.allow_unverified,
+            )?
+        }
+    } else if let Some(lock) = lock {
+        match lock.entry_for(&job.arch) {
+            Some(entry) if entry.tag == job.tag && entry.asset == job.asset.name => {
+                lx_lib::checksum::verify_sha256(&path, &entry.sha256)?;
+                println!(
+                    "    ✓ verified against package.lock sha256:{}",
+                    &entry.sha256[..entry.sha256.len().min(12)]
+                );
+                VerifyMethod::Locked
+            }
+            Some(entry) => bail!(
+                "package.lock drift for arch '{}': locked {}/{}, resolved {}/{} -- \
+                 pass --update-lock to accept the new asset",
+                job.arch,
+                entry.tag,
+                entry.asset,
+                job.tag,
+                job.asset.name
+            ),
+            None => {
+                eprintln!(
+                    "    (no package.lock entry for arch '{}'; falling back to live checksum)",
+                    job.arch
+                );
+                verify_sidecar_or_require_flag_source(
+                    source,
+                    token,
+                    &job.asset,
+                    &path,
+                    args.allow_unverified,
+                )?
+            }
+        }
+    } else {
+        verify_sidecar_or_require_flag_source(
+            source,
+            token,
+            &job.asset,
+            &path,
+            args.allow_unverified,
+        )?
+    };
+
+    // Audit trail: one entry per unique download, regardless of outcome, so
+    // build-summary.json's `provenance` array records exactly how (or whether)
+    // every asset was verified.
+    let sha256 = lx_lib::checksum::sha256_file(&path).unwrap_or_default();
+    provenance
+        .lock()
+        .unwrap()
+        .push(crate::summary::ProvenanceEntry {
+            asset: job.asset.name.clone(),
+            url: job.asset.browser_download_url.clone(),
+            tag: job.tag.clone(),
+            arch: job.arch.clone(),
+            method: method.as_str().to_string(),
+            sha256,
+        });
+
+    downloaded.insert(job.asset.name.clone(), path.clone());
+    Ok(path)
+}
+
 fn build_one(
     args: &BuildArgs,
     cfg: &PackageConfig,
@@ -1692,139 +1841,10 @@ fn build_one(
     } = *inputs;
 
     // 1. Resolve the payload: local path, or download the asset once per name.
-    let asset_path = if args.local || args.from_dir.is_some() || args.from_file.is_some() {
-        let p = PathBuf::from(cfg.local_payload.trim());
-        if !p.exists() {
-            bail!("local_payload '{}' does not exist", p.display());
-        }
-        p
-    } else {
-        let source = source.expect("source plugin required for non-local builds");
-        match downloaded.get(&job.asset.name) {
-            Some(p) => p.clone(),
-            None => {
-                let path = tmp.join(&job.asset.name);
-                println!(
-                    "  ↓ {} ({})",
-                    job.asset.name,
-                    human_size(job.asset.size.unwrap_or(0))
-                );
-                match &args.cache_dir {
-                    Some(dir) => {
-                        let expected = pin.and_then(|p| p.sha256_for(&job.tag, &job.asset.name));
-                        let cache = lx_lib::cache::DownloadCache::new(dir.clone())?;
-                        let source_cloned = source.name().to_string();
-                        let token_cloned = token.map(|s| s.to_string());
-                        cache.fetch(
-                            &job.asset.browser_download_url,
-                            &path,
-                            expected.as_deref(),
-                            &|url, out| {
-                                let src = crate::plugins::forge::get_forge_source(&source_cloned)
-                                    .expect("unknown source");
-                                let mut body = src
-                                    .raw_get(url, token_cloned.as_deref())
-                                    .with_context(|| format!("GET {url} failed"))?;
-                                let mut file = std::fs::File::create(out)?;
-                                std::io::copy(&mut body, &mut file)?;
-                                Ok(())
-                            },
-                        )?;
-                    }
-                    None => {
-                        let mut body = source
-                            .raw_get(&job.asset.browser_download_url, token)
-                            .with_context(|| {
-                                format!("GET {} failed", job.asset.browser_download_url)
-                            })?;
-                        let mut file = std::fs::File::create(&path)?;
-                        std::io::copy(&mut body, &mut file)?;
-                    }
-                }
-                let method = if args.no_verify {
-                    VerifyMethod::SkippedNoVerify
-                } else if let Some(pin) = pin {
-                    if let Some(expected) = pin.sha256_for(&job.tag, &job.asset.name) {
-                        lx_lib::checksum::verify_sha256(&path, &expected)?;
-                        println!("    ✓ verified against pinned sha256:{}", &expected[..12]);
-                        VerifyMethod::Pinned
-                    } else {
-                        eprintln!(
-                            "    (no vetted pin for '{}' @ {}; falling back to live checksum)",
-                            job.asset.name, job.tag
-                        );
-                        verify_sidecar_or_require_flag_source(
-                            source,
-                            token,
-                            &job.asset,
-                            &path,
-                            args.allow_unverified,
-                        )?
-                    }
-                } else if let Some(lock) = lock {
-                    match lock.entry_for(&job.arch) {
-                        Some(entry) if entry.tag == job.tag && entry.asset == job.asset.name => {
-                            lx_lib::checksum::verify_sha256(&path, &entry.sha256)?;
-                            println!(
-                                "    ✓ verified against package.lock sha256:{}",
-                                &entry.sha256[..entry.sha256.len().min(12)]
-                            );
-                            VerifyMethod::Locked
-                        }
-                        Some(entry) => bail!(
-                            "package.lock drift for arch '{}': locked {}/{}, resolved {}/{} -- \
-                             pass --update-lock to accept the new asset",
-                            job.arch,
-                            entry.tag,
-                            entry.asset,
-                            job.tag,
-                            job.asset.name
-                        ),
-                        None => {
-                            eprintln!(
-                                "    (no package.lock entry for arch '{}'; falling back to live checksum)",
-                                job.arch
-                            );
-                            verify_sidecar_or_require_flag_source(
-                                source,
-                                token,
-                                &job.asset,
-                                &path,
-                                args.allow_unverified,
-                            )?
-                        }
-                    }
-                } else {
-                    verify_sidecar_or_require_flag_source(
-                        source,
-                        token,
-                        &job.asset,
-                        &path,
-                        args.allow_unverified,
-                    )?
-                };
-
-                // Audit trail: one entry per unique download, regardless of
-                // outcome, so build-summary.json's `provenance` array records
-                // exactly how (or whether) every asset was verified.
-                let sha256 = lx_lib::checksum::sha256_file(&path).unwrap_or_default();
-                provenance
-                    .lock()
-                    .unwrap()
-                    .push(crate::summary::ProvenanceEntry {
-                        asset: job.asset.name.clone(),
-                        url: job.asset.browser_download_url.clone(),
-                        tag: job.tag.clone(),
-                        arch: job.arch.clone(),
-                        method: method.as_str().to_string(),
-                        sha256,
-                    });
-
-                downloaded.insert(job.asset.name.clone(), path.clone());
-                path
-            }
-        }
-    };
+    // 1. Resolve the payload: local path, or download the asset once per name.
+    let asset_path = resolve_asset(
+        args, cfg, source, token, pin, lock, job, tmp, downloaded, provenance,
+    )?;
 
     // Resolved once here (rather than at step 4) so the artifact-cache key
     // below can include everything that affects the output bytes.
