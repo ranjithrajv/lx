@@ -108,6 +108,7 @@ fn tiny_rpm(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
             recommends: vec![rpm::Dependency::any("bash")],
             conflicts: vec![rpm::Dependency::any("old-pkg")],
             obsoletes: vec![rpm::Dependency::any("legacy")],
+            provides: vec![rpm::Dependency::any("webserver")],
             ..Default::default()
         },
         epoch: Some(2),
@@ -177,4 +178,54 @@ fn convert_rpm_to_deb_in_process_carries_metadata() {
     assert!(ctrl.get("Recommends").unwrap().contains("bash"));
     assert!(ctrl.get("Conflicts").unwrap().contains("old-pkg"));
     assert!(ctrl.get("Replaces").unwrap().contains("legacy"));
+    // Virtual Provides carried; the RPM self-provide and sonames dropped.
+    assert_eq!(
+        ctrl.get("Provides").map(String::as_str),
+        Some("webserver"),
+        "provides carried + filtered: {:?}",
+        ctrl.get("Provides")
+    );
+}
+
+#[test]
+fn convert_deb_to_rpm_carries_conffiles() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("debroot");
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::create_dir_all(root.join("etc")).unwrap();
+    std::fs::write(root.join("usr/bin/hello"), b"payload").unwrap();
+    std::fs::write(root.join("etc/hello.conf"), b"a=1").unwrap();
+    let control = b"Package: hello\nVersion: 1.0-1+bookworm\nArchitecture: amd64\nMaintainer: T <t@e.c>\nConffiles:\n /etc/hello.conf abc123\nDescription: hi\n";
+    let deb = dir.path().join("hello_1.0-1+bookworm_amd64.deb");
+    lx_lib::debarchive::build(&root, control, 0, &deb).unwrap();
+
+    run(ConvertArgs {
+        input: deb,
+        to: Some("rpm".to_string()),
+        output: dir.path().join("out"),
+        package_name: None,
+        version: None,
+        arch: None,
+        distribution: None,
+        build_version: "1".to_string(),
+        dry_run: false,
+    })
+    .unwrap();
+
+    let rpm = std::fs::read_dir(dir.path().join("out"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().map(|x| x == "rpm").unwrap_or(false))
+        .expect("a .rpm was produced");
+    let pkg = rpm::Package::open(&rpm).unwrap();
+    let entries = pkg.metadata.get_file_entries().unwrap();
+    let flags = entries
+        .iter()
+        .find(|e| e.path.to_string_lossy() == "/etc/hello.conf")
+        .expect("conffile present in the rpm payload")
+        .flags;
+    assert!(
+        flags.contains(rpm::FileFlags::CONFIG),
+        "deb conffile became an rpm %config: {flags:?}"
+    );
 }

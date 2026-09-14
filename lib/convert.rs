@@ -83,6 +83,10 @@ struct SourceMeta {
     /// name (e.g. "preinst", "postinst", "prerm", "postrm" for deb;
     /// "pre", "post", "preun", "postun" for rpm).
     scripts: std::collections::BTreeMap<String, String>,
+    /// Config files (`/etc/...`) carrying config semantics, as
+    /// `(absolute path, noreplace)`. Re-registered in the target as a deb
+    /// conffile, an RPM `%config`/`%config(noreplace)`, or a pacman `backup`.
+    conffiles: Vec<(String, bool)>,
 }
 
 pub fn run(args: ConvertArgs) -> Result<()> {
@@ -271,6 +275,7 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
         epoch,
         distribution: infer_dist_from_version(&version),
         scripts,
+        conffiles: parse_deb_conffiles(&get("Conffiles")),
     })
 }
 
@@ -278,9 +283,7 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
 /// (`1`, `2.3-1`); a version with no numeric epoch is returned unchanged.
 fn split_deb_epoch(raw: &str) -> (String, String) {
     match raw.split_once(':') {
-        Some((epoch, rest))
-            if !epoch.is_empty() && epoch.chars().all(|c| c.is_ascii_digit()) =>
-        {
+        Some((epoch, rest)) if !epoch.is_empty() && epoch.chars().all(|c| c.is_ascii_digit()) => {
             (epoch.to_string(), rest.to_string())
         }
         _ => (String::new(), raw.to_string()),
@@ -384,10 +387,7 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
     let description = pkg.metadata.get_summary().unwrap_or_default().to_string();
 
     let depends = format_rpm_requires(&pkg.metadata.get_requires().unwrap_or_default());
-    // RPM auto-`Provides` are sonames/file paths (`libc.so.6()(64bit)`,
-    // `config(...)`) that have no meaning as Debian virtual packages, so they
-    // are deliberately not carried; conflicts/recommends/obsoletes are real
-    // package names.
+    let provides = format_rpm_provides(&name, &pkg.metadata.get_provides().unwrap_or_default());
     let recommends = format_rpm_requires(&pkg.metadata.get_recommends().unwrap_or_default());
     let conflicts = format_rpm_requires(&pkg.metadata.get_conflicts().unwrap_or_default());
     let replaces = format_rpm_requires(&pkg.metadata.get_obsoletes().unwrap_or_default());
@@ -409,6 +409,7 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         maintainer,
         description,
         depends,
+        provides,
         recommends,
         conflicts,
         replaces,
@@ -416,13 +417,28 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         epoch,
         distribution: "el9".to_string(),
         scripts,
+        conffiles: rpm_conffiles(&pkg),
         ..Default::default()
     })
 }
 
-/// Format RPM `Requires` the way the old `rpm -qp --queryformat '%{REQUIRES}'`
-/// call did — name plus any version constraint — skipping file/rpmlib/
-/// config/interpreter capabilities that have no cross-format meaning.
+/// Format one RPM dependency as `name` or `name op version`.
+fn format_rpm_dependency(d: &rpm::Dependency) -> String {
+    if d.version.is_empty() {
+        return d.name.clone();
+    }
+    let op = match d.flags {
+        f if f.contains(rpm::DependencyFlags::GE) => ">=",
+        f if f.contains(rpm::DependencyFlags::LE) => "<=",
+        f if f.contains(rpm::DependencyFlags::GREATER) => ">",
+        f if f.contains(rpm::DependencyFlags::LESS) => "<",
+        _ => "=",
+    };
+    format!("{} {} {}", d.name, op, d.version)
+}
+
+/// Format RPM `Requires`, skipping file/rpmlib/config/interpreter
+/// capabilities that have no cross-format meaning.
 fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
     deps.iter()
         .filter(|d| {
@@ -433,21 +449,104 @@ fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
                 && !n.starts_with("config(")
                 && !n.starts_with("interpreter(")
         })
-        .map(|d| {
-            if d.version.is_empty() {
-                return d.name.clone();
-            }
-            let op = match d.flags {
-                f if f.contains(rpm::DependencyFlags::GE) => ">=",
-                f if f.contains(rpm::DependencyFlags::LE) => "<=",
-                f if f.contains(rpm::DependencyFlags::GREATER) => ">",
-                f if f.contains(rpm::DependencyFlags::LESS) => "<",
-                _ => "=",
-            };
-            format!("{} {} {}", d.name, op, d.version)
-        })
+        .map(format_rpm_dependency)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Format RPM `Provides`, keeping real virtual provides and dropping the
+/// auto-generated capabilities a build emits: the self-provide (`name`,
+/// `name(x86-64)`), shared-library sonames (`libc.so.6()(64bit)`), and
+/// file/capability provides — none of which are valid target package names.
+fn format_rpm_provides(package: &str, deps: &[rpm::Dependency]) -> String {
+    deps.iter()
+        .filter(|d| is_meaningful_provide(&d.name, package))
+        .map(format_rpm_dependency)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn is_meaningful_provide(name: &str, package: &str) -> bool {
+    let n = name.trim();
+    if n.is_empty() || n.starts_with('/') {
+        return false;
+    }
+    if n == package || n.starts_with(&format!("{package}(")) {
+        return false;
+    }
+    const SKIP: &[&str] = &[
+        "rpmlib(",
+        "config(",
+        "interpreter(",
+        "user(",
+        "group(",
+        "pkgconfig(",
+        "lib(",
+        "perl(",
+        "python(",
+        "python3(",
+        "ruby(",
+        "metainfo(",
+        "mimehandler(",
+        "application(",
+        "typelib(",
+    ];
+    if SKIP.iter().any(|p| n.starts_with(p)) {
+        return false;
+    }
+    // Shared-library sonames and 64-bit capability provides.
+    if n.contains(".so") || n.contains("(64bit)") || n.contains("()") {
+        return false;
+    }
+    true
+}
+
+/// Config files an RPM marks `%config` / `%config(noreplace)`, as
+/// `(absolute path, noreplace)`.
+fn rpm_conffiles(pkg: &rpm::Package) -> Vec<(String, bool)> {
+    let Ok(entries) = pkg.metadata.get_file_entries() else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter(|e| e.flags.contains(rpm::FileFlags::CONFIG))
+        .map(|e| {
+            let p = e.path.to_string_lossy().to_string();
+            let path = if p.starts_with('/') { p } else { format!("/{p}") };
+            (path, e.flags.contains(rpm::FileFlags::NOREPLACE))
+        })
+        .collect()
+}
+
+/// Parse a deb `Conffiles:` value (one `/path [md5]` per line).
+fn parse_deb_conffiles(raw: &str) -> Vec<(String, bool)> {
+    raw.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|p| p.starts_with('/'))
+        .map(|p| (p.to_string(), false))
+        .collect()
+}
+
+/// Arch `backup` paths (pacman preserves user edits, like
+/// `%config(noreplace)`).
+fn arch_conffiles(fields: &BTreeMap<String, Vec<String>>) -> Vec<(String, bool)> {
+    fields
+        .get("backup")
+        .map(|v| {
+            v.iter()
+                .map(|p| p.trim())
+                .filter(|p| !p.is_empty())
+                .map(|p| {
+                    let path = if p.starts_with('/') {
+                        p.to_string()
+                    } else {
+                        format!("/{p}")
+                    };
+                    (path, true)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Extract scriptlets from an RPM in-process via the `rpm` crate.
@@ -532,6 +631,7 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
         epoch: get("epoch"),
         distribution: "arch".to_string(),
         scripts: BTreeMap::new(),
+        conffiles: arch_conffiles(&fields),
         ..Default::default()
     })
 }
@@ -1293,6 +1393,26 @@ fn build_target(
     };
     apply_scripts_to_config(&mut config, &meta.scripts, target_format);
 
+    // Carry config-file semantics: stage each source conffile as a target
+    // `contents` entry of kind `config`, which every packager turns into its
+    // own conffile / `%config(noreplace)` / `backup` registration.
+    for (path, noreplace) in &meta.conffiles {
+        let src = install_tree.join(path.trim_start_matches('/'));
+        if !src.is_file() {
+            continue;
+        }
+        config.contents.push(crate::config::ContentEntry {
+            src: src.to_string_lossy().to_string(),
+            dst: path.clone(),
+            kind: if *noreplace {
+                "config|noreplace".to_string()
+            } else {
+                "config".to_string()
+            },
+            ..Default::default()
+        });
+    }
+
     let job = crate::build::ResolvedJob {
         dist: if meta.distribution.is_empty() {
             match target_format {
@@ -1468,6 +1588,19 @@ mod tests {
             format_rpm_requires(&deps),
             "bash, glibc >= 2.17, zlib < 1.3"
         );
+    }
+
+    #[test]
+    fn rpm_provides_keep_virtuals_and_drop_auto_capabilities() {
+        let deps = vec![
+            rpm::Dependency::any("hello"),
+            rpm::Dependency::any("hello(x86-64)"),
+            rpm::Dependency::any("webserver"),
+            rpm::Dependency::any("libc.so.6()(64bit)"),
+            rpm::Dependency::any("/usr/bin/hello"),
+            rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4"),
+        ];
+        assert_eq!(format_rpm_provides("hello", &deps), "webserver");
     }
 
     #[test]
