@@ -45,7 +45,7 @@ is an output choice.
 You don't even need a config file to see the shape of it:
 
 ```sh
-lx discover sinelaw/fresh                    # print a starter package.yaml
+lx init --from sinelaw/fresh                 # scaffold a starter package.yaml
 lx build https://github.com/sinelaw/fresh    # debs for every published arch
 lx build package.yaml --format all           # deb, rpm, arch, apk, ipk in one run
 lx publish package.yaml                      # ... plus every format's repo index
@@ -84,7 +84,7 @@ What `lx` separates is *a `.deb` your users can install and upgrade* from
 is what almost every user means by "a deb"; the second is a project in
 itself. `lx` builds the first from the release you already publish, or
 from source, with real dependency metadata computed from the binary
-(`--bindep`, and `lx shlibdeps`, a `dpkg-shlibdeps` drop-in that reads the
+(`--bindep`, and `lx deps resolve`, a `dpkg-shlibdeps` drop-in that reads the
 dpkg `symbols`/`shlibs` databases). It does not require `debian/rules`, a
 patch stack, or vendored sources.
 
@@ -195,7 +195,7 @@ declared. No FUSE, no squashfs mount on startup, no sandbox flags that
 contradict what a TUI that "rampages around your machine and network"
 actually needs. Startup is the binary's own startup.
 
-For users already on a parallel install, `lx go-native` plans — and only
+For users already on a parallel install, `lx migrate native` plans — and only
 on `--yes` executes — migration of snap, Flatpak, nix, and `curl | sh`
 installs to the native package, with anything unmappable reported rather
 than dropped.
@@ -259,7 +259,7 @@ A post that only lists wins isn't worth sending, so:
 
 The distance from here to a shipped set of packages is small:
 
-1. **Look, without committing.** `lx discover sinelaw/fresh` prints a
+1. **Look, without committing.** `lx init --from sinelaw/fresh` writes a
    starter config from the release assets; `lx build
    https://github.com/sinelaw/fresh --format all` produces every format for
    every arch the release publishes, checksum-verified.
@@ -294,9 +294,9 @@ bug worth filing rather than working around.
 
 ## See also
 
-- [`docs/lx-landscape.md`](../lx-landscape.md) — where `lx` sits relative
+- [`docs/analysis/landscape.md`](../analysis/landscape.md) — where `lx` sits relative
   to every other tool in the pipeline.
-- [`docs/tooling.md`](../tooling.md) — what `lx` consumes and what it
+- [`docs/architecture/tooling.md`](../architecture/tooling.md) — what `lx` consumes and what it
   replaces, including the in-process list.
 - [`docs/comparison/fpm-vs-nfpm-vs-lx.md`](../comparison/fpm-vs-nfpm-vs-lx.md) —
   category-by-category comparison with flags and fields.

@@ -1,5 +1,7 @@
 # Dogfooding Roadmap
 
+Part of the [lx docs](../README.md).
+
 The LX index now consumes [repology](https://repology.org/) — cross-distro
 package metadata for 200+ repositories. This turns the index into a **brain**
 that can drive every other LX command with real data about where the host

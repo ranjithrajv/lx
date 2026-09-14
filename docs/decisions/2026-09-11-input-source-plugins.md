@@ -101,8 +101,8 @@ URL sniffing (`parse_any_forge_url`), registry sources by an explicit
 `registry_source:` field. Conflating these creates implicit, error-prone
 behavior.
 
-See `docs/plugins.md` § "ForgeSource vs RegistrySource — why two plugin
-types?" for the full comparison.
+See `docs/architecture/plugins.md` § "ForgeSource vs RegistrySource — why two
+plugin types?" for the full comparison.
 
 ## Scope
 

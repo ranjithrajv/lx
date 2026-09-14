@@ -77,11 +77,14 @@ git push --no-verify        # skip pre-push hooks
 ## Project Layout
 
 ```
-src/            # Thin binary entrypoint (main.rs)
-lib/            # All logic lives here (lx_lib) — build, forge clients, plugins
-tests/          # Integration tests, mirrors lib/ structure
-utils/          # Helper scripts (coverage, secret scan, covscan)
-docs/decisions/ # ADR-style notes on non-obvious design decisions
+src/              # Thin binary entrypoint (main.rs)
+lib/              # All logic lives here (lx_lib) — build, forge clients, plugins
+tests/            # Integration tests, mirrors lib/ structure
+utils/            # Helper scripts (coverage, secret scan, covscan)
+benchmarking/     # lx vs. the tools it replaces: harness + recorded results
+docs/             # Documentation (start at docs/README.md): reference/,
+                  # guides/, architecture/, comparison/, analysis/,
+                  # decisions/ (ADR-style notes), outreach/
 ```
 
 ## Releasing lx

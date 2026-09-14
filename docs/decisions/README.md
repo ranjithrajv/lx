@@ -1,0 +1,42 @@
+# Decision records
+
+Dated ADR-style notes on non-obvious design decisions made while building
+`lx`. They are kept as a historical record of the reasoning at the time —
+command names and project name (`lpt` → `lx`) may be from before later
+renames. For current behavior, see the [documentation hub](../README.md).
+
+- [Build path verification: Docker .deb builder fixes](2026-08-14-build-path.md)
+- [Dependency Decision: library-first audit of hand-rolled modules](2026-08-14-library-first-audit.md)
+- [Lintian validation via Debian container](2026-08-14-lintian.md)
+- [Dependency Decision: octocrab (replaces custom GitHub client)](2026-08-14-octocrab.md)
+- [Action parity: source packages, build summary, QEMU detection](2026-08-14-source-summary-qemu.md)
+- [Docker-free `.deb` building (`lib/debarchive.rs`)](2026-08-20-docker-free-deb-build.md)
+- [Docker-free lintian and source packages](2026-08-20-docker-free-lintian-source.md)
+- [Adoptions from nfpm: relations, ancillary files, epoch](2026-08-20-nfpm-adoptions.md)
+- [Package-request audit: fail-closed verification, provenance, prerelease warnings](2026-08-20-package-request-audit.md)
+- [Reproducible builds: empirical audit and fix](2026-08-20-reproducible-builds.md)
+- [`lpt scan-deps`: native ELF shared-library dependency scanning](2026-08-20-scan-deps.md)
+- [DRY/SOLID cleanup: shared package-metadata rendering and checksum verification](2026-08-21-dry-solid-cleanup.md)
+- [Viral badge: fixed stale branding, added release/downloads/coverage badges](2026-08-21-viral-badge-refresh.md)
+- [Dependency Decision: base64, percent-encoding (and deliberate custom: forge SDK clients)](2026-08-26-foss-mind-audit.md)
+- [Dependency Decision: foss-mind audit of lib/ hand-rolled primitives](2026-08-27-foss-mind-audit.md)
+- [Debsign (`_gpgorigin`), local payloads, and env expansion](2026-08-28-debsign-local-payload.md)
+- [Follow-up: Nix packaging ideas worth adopting](2026-08-28-nix-packaging-follow-up.md)
+- [Broadening adoptions (deb-get / makedeb / MPR lessons)](2026-09-11-broaden-adoptions.md)
+- [`lx convert` scriptlet carry-over](2026-09-11-convert-scriptlets.md)
+- [`lx convert`: format conversion (deb↔rpm↔arch)](2026-09-11-format-conversion.md)
+- [Adopt fpm features: pre/post-upgrade, RPM triggers, script templating](2026-09-11-fpm-parity.md)
+- [`go-native` apply on rpm/Arch hosts](2026-09-11-go-native-cross-distro.md)
+- [`lpt go-native`: migrate non-native installs to native packages](2026-09-11-go-native.md)
+- [`curl | sh` auto-delete in `lx go-native`](2026-09-11-go-native-sh-cleanup.md)
+- [Registry source plugins: language package manager inputs](2026-09-11-input-source-plugins.md)
+- [Multi-suite repository layout for `lx repo`](2026-09-11-multi-suite-repo.md)
+- [`musl: true` — musl-static builds for old-distro portability](2026-09-11-musl-static-builds.md)
+- [Adopt remaining nfpm features (relations, glob, metadata, version schema, umask)](2026-09-11-nfpm-adoptions-batch2.md)
+- [RPM compression, AutoProv/AutoReq, macro expansion](2026-09-11-rpm-config.md)
+- [Scripts & triggers parity with nfpm](2026-09-11-scripts-triggers-parity.md)
+- [System-wide `lx upgrade --all` (distro-aware)](2026-09-11-upgrade-all-distro.md)
+- [System-wide `lx upgrade --all --auto-migrate`](2026-09-11-upgrade-auto-migrate.md)
+- [Dependency Decision: RPM scriptlet extraction & cross-distro package install](2026-09-12-foss-mind-rpm-scriptlets.md)
+- [Host build-dependency solving and installation (`--install-build-deps`)](2026-09-14-build-deps.md)
+- [`lx shlibdeps`: symbol-versioned dependency resolution (dpkg-shlibdeps parity)](2026-09-14-shlibdeps.md)

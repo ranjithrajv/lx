@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Documentation restructure
+
+- `README.md` is now an overview + quick start; the command reference,
+  `package.yaml` reference, host-detection, index, GitHub Action, and
+  reproducible-builds sections moved to `docs/reference/` and `docs/guides/`.
+- Architecture docs moved to `docs/architecture/`: `plugins.md` split into
+  `plugins.md` + `plugin-catalog.md`, `tooling.md` split into `tooling.md` +
+  `replacements.md`; the fpm comparison split into a lifecycle page.
+- New `docs/README.md` hub and `docs/decisions/README.md` index; all
+  cross-document links updated.
+
 ### Real-client and live-endpoint verification
 
 - New `tests/verify_clients.rs` closes the last verification gaps:

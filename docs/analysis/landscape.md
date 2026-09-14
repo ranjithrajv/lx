@@ -1,5 +1,7 @@
 # The Linux packaging landscape, and where `lx` sits
 
+Part of the [lx docs](../README.md).
+
 A map of the tools around `lx`: what each one is actually for, which
 stage of the "upstream software → installed on a machine" pipeline it
 occupies, and where `lx` overlaps, complements, or deliberately stays
@@ -7,9 +9,9 @@ out of the way. Maturity is tracked separately, as
 [technology readiness (TRL)](#technology-readiness-trl).
 
 This is the broad survey. For field-by-field parity use
-[`comparison/lx-vs-nfpm.md`](comparison/lx-vs-nfpm.md) and
-[`comparison/fpm-vs-nfpm-vs-lx.md`](comparison/fpm-vs-nfpm-vs-lx.md);
-for what `lx` consumes at runtime see [`tooling.md`](tooling.md).
+[`comparison/lx-vs-nfpm.md`](../comparison/lx-vs-nfpm.md) and
+[`comparison/fpm-vs-nfpm-vs-lx.md`](../comparison/fpm-vs-nfpm-vs-lx.md);
+for what `lx` consumes at runtime see [`tooling.md`](../architecture/tooling.md).
 
 ---
 
@@ -41,7 +43,7 @@ software**, not any single format.
 | 4. Verify & sign | Prove what went in, sign what came out | `gpg`/`debsign`, `cosign`, `lintian`, checksum sidecars | ✅ fail-closed checksums, `--sbom`, `--cosign`, GPG |
 | 5. Distribute | Make packages installable at scale | `reprepro`, `aptly`, `apt-ftparchive`, `dpkg-scanpackages`, `createrepo_c`, OBS, Cloudsmith/Gemfury/PackageCloud | ✅ `lx repo` (apt/rpm/pacman/apk/opkg, signable) + `lx publish` (build **and** index in one run) |
 | 6. Consume | Install, upgrade, remove, roll back | `apt`/`dpkg`, `dnf`/`rpm`, `pacman`, `nala`, `gdebi`, `deb-get` | ✅ `lx install`/`upgrade`/`remove`/`rollback`, `lx get` — host-native deb/rpm/arch |
-| 7. Migrate | Move off non-native installs | (mostly manual) | ✅ `lx go-native` (snap/flatpak/nix/`curl \| sh`) |
+| 7. Migrate | Move off non-native installs | (mostly manual) | ✅ `lx migrate native` (snap/flatpak/nix/`curl \| sh`) |
 
 Almost every tool in the ecosystem lives in exactly one row. The map
 below expands the crowded ones.
@@ -114,7 +116,7 @@ with `lx get` / `lx install`.
 This is the row where `lx` most clearly differs from the "install
 upstream binaries into a prefix" tools: `lx` produces **real distro
 packages** that the host package manager owns, rather than a parallel
-prefix or store. `lx go-native` exists precisely to convert the parallel
+prefix or store. `lx migrate native` exists precisely to convert the parallel
 installs (snap, flatpak, nix, `curl | sh`) into that native form.
 
 ---
@@ -159,7 +161,7 @@ maintenance and a full toolchain.
 | Gentoo | Portage | `ebuild` |
 | Void | `xbps-src` | `template` |
 
-`lx` does **not** replace this layer. `lx shlibdeps` is a drop-in for
+`lx` does **not** replace this layer. `lx deps resolve` is a drop-in for
 `dpkg-shlibdeps`, not for `dpkg-buildpackage`; `--source` emits a valid
 `3.0 (quilt)` source package so it can *feed* a distro build, but `lx`
 never runs `debian/rules` and does not maintain patch stacks. The target
@@ -291,7 +293,7 @@ distro toolchain, not to swallow them. Natural pairings:
   archive manager.
 - **`lx --source` + `dpkg-buildpackage`** — `lx` can emit a Debian source
   package that a distro build then consumes.
-- **`lx shlibdeps` alongside `dpkg-buildpackage`** — the command is a
+- **`lx deps resolve` alongside `dpkg-buildpackage`** — the command is a
   `dpkg-shlibdeps` drop-in usable inside a conventional Debian build.
 - **`lx` + `lintian`/`gpg`/`cosign`** — verification and signing are
   consumed, never reimplemented (`lintian` deliberately, GPG and cosign
@@ -311,7 +313,7 @@ Stated so the map does not imply ambitions that do not exist:
 - **Not a full distro build system.** No `debian/rules`, no patch-stack
   maintenance, no `dpkg-buildpackage`/`rpmbuild` orchestration.
 - **Not a runtime sandbox.** snap, Flatpak, and Nix solve isolation and
-  hermeticity; `lx` treats them as migration *sources* (`lx go-native`),
+  hermeticity; `lx` treats them as migration *sources* (`lx migrate native`),
   not as targets.
 - **Not a hosted repository or CDN.** `lx repo` is a generator, not a
   service.
@@ -334,7 +336,7 @@ does and where the adjacent tools are converging.
   the whole build — every format in-process, no `dpkg-*`/`rpmbuild`/
   `makepkg`. `lx` now ships itself the same way (musl-static release
   binaries). See
-  [`decisions/2026-08-20-docker-free-deb-build.md`](decisions/2026-08-20-docker-free-deb-build.md).
+  [`decisions/2026-08-20-docker-free-deb-build.md`](../decisions/2026-08-20-docker-free-deb-build.md).
 - **Supply-chain provenance.** SBOM (SPDX), SLSA-shaped provenance,
   Sigstore signing, and fail-closed checksum verification have moved from
   nice-to-have to expected. `lx` bakes them into the build rather than
@@ -357,13 +359,13 @@ does and where the adjacent tools are converging.
 
 ## See also
 
-- [`tooling.md`](tooling.md) — every external tool `lx` consumes, and
+- [`tooling.md`](../architecture/tooling.md) — every external tool `lx` consumes, and
   what it replaces.
-- [`comparison/lx-vs-nfpm.md`](comparison/lx-vs-nfpm.md) — living parity
+- [`comparison/lx-vs-nfpm.md`](../comparison/lx-vs-nfpm.md) — living parity
   tracker against nfpm.
-- [`comparison/fpm-vs-nfpm-vs-lx.md`](comparison/fpm-vs-nfpm-vs-lx.md) —
+- [`comparison/fpm-vs-nfpm-vs-lx.md`](../comparison/fpm-vs-nfpm-vs-lx.md) —
   category-by-category comparison with flags and fields.
-- [`plugins.md`](plugins.md) — the eight plugin dimensions (packager,
+- [`plugins.md`](../architecture/plugins.md) — the eight plugin dimensions (packager,
   forge source, build system, registry source, artifact format, signer,
   dependency mapper, package index).
 - [`dogfooding-roadmap.md`](dogfooding-roadmap.md) — how the index and

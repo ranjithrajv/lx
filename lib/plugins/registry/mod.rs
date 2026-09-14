@@ -15,7 +15,7 @@
 //! (forge release providers). Forge sources discover *what releases and assets
 //! exist*; registry sources fetch *specific files* from language package
 //! registries. Both produce a local payload, but their resolution mechanisms
-//! differ. See `docs/plugins.md` for the full comparison.
+//! differ. See `docs/architecture/plugins.md` for the full comparison.
 
 pub mod cargo;
 pub mod composer;

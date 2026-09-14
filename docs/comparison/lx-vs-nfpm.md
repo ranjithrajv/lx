@@ -5,6 +5,12 @@ A living comparison of [lx](../../README.md) against
 packager that inspires much of lx's design. Used to track what lx has
 adopted, what it deliberately rejects, and what remains to be done.
 
+> Canonical capability details live in the
+> [commands](../reference/commands.md) and
+> [`package.yaml`](../reference/package-yaml.md) references and the
+> [plugin catalog](../architecture/plugin-catalog.md); this page tracks
+> parity, and the tables here are a snapshot.
+
 ## TL;DR
 
 | | nfpm | lx |
@@ -40,9 +46,9 @@ produces proper source packages.**
 |---|---|---|
 | **Local files** (`contents:` with `src`/`dst`) | ✅ rich DSL (see below) | ✅ `local_payload:` + `binary_path` |
 | **Glob patterns** | ✅ (`disable_globbing` to turn off) | ✅ (`disable_globbing` to turn off) |
-| **Auto-fetch forge releases** | ❌ | ✅ (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit) |
+| **Auto-fetch forge releases** | ❌ | ✅ (GitHub, GitLab, Gitea, Forgejo, Bitbucket, Gerrit, Gitee, SourceForge) |
 | **Auto-detect release assets** | ❌ | ✅ (pattern matching on filenames → arches) |
-| **Source compilation** | ❌ | ✅ (`build_mode: source` with pluggable build systems: cmake, cargo, go, custom) |
+| **Source compilation** | ❌ | ✅ (`build_mode: source` with pluggable build systems: cmake, cargo, go, meson, autotools, make, custom) |
 | **Tree/bundle mode** | ✅ (`type: tree`) | ✅ (`bundle: true`) |
 
 **nfpm is a "dumb" packager** — you give it files via its powerful
@@ -68,7 +74,7 @@ licenses), and supports both binary repack and source-build modes.
 | **Pre-Depends** | ✅ (deb-specific) | ✅ (deb) |
 | **Predepends** (generic) | ✅ | ✅ (deb) |
 | **Epoch** | ✅ | ✅ |
-| **Version schema** (semver/none) | ✅ | ❌ (uses raw strings) |
+| **Version schema** (semver/none) | ✅ | ✅ |
 | **Per-format overrides** | ✅ (`overrides.deb`, `overrides.rpm`, …) | ✅ (deb via `overrides:`) |
 
 **Implemented.** `suggests:`, `predepends:`, and the `overrides:` block
@@ -113,11 +119,11 @@ maintainer), vendor via the legacy `vendor:` key, and arch variant via
 
 | | nfpm | lx |
 |---|---|---|
-| **preinstall / postinstall** | ✅ (overridable) | ✅ (deb/rpm) |
-| **preremove / postremove** | ✅ (overridable) | ✅ (deb/rpm) |
+| **preinstall / postinstall** | ✅ (overridable) | ✅ (deb/rpm/apk/ipk) |
+| **preremove / postremove** | ✅ (overridable) | ✅ (deb/rpm/apk/ipk) |
 | **pretrans / posttrans** (rpm) | ✅ | ✅ |
 | **verify** (rpm) | ✅ | ✅ |
-| **preupgrade / postupgrade** (apk/arch) | ✅ | ✅ (arch `.INSTALL`) |
+| **preupgrade / postupgrade** (apk/arch) | ✅ | ✅ (apk scripts + arch `.INSTALL`) |
 | **debconf** (`templates`, `config`) | ✅ | ✅ |
 | **deb triggers** (`interest`, `activate`) | ✅ | ✅ |
 | **deb `rules`** | ✅ | ✅ |
@@ -126,7 +132,9 @@ maintainer), vendor via the legacy `vendor:` key, and arch variant via
 **Feature parity achieved.** lx maps nfpm's format-specific script names
 to the right control members/scriptlets per format: deb `DEBIAN/{preinst,
 postinst,prerm,postrm}` (mode 0755), rpm `%pre`/`%post`/`%preun`/`%postun`
-plus `%pretrans`/`%posttrans`/`%verify`, arch `.INSTALL`
+plus `%pretrans`/`%posttrans`/`%verify`, apk `.pre-install`/`.post-install`/
+`.pre-deinstall`/`.post-deinstall` (plus the upgrade hooks) and ipk
+`preinst`/`postinst`/`prerm`/`postrm`, and arch `.INSTALL`
 `pre_upgrade()`/`post_upgrade()` hooks. Deb-specific extras — debconf
 `templates`/`config`, `rules`, and `interest`/`activate` triggers — live
 in the `deb:` block. As a bonus lx keeps nfpm's build-time hooks
@@ -141,7 +149,7 @@ in the `deb:` block. As a bonus lx keeps nfpm's build-time hooks
 |---|---|---|
 | **deb signing** | ✅ (debsign + dpkg-sig) | ✅ (debsign + detach) |
 | **rpm signing** | ✅ (PGP, embedded) | ✅ (embedded) |
-| **apk signing** | ✅ (RSA PEM) | N/A |
+| **apk signing** | ✅ (RSA PEM) | ✅ (RSA/SHA-1, in-process) |
 | **msix signing** | ✅ (PFX) | N/A |
 | **Checksum verification** | ❌ | ✅ (fail-closed by default; sidecar + pinned metadata) |
 | **SBOM / SLSA provenance** | ❌ | ✅ (`--sbom` → SPDX 2.3 + SLSA v1) |
@@ -161,13 +169,13 @@ story.
 |---|---|---|
 | **Config file** | `nfpm.yaml` (full DSL) | `package.yaml` (simpler, opinionated) |
 | **Templating** | ❌ (recommends envsubst/jsonnet) | ❌ (env-var expansion in some fields) |
-| **JSON Schema** | ✅ (published schema) | ❌ |
-| **Interactive init** | ✅ (`nfpm init`) | ✅ (`lx init`, `--from-aur`) |
+| **JSON Schema** | ✅ (published schema) | ✅ (`lx schema`) |
+| **Interactive init** | ✅ (`nfpm init`) | ✅ (`lx init`, `--from`, `--from-aur`) |
 | **Zero-config URL build** | ❌ | ✅ (`lx build https://github.com/owner/repo`) |
 | **Dry-run** | ❌ | ✅ (`--dry-run` previews build matrix) |
 | **Validate without building** | ❌ | ✅ (`lx validate`) |
-| **Auto-discover patterns** | ❌ | ✅ (`lx discover`) |
-| **Dependency scanner** | ❌ | ✅ (`lx scan-deps` — ELF `DT_NEEDED` → `dpkg -S`) |
+| **Auto-discover patterns** | ❌ | ✅ (`lx init --from`) |
+| **Dependency scanner** | ❌ | ✅ (`lx deps scan` — ELF `DT_NEEDED` → `dpkg -S`) |
 | **Musl-static builds** | ❌ | ✅ (`musl: true` — no glibc dep, runs on any Linux) |
 | **Per-file mtime/mode/owner/group** | ✅ (`file_info`) | 🟡 (umask only; per-file mode/owner/group not yet) |
 | **Umask control** | ✅ | ✅ |
@@ -178,12 +186,12 @@ story.
 
 | | nfpm | lx |
 |---|---|---|
-| **Consumer CLI** | ❌ | ✅ (`lx get`: install/upgrade/remove/search/list/show) |
+| **Consumer CLI** | ❌ | ✅ (`lx get`: install/upgrade/update/remove/rollback/search/list/show) |
 | **Local manifest / state** | ❌ | ✅ (`installed.json`, cross-checked with dpkg) |
 | **Rollback** | ❌ | ✅ (`lx rollback`) |
-| **Repo generation** | ❌ | ✅ (`lx repo` — Packages/Release/InRelease; `--multi-suite` for multi-suite layout) |
+| **Repo generation** | ❌ | ✅ (`lx repo` — deb/rpm/pacman/apk/opkg indexes, per-format signing; `--multi-suite` for multi-suite layout; `lx publish` builds + indexes in one run) |
 | **`apt search`-like search** | ❌ | ✅ (`lx search`, full-text + local + installed) |
-| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx go-native`, works on deb/rpm/arch hosts) |
+| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx migrate native`, works on deb/rpm/arch hosts) |
 | **Format conversion** | ❌ | ✅ (`lx convert` — deb↔rpm↔arch native rebuild with scriptlet carry-over) |
 | **AUR import** | ❌ | ✅ (`lx init --from-aur`) |
 | **Lintian** | ❌ | ✅ (`--lintian`, shelled out) |

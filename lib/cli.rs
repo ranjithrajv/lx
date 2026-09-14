@@ -85,7 +85,7 @@ pub enum Commands {
 
     // --- hidden back-compat shims for top-level names that moved into a
     // group (`lx scan-deps` → `lx deps scan`, etc.). Kept working, not
-    // advertised; see `docs/dogfooding-roadmap.md` and CHANGELOG. ---
+    // advertised; see `docs/analysis/dogfooding-roadmap.md` and CHANGELOG. ---
     /// (moved) use `lx deps scan`
     #[command(hide = true)]
     ScanDeps(crate::scandeps::ScanDepsArgs),
