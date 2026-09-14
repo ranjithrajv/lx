@@ -93,13 +93,16 @@ pub fn control_version(asset_name: &str, package: &str, arch: &str) -> Option<St
 }
 
 /// Print the latest few releases as suggestions when the requested version
-/// was not found, mirroring `build.rs`'s `suggest_versions`. `package` is
-/// the bare upstream name; resolved to the org's actual repo via
-/// `repo_name` for both the API call and the printed URL.
-pub fn suggest_versions(client: &lx_lib::github::GitHubClient, package: &str, wanted: &str) {
-    let repo = repo_name(package);
-    eprintln!("Version '{wanted}' not found for {LATEST_DEBS_ORG}/{repo}.");
-    match client.releases(LATEST_DEBS_ORG, &repo, 5) {
+/// was not found, mirroring `build.rs`'s `suggest_versions`. `org`/`repo`
+/// are the resolved index location (honoring `LX_INDEX_ORG`).
+pub fn suggest_versions(
+    client: &lx_lib::github::GitHubClient,
+    org: &str,
+    repo: &str,
+    wanted: &str,
+) {
+    eprintln!("Version '{wanted}' not found for {org}/{repo}.");
+    match client.releases(org, repo, 5) {
         Ok(metas) if !metas.is_empty() => {
             eprintln!("  Recent releases:");
             for m in metas {
@@ -114,7 +117,7 @@ pub fn suggest_versions(client: &lx_lib::github::GitHubClient, package: &str, wa
         _ => {
             eprintln!(
                 "  No recent releases could be listed; check \
-                 https://github.com/{LATEST_DEBS_ORG}/{repo}/releases"
+                 https://github.com/{org}/{repo}/releases"
             );
         }
     }

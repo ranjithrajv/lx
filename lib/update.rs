@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use clap::Args;
 
-use crate::debs;
+use crate::consumer;
 use crate::manifest::Manifest;
 use lx_lib::github::GitHubClient;
 
@@ -43,27 +43,31 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
 
     for package in &targets {
         let entry = manifest.current(package).unwrap();
-        let release = match client.latest_release(debs::LATEST_DEBS_ORG, package) {
+        let format = consumer::format_or_host(&entry.format);
+        let repo = consumer::repo_name(package);
+        let release = match client.latest_release(&consumer::index_org(), &repo) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("  ? {package}: {e:#}");
                 continue;
             }
         };
-        let Some(asset) = debs::find_asset(&release, package, &entry.arch, &entry.distribution)
+        let Some(resolved) =
+            consumer::resolve_asset(&release, package, format, &entry.arch, &entry.distribution)
         else {
             eprintln!(
-                "  ? {package}: no .deb for {}/{} in release '{}'",
-                entry.arch, entry.distribution, release.tag_name
+                "  ? {package}: no {} asset for {}/{} in release '{}'",
+                format.name(),
+                entry.arch,
+                entry.distribution,
+                release.tag_name
             );
             continue;
         };
-        let Some(candidate) = debs::control_version(&asset.name, package, &entry.arch) else {
-            continue;
-        };
+        let candidate = resolved.version;
         let installed =
-            debs::dpkg_installed_version(package).unwrap_or_else(|| entry.version.clone());
-        match debs::is_newer(&installed, &candidate) {
+            consumer::installed_version(package, format).unwrap_or_else(|| entry.version.clone());
+        match consumer::is_newer(&installed, &candidate, format) {
             Ok(true) => {
                 println!("  ↑ {package}: {installed} -> {candidate} (run `lx upgrade {package}`)");
                 if args.diff {

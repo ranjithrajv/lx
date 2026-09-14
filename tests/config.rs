@@ -757,3 +757,19 @@ architectures: [amd64]
 "#;
     assert!(PackageConfig::parse_str(missing_install).is_err());
 }
+
+#[test]
+fn repo_self_packaging_config_parses() {
+    // .github/lx/package.yaml is the dogfood config the release workflow
+    // feeds back into `lx build`; it must stay loadable and use the musl +
+    // pinned-asset keys it claims to.
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(".github/lx/package.yaml");
+    let cfg = PackageConfig::load(&path).unwrap();
+    assert_eq!(cfg.package_name, "lx");
+    assert_eq!(cfg.github_repo, "ranjithrajv/lx");
+    assert!(cfg.musl, "self-packaging config should request musl-static");
+    assert!(
+        cfg.has_manual_patterns(),
+        "self-packaging config should pin release assets"
+    );
+}

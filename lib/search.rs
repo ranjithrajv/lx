@@ -250,7 +250,7 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let repos = org_repos(debs::LATEST_DEBS_ORG, token)?;
+    let repos = org_repos(&crate::consumer::index_org(), token)?;
     for repo in &repos {
         let Some(package) = repo.name.strip_suffix("-debian") else {
             continue;

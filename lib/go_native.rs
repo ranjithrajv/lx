@@ -1066,6 +1066,7 @@ fn install_native_package(package: &str, format: &str, token: Option<&str>) -> R
         "deb" => crate::install::run(
             InstallArgs {
                 package: package.to_string(),
+                format: Some("deb".into()),
                 version: None,
                 arch: None,
                 distribution: None,

@@ -60,6 +60,10 @@ inputs:
     description: 'Comma-separated lintian tags to suppress (bash-action suppress_tags parity). Empty by default.'
     required: false
     default: ''
+  lx-version:
+    description: 'Release tag of a prebuilt musl-static lx binary to download from the ranjithrajv/lx releases (e.g. v0.1.0, or 0.1.0). Empty (default) builds lx from source, preserving the original behavior.'
+    required: false
+    default: ''
 
 outputs:
   packages:
@@ -95,9 +99,11 @@ runs:
         sudo apt-get install -y --no-install-recommends lintian
 
     - name: Install Rust toolchain
+      if: inputs.lx-version == ''
       uses: dtolnay/rust-toolchain@stable
 
     - name: Cache lx build
+      if: inputs.lx-version == ''
       uses: Swatinem/rust-cache@v2
       with:
         workspaces: ${{ github.action_path }}
@@ -118,13 +124,60 @@ runs:
         restore-keys: |
           lx-cache-${{ github.repository }}-
 
-    - name: Build lx
+    # Resolve the directory holding the `lx` executable exactly once.
+    # `lx-version` empty (default) builds lx from source, preserving the
+    # original behavior; set, it downloads the matching
+    # lx-<tag>-<triple>.tar.gz from the ranjithrajv/lx releases, verifies
+    # the `.sha256` sidecar, and extracts it into the runner tool cache.
+    # The computed `lx-bin` output is what the later steps invoke, so the
+    # cargo output path is no longer hardcoded downstream.
+    - name: Install lx
+      id: install-lx
       shell: bash
       env:
         ACTION_PATH: ${{ github.action_path }}
+        LX_VERSION: ${{ inputs.lx-version }}
       run: |
-        cargo build --release --manifest-path "$ACTION_PATH/Cargo.toml"
-        echo "$ACTION_PATH/target/release" >> "$GITHUB_PATH"
+        set -euo pipefail
+        if [ -z "$LX_VERSION" ]; then
+          # Default: build lx from source (there are no published releases
+          # yet, so this path always works).
+          cargo build --release --manifest-path "$ACTION_PATH/Cargo.toml"
+          lx_bin="$ACTION_PATH/target/release"
+        else
+          # Prebuilt path: lx-<tag>-<triple>.tar.gz + .sha256, as published
+          # by .github/workflows/release.yml in ranjithrajv/lx.
+          case "$(uname -m)" in
+            x86_64|amd64)  triple="x86_64-unknown-linux-musl" ;;
+            aarch64|arm64) triple="aarch64-unknown-linux-musl" ;;
+            *)
+              echo "::error::no prebuilt lx for $(uname -m); leave lx-version empty to build from source"
+              exit 1
+              ;;
+          esac
+          tag="$LX_VERSION"
+          case "$tag" in v*) ;; *) tag="v$tag" ;; esac
+          asset="lx-${tag}-${triple}.tar.gz"
+          dest="${RUNNER_TOOL_CACHE:-$HOME/.cache/lx-action}/lx/${tag}/${triple}"
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          (
+            cd "$work"
+            base="https://github.com/ranjithrajv/lx/releases/download/${tag}/${asset}"
+            echo "Downloading $base"
+            curl -fsSL -o "$asset" "$base"
+            curl -fsSL -o "${asset}.sha256" "${base}.sha256"
+            sha256sum -c "${asset}.sha256"
+          )
+          mkdir -p "$dest"
+          tar -xzf "$work/$asset" -C "$dest"
+          chmod +x "$dest/lx"
+          lx_bin="$dest"
+        fi
+        echo "lx-bin=$lx_bin" >> "$GITHUB_OUTPUT"
+        # Keep lx on PATH for parity with the build-from-source path.
+        echo "$lx_bin" >> "$GITHUB_PATH"
+        "$lx_bin/lx" --version
 
     - name: Validate version availability
       shell: bash
@@ -139,7 +192,7 @@ runs:
         if [ -n "${{ inputs.version }}" ]; then
           validate_flag=(--version "${{ inputs.version }}")
         fi
-        lx validate "${{ inputs.config-file }}" "${validate_flag[@]}"
+        "${{ steps.install-lx.outputs['lx-bin'] }}/lx" validate "${{ inputs.config-file }}" "${validate_flag[@]}"
 
     - name: Build packages
       id: build
@@ -183,7 +236,7 @@ runs:
         # --source: debian-multiarch-builder always generated source
         # packages alongside binary ones (no opt-in flag existed there
         # either), so this stays unconditional for drop-in parity.
-        lx build "${{ inputs.config-file }}" \
+        "${{ steps.install-lx.outputs['lx-bin'] }}/lx" build "${{ inputs.config-file }}" \
           --version "${{ inputs.version }}" \
           --build-version "${{ inputs.build-version }}" \
           --max-parallel "${{ inputs.max-parallel }}" \

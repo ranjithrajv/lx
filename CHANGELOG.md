@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Format-aware consumer (`lx get` on rpm and pacman hosts)
+
+- The consumer commands (`install`, `upgrade`, `update`, `remove`, `list`,
+  `show`, `rollback`, `reinstall`) now dispatch on the host's native package
+  format instead of assuming dpkg: `install` gained `--format deb|rpm|arch`
+  (default: the host's own manager), install/remove use `rpm`/`pacman` where
+  appropriate, and upgrade decisions use the format's own version ordering
+  (Debian via `dpkg --compare-versions`; RPM/Arch via RPM `EVR` in
+  `lib/versioncmp.rs`).
+- The package org is configurable with `LX_INDEX_ORG` (default
+  `latest-debs`), so a project can point the consumer client at its own org
+  instead of the community one.
+- `PackageEntry` now records the native `format`; manifests written before
+  the field existed still load and default to `deb`.
+
+### `--format all` and `lx publish`
+
+- `lx build --format all` builds every registered packager; `--format
+  deb,rpm` builds each listed format. A single format behaves exactly as
+  before.
+- New `lx publish` builds every requested format and generates that
+  format's repository index in one run, each in its own
+  `<output>/<format>/` subdirectory: the producer→distributor loop in one
+  command.
+
+### Release binaries and self-packaging
+
+- `.github/workflows/release.yml` cross-compiles musl-static `lx` binaries
+  for x86_64/aarch64 on `v*` tag push, refuses to publish a dynamically
+  linked binary, publishes `lx-<tag>-<triple>.tar.gz` + `.sha256`, and
+  dogfoods `lx build` on its own released assets.
+- `action.yml` gained an `lx-version` input to consume a prebuilt release
+  instead of always compiling from source (empty keeps the source build).
+- `musl` is now declared in the generated JSON schema (`lx schema`).
+
 ### PackageIndex plugin dimension (merged RepoIndexer + IndexSource)
 
 - **`RepoIndexer` (write) and `IndexSource` (read) are now one dimension.**

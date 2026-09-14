@@ -643,7 +643,7 @@ fn run_coverage(opts: CoverageOpts) -> Result<()> {
     }
 
     // latest-debs org repos (strip "-debian" suffix).
-    if let Ok(repos) = crate::search::org_repos(crate::debs::LATEST_DEBS_ORG, None) {
+    if let Ok(repos) = crate::search::org_repos(&crate::consumer::index_org(), None) {
         for repo in &repos {
             if let Some(pkg) = repo.name.strip_suffix("-debian") {
                 covered.insert(pkg.to_ascii_lowercase());

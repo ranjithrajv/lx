@@ -1,0 +1,207 @@
+name: release
+
+# Cut a release by pushing a `v*` tag:
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# or run this workflow by hand from the Actions tab (workflow_dispatch),
+# optionally naming an existing v* tag. Each run publishes musl-static
+# `lx` binaries for x86_64 + aarch64 and, once released, dogfoods
+# `lx build` on those assets (see the `package` job).
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing v* tag to release (defaults to the ref this run was dispatched on)'
+        required: false
+        default: ''
+
+# Creating the GitHub Release and uploading assets.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+          - target: aarch64-unknown-linux-musl
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Resolve release tag
+        run: |
+          if [[ "$RELEASE_TAG" != v* ]]; then
+            echo "::error::release binaries come from a v* tag (got '$RELEASE_TAG'); re-run with the tag input set"
+            exit 1
+          fi
+          echo "releasing $RELEASE_TAG (${{ matrix.target }})"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Native cross toolchain, not Docker `cross`: lx's whole thesis is
+      # container-free builds. musl-tools supplies musl-gcc for x86_64;
+      # gcc-aarch64-linux-gnu drives the aarch64 C dependencies (zstd-sys)
+      # and the link step. Rust's musl targets ship their own libc, so no
+      # musl sysroot download is needed.
+      - name: Install native musl cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools gcc-aarch64-linux-gnu
+
+      - name: Configure musl cross linker
+        run: |
+          case "${{ matrix.target }}" in
+            x86_64-unknown-linux-musl)
+              echo "CC_x86_64_unknown_linux_musl=musl-gcc" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+              ;;
+            aarch64-unknown-linux-musl)
+              echo "CC_aarch64_unknown_linux_musl=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Verify statically linked
+        run: |
+          bin="target/${{ matrix.target }}/release/lx"
+          file "$bin"
+          if file "$bin" | grep -q 'dynamically linked'; then
+            echo "::error::$bin is dynamically linked; refusing to publish"
+            exit 1
+          fi
+          if ! file "$bin" | grep -q 'statically linked'; then
+            echo "::error::$bin is not statically linked; refusing to publish"
+            exit 1
+          fi
+
+      - name: Package tarball and checksum
+        run: |
+          set -euo pipefail
+          name="lx-${RELEASE_TAG}-${{ matrix.target }}"
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/lx" dist/lx
+          chmod +x dist/lx
+          tar -C dist -czf "dist/${name}.tar.gz" lx
+          rm -f dist/lx
+          # lx's own sidecar probe reads <asset>.sha256 and looks up the
+          # asset's basename, so this exact naming is load-bearing for the
+          # dogfood `package` job below.
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          ls -l dist
+
+      - name: Upload release asset
+        uses: actions/upload-artifact@v4
+        with:
+          name: lx-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download built assets
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: dist/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  package:
+    name: dogfood lx build
+    needs: release
+    runs-on: ubuntu-latest
+    # This job runs `lx build` on the tarballs `release` just published —
+    # lx packaging itself. It is deliberately non-fatal for now: the repo
+    # has no prior released lx binaries, and if the asset pattern in
+    # .github/lx/package.yaml ever drifts from what `build` emits, or the
+    # release cannot be fetched, the release must still succeed. Chosen
+    # over gating on a workflow_dispatch input so tag-push releases
+    # dogfood automatically; flip `continue-on-error` to false once the
+    # pipeline has a proven release.
+    continue-on-error: true
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Install the lx from this release
+        run: |
+          set -euo pipefail
+          triple=x86_64-unknown-linux-musl
+          asset="lx-${RELEASE_TAG}-${triple}.tar.gz"
+          work="$(mktemp -d)"
+          cd "$work"
+          base="https://github.com/ranjithrajv/lx/releases/download/${RELEASE_TAG}/${asset}"
+          curl -fsSL -o "$asset" "$base"
+          curl -fsSL -o "${asset}.sha256" "${base}.sha256"
+          sha256sum -c "${asset}.sha256"
+          tar -xzf "$asset" -C "$RUNNER_TEMP"
+          chmod +x "$RUNNER_TEMP/lx"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/lx" --version
+
+      - name: Build deb/rpm/arch packages from the published assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          for fmt in deb rpm arch; do
+            echo "::group::lx build --format $fmt"
+            lx build .github/lx/package.yaml \
+              --format "$fmt" \
+              --version "$RELEASE_TAG" \
+              --build-version 1 \
+              --output "dist-${fmt}" \
+              --cache-dir "$HOME/.cache/lx/downloads" \
+              --api-cache-dir "$HOME/.cache/lx/api"
+            echo "::endgroup::"
+          done
+          find dist-* -type f | sort
+
+      - name: Attach dogfood packages to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            dist-deb/*
+            dist-rpm/*
+            dist-arch/*
+          fail_on_unmatched_files: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

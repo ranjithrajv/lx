@@ -11,9 +11,9 @@ use clap::{Parser, Subcommand};
     long_about = "lx watches forge releases, fetches the release assets
 matching each architecture, verifies their checksums against pinned metadata, and
 builds .deb/.rpm/Arch/.apk/.ipk packages natively on bare metal — no containers, no emulation. It also installs,
-upgrades, and removes pre-built .deb packages published under the latest-debs
-GitHub org, tracking what it manages in a local install manifest -- an apt-like
-front end for software that only ships forge releases.",
+upgrades, and removes the packages it builds — dispatching on the host's own package
+manager (dpkg, rpm, pacman) — tracking what it manages in a local install manifest. The
+package org is configurable with LX_INDEX_ORG (default: latest-debs).",
     after_help = "Exit codes:\n  0  success\n  1  generic error\n  2  usage error (clap)"
 )]
 pub struct Cli {
@@ -32,8 +32,11 @@ pub struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum Commands {
-    /// Build .deb packages from a package.yaml config
+    /// Build packages from a package.yaml config
     Build(crate::build::BuildArgs),
+    /// Build every requested format and generate its repository index in one
+    /// run (the producer→distributor loop)
+    Publish(crate::publish::PublishArgs),
     /// Convert a built package from one format to another (deb↔rpm↔arch)
     Convert(crate::convert::ConvertArgs),
     /// Validate a package.yaml config and check release availability (no build)
@@ -42,7 +45,8 @@ pub enum Commands {
     Discover(crate::discovery::DiscoverArgs),
     /// Interactively generate a package.yaml config
     Init(crate::wizard::InitArgs),
-    /// Fetch and install a pre-built .deb from the latest-debs GitHub org
+    /// Fetch and install a pre-built native package (deb/rpm/arch) from the
+    /// configured org (LX_INDEX_ORG, default latest-debs)
     Install(crate::install::InstallArgs),
     /// Check lx-managed packages against their latest release (no install)
     Update(crate::update::UpdateArgs),
@@ -89,7 +93,7 @@ pub enum Commands {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum GetCommands {
-    /// Fetch and install a pre-built .deb
+    /// Fetch and install a pre-built native package
     Install(crate::install::InstallArgs),
     /// Upgrade lx-managed packages
     Upgrade(crate::upgrade::UpgradeArgs),
@@ -109,12 +113,8 @@ pub enum GetCommands {
 
 pub fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Build(args) => crate::build::run(args, cli.token.as_deref()).map_err(|e| {
-            // Mirror the bash action's ./failed-build-logs/ artifact dir so
-            // the GitHub Action can upload it on failure.
-            crate::build::write_failed_build_log(&format!("{e:#}"));
-            e
-        }),
+        Commands::Build(args) => run_build(args, cli.token.as_deref()),
+        Commands::Publish(args) => crate::publish::run(args, cli.token.as_deref()),
         Commands::Convert(args) => crate::convert::run(args),
         Commands::Validate(args) => crate::validate::run(args, cli.token.as_deref()),
         Commands::Discover(args) => crate::discovery::run(args, cli.token.as_deref()),
@@ -146,4 +146,28 @@ pub fn run(cli: Cli) -> Result<()> {
             GetCommands::Search(a) => crate::search::run(a, cli.token.as_deref()),
         },
     }
+}
+
+/// Dispatch `lx build`, expanding `--format all` / `--format a,b` into one
+/// build per format. A single format passes straight through, so its
+/// validation and error messages are unchanged.
+fn run_build(args: crate::build::BuildArgs, token: Option<&str>) -> Result<()> {
+    // Mirror the bash action's `./failed-build-logs/` artifact dir so the
+    // GitHub Action can upload it on failure; the error passes through
+    // unchanged.
+    let log = |e: &anyhow::Error| crate::build::write_failed_build_log(&format!("{e:#}"));
+
+    let expanded = args
+        .format
+        .as_deref()
+        .and_then(crate::plugins::expand_formats);
+    let Some(formats) = expanded else {
+        return crate::build::run(args, token).inspect_err(log);
+    };
+    for format in formats {
+        let mut per = args.clone();
+        per.format = Some(format);
+        crate::build::run(per, token).inspect_err(log)?;
+    }
+    Ok(())
 }

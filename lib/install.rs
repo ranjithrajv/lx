@@ -4,30 +4,37 @@ use anyhow::{anyhow, Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
+use crate::consumer;
 use crate::debs;
+use crate::index::detect_host_format;
+use crate::install_pkg;
 use crate::manifest::{Manifest, PackageEntry};
 use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
-    /// Package name (e.g. "eza"), looked up as "<package>-debian" under
-    /// the latest-debs GitHub org.
+    /// Package name (e.g. "eza"), looked up as "<package>-debian" under the
+    /// configured org (`LX_INDEX_ORG`, default `latest-debs`).
     pub package: String,
+
+    /// Native package format to install: `deb`, `rpm`, or `arch`. Defaults
+    /// to the host's own package manager.
+    #[arg(long)]
+    pub format: Option<String>,
 
     /// Version/tag to install (defaults to the latest release).
     #[arg(short = 'v', long)]
     pub version: Option<String>,
 
-    /// Target Debian architecture (defaults to `dpkg --print-architecture`).
+    /// Target architecture (defaults to the host's, per format).
     #[arg(long)]
     pub arch: Option<String>,
 
-    /// Target Debian distribution/suite (defaults to the host's codename
-    /// from /etc/os-release).
+    /// Target distribution/suite (defaults to the host's, per format).
     #[arg(long)]
     pub distribution: Option<String>,
 
-    /// Download the .deb into this directory instead of installing it.
+    /// Download the package into this directory instead of installing it.
     #[arg(long)]
     pub download_only: Option<PathBuf>,
 
@@ -39,11 +46,12 @@ pub struct InstallArgs {
     /// Proceed when the release has no sidecar checksum to verify against,
     /// instead of failing the install. Most releases don't publish a
     /// checksum sidecar, so without this the default is to refuse to
-    /// install an unverified .deb rather than silently warn and continue.
+    /// install an unverified package rather than silently warn and continue.
     #[arg(long)]
     pub allow_unverified: bool,
 
-    /// Reinstall even if dpkg already reports this exact version installed.
+    /// Reinstall even if the host manager already reports this exact
+    /// version installed.
     #[arg(long)]
     pub reinstall: bool,
 
@@ -53,76 +61,63 @@ pub struct InstallArgs {
 }
 
 pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
+    let format = match &args.format {
+        Some(f) => consumer::parse_format(f)?,
+        None => detect_host_format(),
+    };
+    let org = consumer::index_org();
+    let repo = consumer::repo_name(&args.package);
+
     let client = GitHubClient::new(token.map(|s| s.to_string()))?;
-    let repo = debs::repo_name(&args.package);
 
     let release = match &args.version {
-        Some(v) => match client.release_by_tag(debs::LATEST_DEBS_ORG, &repo, v) {
+        Some(v) => match client.release_by_tag(&org, &repo, v) {
             Ok(r) => r,
             Err(e) => {
-                debs::suggest_versions(&client, &args.package, v);
+                debs::suggest_versions(&client, &org, &repo, v);
                 return Err(e);
             }
         },
-        None => client
-            .latest_release(debs::LATEST_DEBS_ORG, &repo)
-            .with_context(|| {
-                format!(
-                    "no releases found for '{}/{repo}'. Is '{}' published under \
-                     https://github.com/orgs/{}/repositories ?",
-                    debs::LATEST_DEBS_ORG,
-                    args.package,
-                    debs::LATEST_DEBS_ORG
-                )
-            })?,
-    };
-
-    let arch = match &args.arch {
-        Some(a) => a.clone(),
-        None => debs::detect_dpkg_arch()?,
-    };
-    let dist = match &args.distribution {
-        Some(d) => d.clone(),
-        None => debs::detect_dist().ok_or_else(|| {
-            anyhow!(
-                "could not detect the host Debian distribution from /etc/os-release; \
-                 pass --distribution explicitly"
+        None => client.latest_release(&org, &repo).with_context(|| {
+            format!(
+                "no releases found for '{org}/{repo}'. Is '{}' published under \
+                 https://github.com/orgs/{org}/repositories ?",
+                args.package
             )
         })?,
     };
 
-    let dist_specific = debs::find_asset(&release, &args.package, &arch, &dist);
-    let (asset, is_musl_fallback) = match dist_specific {
-        Some(a) => (a, false),
-        None => {
-            let Some(a) = debs::find_asset_musl(&release, &args.package, &arch, &dist) else {
-                return Err(anyhow!(
-                    "no .deb for {arch}/{dist} (or musl fallback) in release '{}'. Available:\n  {}",
-                    release.tag_name,
-                    release
-                        .assets
-                        .iter()
-                        .map(|a| a.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join("\n  ")
-                ));
-            };
-            (a, true)
-        }
+    let arch = match &args.arch {
+        Some(a) => a.clone(),
+        None => install_pkg::detect_arch(format)?,
     };
-    if is_musl_fallback {
-        println!("  (no {dist}-specific build; using musl-static binary — runs on any Linux)");
-    }
-    let control_version =
-        debs::control_version(&asset.name, &args.package, &arch).ok_or_else(|| {
+    let dist = match &args.distribution {
+        Some(d) => d.clone(),
+        None => consumer::host_dist(format).unwrap_or_default(),
+    };
+
+    let resolved = consumer::resolve_asset(&release, &args.package, format, &arch, &dist)
+        .ok_or_else(|| {
             anyhow!(
-                "could not derive a Debian version from asset '{}'",
-                asset.name
+                "no {} asset for {arch}/{dist} in release '{}'. Available:\n  {}",
+                format.name(),
+                release.tag_name,
+                release
+                    .assets
+                    .iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n  ")
             )
         })?;
+    if resolved.musl_fallback {
+        println!("  (no {dist}-specific build; using musl-static binary — runs on any Linux)");
+    }
+    let asset = resolved.asset;
+    let control_version = resolved.version;
 
     if args.download_only.is_none() && !args.reinstall {
-        if let Some(installed) = debs::dpkg_installed_version(&args.package) {
+        if let Some(installed) = consumer::installed_version(&args.package, format) {
             if installed == control_version {
                 println!(
                     "{} is already at {control_version}; nothing to do (use --reinstall to force)",
@@ -133,8 +128,13 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
         }
     }
 
+    let target = if dist.is_empty() {
+        format.name().to_string()
+    } else {
+        dist.clone()
+    };
     println!(
-        "Found {} ({}) for {arch}/{dist}",
+        "Found {} ({}) for {arch}/{target}",
         asset.name,
         debs::human_size(asset.size.unwrap_or(0))
     );
@@ -158,7 +158,7 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    debs::install_deb(&dest, args.yes)?;
+    consumer::install(&dest, &asset.name, format, args.yes)?;
 
     let mut manifest = Manifest::load()?;
     manifest.record(
@@ -170,6 +170,7 @@ pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
             asset: asset.name.clone(),
             tag: release.tag_name.clone(),
             installed_at: debs::now_rfc3339(),
+            format: format.name().to_string(),
         },
     );
     manifest.save()?;

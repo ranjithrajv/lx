@@ -3,6 +3,7 @@
 use anyhow::{anyhow, Result};
 use clap::Args;
 
+use crate::consumer;
 use crate::debs;
 use crate::manifest::{Manifest, PackageEntry};
 use lx_lib::github::GitHubClient;
@@ -52,8 +53,9 @@ pub fn run(args: RollbackArgs, token: Option<&str>) -> Result<()> {
         })?;
 
     let client = GitHubClient::new(token.map(|s| s.to_string()))?;
-    let repo = debs::repo_name(&args.package);
-    let release = client.release_by_tag(debs::LATEST_DEBS_ORG, &repo, &target.tag)?;
+    let format = consumer::format_or_host(&target.format);
+    let repo = consumer::repo_name(&args.package);
+    let release = client.release_by_tag(&consumer::index_org(), &repo, &target.tag)?;
     let asset = release
         .assets
         .iter()
@@ -77,7 +79,7 @@ pub fn run(args: RollbackArgs, token: Option<&str>) -> Result<()> {
     if !args.no_verify {
         debs::verify_sidecar_or_require_flag(&client, asset, &dest, args.allow_unverified)?;
     }
-    debs::install_deb(&dest, args.yes)?;
+    consumer::install(&dest, &asset.name, format, args.yes)?;
 
     let mut manifest = Manifest::load()?;
     manifest.record(
@@ -89,6 +91,7 @@ pub fn run(args: RollbackArgs, token: Option<&str>) -> Result<()> {
             asset: asset.name.clone(),
             tag: target.tag.clone(),
             installed_at: debs::now_rfc3339(),
+            format: format.name().to_string(),
         },
     );
     manifest.save()?;

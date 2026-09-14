@@ -3,6 +3,7 @@
 use anyhow::{anyhow, bail, Result};
 use clap::Args;
 
+use crate::consumer;
 use crate::debs;
 use crate::manifest::{Manifest, PackageEntry};
 use lx_lib::github::GitHubClient;
@@ -72,7 +73,11 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
         let kept: Vec<String> = targets
             .into_iter()
             .filter(|p| {
-                let keep = debs::dpkg_installed_version(p).is_some();
+                let format = manifest
+                    .current(p)
+                    .map(|e| consumer::format_or_host(&e.format))
+                    .unwrap_or_else(crate::index::detect_host_format);
+                let keep = consumer::installed_version(p, format).is_some();
                 if !keep {
                     println!("skipping '{p}': not currently installed (--owned-only)");
                 }
@@ -196,6 +201,7 @@ fn migrate_distro_package(package: &str, token: Option<&str>) -> Result<bool> {
     match crate::install::run(
         crate::install::InstallArgs {
             package: package.to_string(),
+            format: None,
             version: None,
             arch: None,
             distribution: None,
@@ -226,26 +232,27 @@ fn upgrade_one(
     entry: &PackageEntry,
     args: &UpgradeArgs,
 ) -> Result<bool> {
-    let release = client.latest_release(debs::LATEST_DEBS_ORG, &debs::repo_name(package))?;
-    let asset =
-        debs::find_asset(&release, package, &entry.arch, &entry.distribution).ok_or_else(|| {
-            anyhow!(
-                "no .deb for {}/{} in release '{}'",
-                entry.arch,
-                entry.distribution,
-                release.tag_name
-            )
-        })?;
-    let candidate_version =
-        debs::control_version(&asset.name, package, &entry.arch).ok_or_else(|| {
-            anyhow!(
-                "could not derive a Debian version from asset '{}'",
-                asset.name
-            )
-        })?;
+    let format = consumer::format_or_host(&entry.format);
+    let org = consumer::index_org();
+    let repo = consumer::repo_name(package);
+    let release = client.latest_release(&org, &repo)?;
+    let resolved =
+        consumer::resolve_asset(&release, package, format, &entry.arch, &entry.distribution)
+            .ok_or_else(|| {
+                anyhow!(
+                    "no {} asset for {}/{} in release '{}'",
+                    format.name(),
+                    entry.arch,
+                    entry.distribution,
+                    release.tag_name
+                )
+            })?;
+    let asset = resolved.asset;
+    let candidate_version = resolved.version;
 
-    let installed = debs::dpkg_installed_version(package).unwrap_or(entry.version.clone());
-    if !debs::is_newer(&installed, &candidate_version)? {
+    let installed =
+        consumer::installed_version(package, format).unwrap_or_else(|| entry.version.clone());
+    if !consumer::is_newer(&installed, &candidate_version, format)? {
         println!("  = {package} up to date ({installed})");
         return Ok(false);
     }
@@ -261,7 +268,7 @@ fn upgrade_one(
     if !args.no_verify {
         debs::verify_sidecar_or_require_flag(client, asset, &dest, args.allow_unverified)?;
     }
-    debs::install_deb(&dest, args.yes)?;
+    consumer::install(&dest, &asset.name, format, args.yes)?;
 
     let mut manifest = Manifest::load()?;
     manifest.record(
@@ -273,6 +280,7 @@ fn upgrade_one(
             asset: asset.name.clone(),
             tag: release.tag_name.clone(),
             installed_at: debs::now_rfc3339(),
+            format: format.name().to_string(),
         },
     );
     manifest.save()?;

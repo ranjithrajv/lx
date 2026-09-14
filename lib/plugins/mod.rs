@@ -165,6 +165,29 @@ pub fn packager_names() -> Vec<&'static str> {
     all_packagers().iter().map(|p| p.name()).collect()
 }
 
+/// Expand a user-supplied `--format` value into the concrete formats to
+/// build. `all` expands to every registered packager (deb, rpm, arch, apk,
+/// ipk); a comma-separated list is split and trimmed; a single format
+/// returns `None` so the caller can pass it through unchanged (preserving
+/// the existing validation and error messages).
+pub fn expand_formats(value: &str) -> Option<Vec<String>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("all") {
+        return Some(packager_names().into_iter().map(str::to_string).collect());
+    }
+    if v.contains(',') {
+        let list: Vec<String> = v
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        if !list.is_empty() {
+            return Some(list);
+        }
+    }
+    None
+}
+
 // ---------------------------------------------------------------------------
 // Shared staging helpers (format-agnostic, used by all plugins)
 // ---------------------------------------------------------------------------

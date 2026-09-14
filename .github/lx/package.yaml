@@ -1,0 +1,29 @@
+# Dogfood config: lx packages its own musl-static release binaries with
+# `lx build` (this is the tool packaging itself).
+#
+# The release workflow (.github/workflows/release.yml) publishes
+#   lx-<tag>-<triple>.tar.gz  +  lx-<tag>-<triple>.tar.gz.sha256
+# for x86_64- and aarch64-unknown-linux-musl, then its `package` job runs
+#   lx build .github/lx/package.yaml --format {deb,rpm,arch}
+# against those assets and attaches the resulting deb/rpm/arch packages to
+# the same GitHub Release.
+package_name: lx
+github_repo: ranjithrajv/lx
+
+description: "lx — build, install, and distribute Linux packages natively, with no containers"
+license_spdx: GPL-3.0-or-later
+artifact_format: tar.gz
+
+# The released tarballs are musl-static, so every package lx emits is
+# dependency-free (no libc6/glibc floor).
+musl: true
+
+# Pin the exact released assets instead of relying on auto-discovery.
+# release.yml names them lx-<tag>-<triple>.tar.gz with the git tag verbatim
+# (leading `v` included, e.g. lx-v0.1.0-x86_64-unknown-linux-musl.tar.gz);
+# {version} expands to the resolved release tag verbatim.
+architectures:
+  amd64:
+    release_pattern: "lx-{version}-x86_64-unknown-linux-musl.tar.gz"
+  arm64:
+    release_pattern: "lx-{version}-aarch64-unknown-linux-musl.tar.gz"

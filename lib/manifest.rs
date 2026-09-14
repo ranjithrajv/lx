@@ -24,13 +24,23 @@ pub struct Manifest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PackageEntry {
-    /// Debian Version field (matches `dpkg-query -W -f='${Version}'`).
+    /// Debian Version field (matches `dpkg-query -W -f='${Version}'`), or
+    /// the `[epoch:]version-release` string for rpm/arch.
     pub version: String,
     pub arch: String,
     pub distribution: String,
     pub asset: String,
     pub tag: String,
     pub installed_at: String,
+    /// Native package format this generation came from (`deb`/`rpm`/`arch`).
+    /// Manifests written before this field existed default to `deb`, which
+    /// is exactly what those entries were.
+    #[serde(default = "default_package_format")]
+    pub format: String,
+}
+
+fn default_package_format() -> String {
+    "deb".to_string()
 }
 
 impl Manifest {

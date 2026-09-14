@@ -84,6 +84,41 @@ utils/          # Helper scripts (coverage, secret scan, covscan)
 docs/decisions/ # ADR-style notes on non-obvious design decisions
 ```
 
+## Releasing lx
+
+Releases are cut from a `v*` tag — pushing one triggers
+`.github/workflows/release.yml`:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+You can also run the workflow by hand from the Actions tab
+(`workflow_dispatch`), optionally naming an existing `v*` tag; the tag must
+still match `v*` or the build job refuses to publish.
+
+The workflow builds `lx` statically for `x86_64-unknown-linux-musl` and
+`aarch64-unknown-linux-musl` with a **native** cross toolchain
+(`musl-tools` + `gcc-aarch64-linux-gnu`, no Docker `cross`), refuses to
+publish any binary that isn't statically linked, and for each target
+publishes:
+
+- `lx-<tag>-<triple>.tar.gz` (containing the `lx` binary)
+- `lx-<tag>-<triple>.tar.gz.sha256`
+
+Both tarballs and checksums are attached to the GitHub Release for the tag
+(with generated release notes). As a follow-up job, `lx` then dogfoods its
+own `lx build` against those assets via `.github/lx/package.yaml` to
+produce `.deb`/`.rpm`/`.pkg.tar.zst` packages and attaches them to the same
+release. That job is `continue-on-error: true` until the release pipeline
+has a proven release, so a packaging hiccup can't fail the actual release.
+
+The composite action consumes these artifacts: set the `lx-version` input
+(e.g. `lx-version: v0.1.0`) to download and checksum-verify the prebuilt
+binary instead of compiling from source; leaving it empty keeps the
+build-from-source default.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed

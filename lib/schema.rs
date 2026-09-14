@@ -135,6 +135,10 @@ pub fn generate_schema() -> serde_json::Value {
                 "enum": ["cmake", "cargo", "go", "meson", "autotools", "make", "custom"],
                 "description": "Source-mode build system (cmake default; custom uses build_commands/install_commands)"
             },
+            "musl": {
+                "type": "boolean",
+                "description": "Produce/select a musl-static binary with no glibc dependency, so the package runs on any Linux regardless of distro age. Source builds adjust their compile flags (cargo musl target, go CGO_ENABLED=0, cmake musl-gcc); binary repacks prefer a *-musl* release asset."
+            },
             "upstream_url": {
                 "type": "string",
                 "description": "Source tarball URL root for build_mode: source (default: github archive)"

@@ -45,8 +45,8 @@ pub fn run(args: ShowArgs) -> Result<()> {
             println!("managed: yes ({} record(s))", hist.len());
             for (i, e) in hist.iter().enumerate() {
                 println!(
-                    "  [{}] version={} tag={} arch={} suite={} asset={} at={}",
-                    i, e.version, e.tag, e.arch, e.distribution, e.asset, e.installed_at
+                    "  [{}] version={} tag={} arch={} suite={} format={} asset={} at={}",
+                    i, e.version, e.tag, e.arch, e.distribution, e.format, e.asset, e.installed_at
                 );
             }
         }
@@ -63,7 +63,11 @@ pub fn run(args: ShowArgs) -> Result<()> {
         print_elf_needs(&args.package, &deps);
     }
 
-    println!("source: {}-debian", crate::debs::repo_name(&args.package));
+    println!(
+        "source: {}/{}",
+        crate::consumer::index_org(),
+        crate::consumer::repo_name(&args.package)
+    );
     Ok(())
 }
 

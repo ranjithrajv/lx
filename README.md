@@ -144,7 +144,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 
 | Command | Purpose |
 |---|---|
-| `lx build [config]` | Build `.deb`s (and optionally source packages) from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`) |
+| `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk), `--format all` builds every format, and `--format deb,rpm` builds each listed |
 | `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
@@ -160,7 +160,8 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx reinstall <package>` | Reinstall the recorded version of an `lx`-managed package |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
-| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`) |
+| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead |
+| `lx publish [config]` | Build every requested format and generate that format's repository index in one run (`--formats`, default `deb,rpm,arch`), each in its own `<output>/<format>/` subdirectory — the producer→distributor loop |
 | `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
 | `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
 | `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
@@ -173,6 +174,13 @@ no build machinery. Same manifest, same org:
 lx get install eza
 lx get upgrade --owned-only   # skip entries removed outside lx
 ```
+
+On an rpm or pacman host the same commands operate on that host's native
+format: `install`/`upgrade` fetch the `.rpm` or `.pkg.tar.zst` asset,
+`remove` uses `rpm -e`/`pacman -R`, and versions are compared with that
+format's own ordering. `--format` overrides host detection, and
+`LX_INDEX_ORG` points the client at a different GitHub org (default
+`latest-debs`). Each manifest entry records the format it was installed as.
 
 ### `lx go-native`
 
@@ -673,9 +681,12 @@ Outputs: `packages` (space-separated `.deb` filenames), `source-packages`
 (`.dsc` filenames), `summary-path` (`build-summary.json`). It needs no host
 `apt-get` dependency install at all — building, source packages, and
 `lintian` (when the runner has one) are all native or host-tool-backed
-rather than shelled-out `tar`/`jq`/`yq`/`dpkg-*` in a container. Since this
-repo has no published binary releases yet, the action builds `lx` from
-source (cached via `Swatinem/rust-cache`).
+rather than shelled-out `tar`/`jq`/`yq`/`dpkg-*` in a container. The action
+builds `lx` from source by default (cached via `Swatinem/rust-cache`); once
+a release exists, set the `lx-version` input (e.g. `lx-version: v0.1.0`) to
+download the matching musl-static `lx-<tag>-<triple>.tar.gz`, verify its
+`.sha256`, and use it instead of compiling (`v*` tags are cut by
+`.github/workflows/release.yml`).
 
 ### Attribution & telemetry
 

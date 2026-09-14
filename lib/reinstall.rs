@@ -44,6 +44,7 @@ pub fn run(args: ReinstallArgs, token: Option<&str>) -> Result<()> {
     crate::install::run(
         crate::install::InstallArgs {
             package: args.package,
+            format: Some(entry.format.clone()),
             version: Some(entry.version.clone()),
             arch: Some(entry.arch.clone()),
             distribution: Some(entry.distribution.clone()),

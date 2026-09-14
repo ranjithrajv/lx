@@ -88,3 +88,14 @@ fn schema_documents_new_features() {
     assert!(types.contains(&"archive"));
     assert!(s["properties"]["contents"]["items"]["properties"]["packager"].is_object());
 }
+
+#[test]
+fn schema_documents_musl_and_source_build_mode() {
+    // `musl` was parsed by the config loader but omitted from the schema
+    // (which sets additionalProperties: false), so a strict validator would
+    // reject a valid package.yaml. Guard against that regression.
+    let s = generate_schema();
+    for key in ["musl", "build_mode", "build_system"] {
+        assert!(s["properties"][key].is_object(), "missing {key}");
+    }
+}
