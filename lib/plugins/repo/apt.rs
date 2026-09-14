@@ -28,13 +28,27 @@ impl RepoIndexer for AptIndexer {
     }
 
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], opts: &IndexOptions) -> Result<()> {
-        crate::repo::build_apt_index(
-            dir,
-            artifacts,
-            opts.suite,
-            opts.origin,
-            opts.sign_key,
-            opts.sign_key_id,
-        )
+        crate::repo::build_apt_index(dir, artifacts, opts.suite, opts.origin)
+    }
+
+    fn sign_index(&self, dir: &Path, opts: &IndexOptions) -> Result<()> {
+        let Some(key) = opts.sign_key else {
+            return Ok(());
+        };
+        let release = std::fs::read(dir.join("Release"))?;
+        let req = lx_lib::sign::SignRequest {
+            key_file: key,
+            key_id: opts.sign_key_id,
+            passphrase: None,
+        };
+        // `InRelease` is an inline-clearsigned Release (apt's primary
+        // authenticated index); `Release.gpg` is the armored detached form
+        // older clients fetch.
+        let inline = lx_lib::sign::clearsign_inline(&release, &req)?;
+        std::fs::write(dir.join("InRelease"), inline)?;
+        let detached = lx_lib::sign::clearsign(&release, &req)?;
+        std::fs::write(dir.join("Release.gpg"), detached)?;
+        println!("wrote InRelease, Release.gpg (clearsigned)");
+        Ok(())
     }
 }

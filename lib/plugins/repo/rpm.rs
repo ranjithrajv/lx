@@ -101,6 +101,24 @@ impl RepoIndexer for RpmIndexer {
         );
         Ok(())
     }
+
+    fn sign_index(&self, dir: &Path, opts: &IndexOptions) -> Result<()> {
+        let Some(key) = opts.sign_key else {
+            return Ok(());
+        };
+        // dnf/yum fetch an armored detached signature at
+        // `repodata/repomd.xml.asc`.
+        let repomd = std::fs::read(dir.join("repodata/repomd.xml"))?;
+        let req = lx_lib::sign::SignRequest {
+            key_file: key,
+            key_id: opts.sign_key_id,
+            passphrase: None,
+        };
+        let asc = lx_lib::sign::clearsign(&repomd, &req)?;
+        std::fs::write(dir.join("repodata/repomd.xml.asc"), asc)?;
+        println!("wrote repodata/repomd.xml.asc (armored detached)");
+        Ok(())
+    }
 }
 
 struct RpmMeta {

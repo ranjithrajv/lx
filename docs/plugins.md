@@ -534,5 +534,9 @@ what does it become."* Four more cover lifecycles that used to be hardcoded
   format's index (`Packages`/`Release`, `Packages`, `<repo>.db.tar.gz`,
   `APKINDEX.tar.gz`, `repodata/`). The apt indexer delegates to the original
   `repo.rs` implementation; the others read each artifact's metadata
-  (`.ipk` control, `.PKGINFO`, `rpm -qp`) in-process.
+  (`.ipk` control, `.PKGINFO`, `rpm -qp`) in-process. Index **signing** is
+  also per-format (`RepoIndexer::sign_index`, run after `build_index`):
+  apt `InRelease` (inline-clearsigned) + `Release.gpg`, opkg `Packages.sig`,
+  pacman `<repo>.db.tar.gz.sig`, rpm `repodata/repomd.xml.asc`. Alpine's
+  RSA-key scheme has no OpenPGP equivalent, so `apk` reports unsupported.
 

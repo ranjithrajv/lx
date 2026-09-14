@@ -59,29 +59,12 @@ pub fn run(args: RepoArgs) -> Result<()> {
         bail!("'{}' is not a directory", args.dir.display());
     }
 
-    // Non-deb formats route through the RepoIndexer plugin registry.
-    if !args.format.eq_ignore_ascii_case("deb") {
-        return run_format(&args);
-    }
-
-    if args.multi_suite {
+    // Multi-suite mode is apt-specific; every other case routes through the
+    // RepoIndexer plugin registry (build + sign).
+    if args.multi_suite && args.format.eq_ignore_ascii_case("deb") {
         return run_multi_suite(&args);
     }
-
-    // Single-suite apt mode (original behavior), delegated to the `apt`
-    // repo-indexer plugin.
-    let debs = crate::plugins::repo::artifacts_with_ext(&args.dir, "deb")?;
-    if debs.is_empty() {
-        bail!("no .deb files in '{}'", args.dir.display());
-    }
-    build_apt_index(
-        &args.dir,
-        &debs,
-        &args.suite,
-        &args.origin,
-        args.sign_key.as_deref(),
-        args.sign_key_id.as_deref().unwrap_or(""),
-    )
+    run_format(&args)
 }
 
 /// Route a non-apt `--format` through the `RepoIndexer` plugin registry.
@@ -98,6 +81,13 @@ fn run_format(args: &RepoArgs) -> Result<()> {
         )
     })?;
     let artifacts = crate::plugins::repo::artifacts_with_ext(&args.dir, indexer.file_extension())?;
+    if artifacts.is_empty() {
+        bail!(
+            "no .{} files in '{}'",
+            indexer.file_extension(),
+            args.dir.display()
+        );
+    }
     let opts = crate::plugins::repo::IndexOptions {
         suite: &args.suite,
         origin: &args.origin,
@@ -105,20 +95,14 @@ fn run_format(args: &RepoArgs) -> Result<()> {
         sign_key: args.sign_key.as_deref(),
         sign_key_id: args.sign_key_id.as_deref().unwrap_or(""),
     };
-    indexer.build_index(&args.dir, &artifacts, &opts)
+    indexer.build_index(&args.dir, &artifacts, &opts)?;
+    indexer.sign_index(&args.dir, &opts)
 }
 
-/// Build an apt `Packages`/`Packages.gz`/`Release` (and a clearsigned
-/// `InRelease` when a key is given). Public so the `apt` repo-indexer plugin
-/// can reuse the original implementation.
-pub fn build_apt_index(
-    dir: &Path,
-    debs: &[PathBuf],
-    suite: &str,
-    origin: &str,
-    sign_key: Option<&Path>,
-    sign_key_id: &str,
-) -> Result<()> {
+/// Build an apt `Packages`/`Packages.gz`/`Release` index (unsigned). Public
+/// so the `apt` repo-indexer plugin can reuse the original implementation;
+/// the plugin's `sign_index` adds `InRelease`/`Release.gpg`.
+pub fn build_apt_index(dir: &Path, debs: &[PathBuf], suite: &str, origin: &str) -> Result<()> {
     let (packages, archs) = build_packages_index(debs)?;
     std::fs::write(dir.join("Packages"), &packages)?;
     let gz = lx_lib::debarchive::deterministic_gzip_bytes(packages.as_bytes(), 0, 9)?;
@@ -142,19 +126,6 @@ pub fn build_apt_index(
         "wrote Packages, Packages.gz, Release ({} packages)",
         debs.len()
     );
-
-    if let Some(key) = sign_key {
-        let req = lx_lib::sign::SignRequest {
-            key_file: key,
-            key_id: sign_key_id,
-            passphrase: None,
-        };
-        let signed = lx_lib::sign::clearsign(release.as_bytes(), &req)?;
-        std::fs::write(dir.join("InRelease"), &signed)?;
-        println!("wrote InRelease (clearsigned)");
-    } else {
-        println!("no --sign-key: skipping InRelease (unsigned Release only)");
-    }
     Ok(())
 }
 
@@ -430,9 +401,12 @@ fn sign_release(dir: &Path, release: &str, args: &RepoArgs) -> Result<()> {
             key_id: args.sign_key_id.as_deref().unwrap_or_default(),
             passphrase: None,
         };
-        let signed = lx_lib::sign::clearsign(release.as_bytes(), &req)?;
-        std::fs::write(dir.join("InRelease"), &signed)?;
-        println!("wrote InRelease (clearsigned)");
+        // `InRelease` is inline-clearsigned; `Release.gpg` is armored detached.
+        let inline = lx_lib::sign::clearsign_inline(release.as_bytes(), &req)?;
+        std::fs::write(dir.join("InRelease"), inline)?;
+        let detached = lx_lib::sign::clearsign(release.as_bytes(), &req)?;
+        std::fs::write(dir.join("Release.gpg"), detached)?;
+        println!("wrote InRelease, Release.gpg (clearsigned)");
     } else {
         println!("no --sign-key: skipping InRelease (unsigned Release only)");
     }

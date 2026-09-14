@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Repository index signing for every format
+
+- `lx repo --sign-key` now signs the index for **opkg** (`Packages.sig`),
+  **pacman** (`<repo>.db.tar.gz.sig`), and **rpm**
+  (`repodata/repomd.xml.asc`), not just apt. Alpine's `APKINDEX` needs an
+  RSA repository key (not OpenPGP), so it reports "unsupported" rather
+  than silently skipping. Implemented via `RepoIndexer::sign_index`.
+- apt `InRelease` is now a real **inline-clearsigned** document
+  (`gpg --clearsign`); the previous build wrote an armored *detached*
+  signature there. `Release.gpg` (armored detached) is written alongside.
+
 ### deb/rpm/arch build parity
 
 - **Arch dependency metadata**: `.PKGINFO` now emits `depend`, `optdepend`,

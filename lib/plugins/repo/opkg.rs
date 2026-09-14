@@ -61,6 +61,26 @@ impl RepoIndexer for OpkgIndexer {
         println!("wrote Packages, Packages.gz ({} packages)", artifacts.len());
         Ok(())
     }
+
+    fn sign_index(&self, dir: &Path, opts: &IndexOptions) -> Result<()> {
+        let Some(key) = opts.sign_key else {
+            return Ok(());
+        };
+        // opkg verifies a detached signature named `Packages.sig` next to the
+        // index. (OpenWrt's own feeds use a different Ed25519 scheme; a
+        // detached OpenPGP `.sig` is what opkg/ipkg historically accepted.)
+        let req = lx_lib::sign::SignRequest {
+            key_file: key,
+            key_id: opts.sign_key_id,
+            passphrase: None,
+        };
+        let sig = lx_lib::sign::gpg_detach_sign(&dir.join("Packages"), &req)?;
+        println!(
+            "wrote {} (detached)",
+            sig.file_name().unwrap_or_default().to_string_lossy()
+        );
+        Ok(())
+    }
 }
 
 /// Read the `control` file out of an `.ipk`'s `control.tar.gz` member.

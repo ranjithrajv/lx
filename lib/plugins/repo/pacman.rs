@@ -83,6 +83,26 @@ impl RepoIndexer for PacmanIndexer {
         println!("wrote {} ({count} packages)", db.display());
         Ok(())
     }
+
+    fn sign_index(&self, dir: &Path, opts: &IndexOptions) -> Result<()> {
+        let Some(key) = opts.sign_key else {
+            return Ok(());
+        };
+        // pacman verifies a detached signature over the database tarball,
+        // `<repo>.db.tar.gz.sig`.
+        let db = dir.join(format!("{}.db.tar.gz", opts.suite));
+        let req = lx_lib::sign::SignRequest {
+            key_file: key,
+            key_id: opts.sign_key_id,
+            passphrase: None,
+        };
+        let sig = lx_lib::sign::gpg_detach_sign(&db, &req)?;
+        println!(
+            "wrote {} (detached)",
+            sig.file_name().unwrap_or_default().to_string_lossy()
+        );
+        Ok(())
+    }
 }
 
 /// Read `.PKGINFO` from a `.pkg.tar.zst`, returning the single-valued fields

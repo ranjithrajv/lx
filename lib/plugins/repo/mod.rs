@@ -50,6 +50,23 @@ pub trait RepoIndexer: Send + Sync {
 
     /// Write the repository index for `artifacts` into `dir`.
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], opts: &IndexOptions) -> Result<()>;
+
+    /// Sign the index this indexer just wrote.
+    ///
+    /// Each format has its own signature filename (`InRelease`/`Release.gpg`,
+    /// `Packages.sig`, `<repo>.db.tar.gz.sig`, `repomd.xml.asc`), so this
+    /// lives on the indexer. The default warns when a key was supplied but
+    /// the format has no supported scheme (e.g. Alpine needs an RSA key, not
+    /// OpenPGP).
+    fn sign_index(&self, _dir: &Path, opts: &IndexOptions) -> Result<()> {
+        if opts.sign_key.is_some() {
+            eprintln!(
+                "    ⚠ index signing is not supported for '{}' repositories; index left unsigned",
+                self.name()
+            );
+        }
+        Ok(())
+    }
 }
 
 /// All known indexers, in registration order.

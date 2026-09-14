@@ -70,9 +70,20 @@ pub fn gpg_detach_sign(artifact: &Path, req: &SignRequest) -> Result<PathBuf> {
 /// `gpg --clearsign`: debsigs expects a detached signature over the
 /// concatenated `debian-binary` + control + data members.
 pub fn clearsign(payload: &[u8], req: &SignRequest) -> Result<Vec<u8>> {
+    gpg_filter(payload, req, &["--armor", "--detach-sign"])
+}
+
+/// Inline-clearsign `payload` (stdin → stdout), returning a
+/// `-----BEGIN PGP SIGNED MESSAGE-----` document — the real
+/// `gpg --clearsign`. Used for apt's `InRelease`.
+pub fn clearsign_inline(payload: &[u8], req: &SignRequest) -> Result<Vec<u8>> {
+    gpg_filter(payload, req, &["--clearsign"])
+}
+
+/// Run gpg as a stdin → stdout signing filter.
+fn gpg_filter(payload: &[u8], req: &SignRequest, mode: &[&str]) -> Result<Vec<u8>> {
     let mut cmd = base_gpg_cmd(req)?;
-    cmd.arg("--armor")
-        .arg("--detach-sign")
+    cmd.args(mode)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -85,17 +96,15 @@ pub fn clearsign(payload: &[u8], req: &SignRequest) -> Result<Vec<u8>> {
             .write_all(payload)
             .context("failed to write payload to gpg stdin")?;
     }
-    let out = child
-        .wait_with_output()
-        .context("gpg armored detach-sign failed")?;
+    let out = child.wait_with_output().context("gpg signing failed")?;
     if !out.status.success() {
         bail!(
-            "gpg armored detach-sign failed: {}",
+            "gpg signing failed: {}",
             String::from_utf8_lossy(&out.stderr).trim()
         );
     }
     if out.stdout.is_empty() {
-        bail!("gpg armored detach-sign produced empty signature");
+        bail!("gpg signing produced empty output");
     }
     Ok(out.stdout)
 }
