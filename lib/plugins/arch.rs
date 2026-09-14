@@ -34,7 +34,12 @@ impl Packager for ArchPackager {
     }
 
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
-        super::stage_install_tree(ctx.cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        super::stage_install_tree(
+            ctx.cfg.config(),
+            ctx.binary_dir,
+            ctx.staging_root,
+            ctx.mtime,
+        )?;
         self.archive_staged_tree(ctx)
     }
 
@@ -65,11 +70,11 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
 
     // Layer the `contents:` overlay. Config-typed entries become the
     // pacman `backup` list (preserved on upgrade/removal).
-    let (configs, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "arch")?;
+    let (configs, file_meta) = super::apply_contents_full(cfg.config(), ctx.staging_root, "arch")?;
 
     let version = ctx.debian_version.to_string();
     let release = super::format_release(ctx.build_version, &job.dist);
-    let epoch = cfg.epoch.trim();
+    let epoch = cfg.epoch().trim();
     // pacman encodes the epoch into the version string (`1:2.0-1`);
     // makepkg's filename uses the same `get_full_version`.
     let full_version = if epoch.is_empty() {
@@ -80,18 +85,20 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let arch_name = to_pacman_arch(&job.arch);
     let file_name = format!(
         "{}-{}-{}.pkg.tar.zst",
-        cfg.package_name, full_version, arch_name
+        cfg.package_name(),
+        full_version,
+        arch_name
     );
 
     let out_dir = super::output_dir(ctx.staging_root)?;
     let dest = out_dir.join(&file_name);
 
-    let url = super::resolve_homepage(cfg);
+    let url = super::resolve_homepage(cfg.config());
     let description = cfg.effective_description();
-    let license = if cfg.license_spdx.is_empty() {
+    let license = if cfg.license_spdx().is_empty() {
         "custom:unknown"
     } else {
-        cfg.license_spdx.as_str()
+        cfg.license_spdx()
     };
 
     // Relation metadata: translate the Debian-style relation fields to
@@ -142,7 +149,7 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     };
 
     let meta = lx_lib::archarchive::PackageMeta {
-        name: &cfg.package_name,
+        name: cfg.package_name(),
         version: &version,
         release: &release,
         description: &description,
@@ -161,10 +168,13 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     // Upgrade hooks: `scripts.preupgrade_script`/`postupgrade_script`
     // are the documented cross-format fields (`lx convert` writes
     // those); fall back to the Arch-native `preupgrade`/`postupgrade`.
-    let pre_path = pick(&cfg.scripts.preupgrade_script, &cfg.scripts.preupgrade);
-    let post_path = pick(&cfg.scripts.postupgrade_script, &cfg.scripts.postupgrade);
-    let pre = super::render_script_body(cfg, job, pre_path)?;
-    let post = super::render_script_body(cfg, job, post_path)?;
+    let pre_path = pick(&cfg.scripts().preupgrade_script, &cfg.scripts().preupgrade);
+    let post_path = pick(
+        &cfg.scripts().postupgrade_script,
+        &cfg.scripts().postupgrade,
+    );
+    let pre = super::render_script_body(cfg.config(), job, pre_path)?;
+    let post = super::render_script_body(cfg.config(), job, post_path)?;
     let install_script = lx_lib::archarchive::render_install_script(
         pre.as_deref().unwrap_or(""),
         post.as_deref().unwrap_or(""),

@@ -11,6 +11,7 @@
 use anyhow::{Context, Result};
 use std::path::PathBuf;
 
+use super::BuildMetadata;
 use super::{BuildContext, Packager};
 use crate::plugins::plugin::plugin_identity;
 
@@ -39,8 +40,9 @@ impl Packager for IpkPackager {
         let cfg = ctx.cfg;
         let job = ctx.job;
 
-        super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let (conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "ipk")?;
+        super::stage_install_tree(cfg.config(), ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        let (conffiles, file_meta) =
+            super::apply_contents_full(cfg.config(), ctx.staging_root, "ipk")?;
         let conffiles: Vec<String> = conffiles.into_iter().map(|c| c.path).collect();
 
         let version = ctx.debian_version.to_string();
@@ -51,9 +53,9 @@ impl Packager for IpkPackager {
         };
         let full_version = format!("{version}-{build}");
         let arch = lx_lib::constants::to_openwrt_arch(&job.arch);
-        let file_name = format!("{}_{full_version}_{arch}.ipk", cfg.package_name);
+        let file_name = format!("{}_{full_version}_{arch}.ipk", cfg.package_name());
 
-        let control = render_control(cfg, ctx, &full_version, arch);
+        let control = render_control(cfg.config(), ctx, &full_version, arch);
 
         // opkg maintainer scripts (`preinst`/`postinst`/`prerm`/`postrm`)
         // plus a `conffiles` list, all as control.tar.gz members.
@@ -102,7 +104,7 @@ fn render_control(
         }
     }
     let mut out = String::new();
-    out.push_str(&format!("Package: {}\n", cfg.package_name));
+    out.push_str(&format!("Package: {}\n", cfg.package_name()));
     out.push_str(&format!("Version: {full_version}\n"));
     if !depends.is_empty() {
         out.push_str(&format!("Depends: {}\n", depends.join(", ")));
@@ -121,23 +123,23 @@ fn render_control(
         "Installed-Size: {}\n",
         installed_size_bytes(ctx.staging_root)
     ));
-    if !cfg.license_spdx.trim().is_empty() {
-        out.push_str(&format!("License: {}\n", cfg.license_spdx.trim()));
+    if !cfg.license_spdx().trim().is_empty() {
+        out.push_str(&format!("License: {}\n", cfg.license_spdx().trim()));
     }
     // nfpm `ipk:` block parity.
-    if !cfg.ipk.abi_version.trim().is_empty() {
-        out.push_str(&format!("ABIVersion: {}\n", cfg.ipk.abi_version.trim()));
+    if !cfg.ipk().abi_version.trim().is_empty() {
+        out.push_str(&format!("ABIVersion: {}\n", cfg.ipk().abi_version.trim()));
     }
-    if !cfg.ipk.tags.is_empty() {
-        out.push_str(&format!("Tags: {}\n", cfg.ipk.tags.join(" ")));
+    if !cfg.ipk().tags.is_empty() {
+        out.push_str(&format!("Tags: {}\n", cfg.ipk().tags.join(" ")));
     }
-    if cfg.ipk.auto_installed {
+    if cfg.ipk().auto_installed {
         out.push_str("Auto-Installed: yes\n");
     }
-    if cfg.ipk.essential {
+    if cfg.ipk().essential {
         out.push_str("Essential: yes\n");
     }
-    if !cfg.ipk.alternatives.is_empty() {
+    if !cfg.ipk().alternatives.is_empty() {
         let alts: Vec<String> = cfg
             .ipk
             .alternatives

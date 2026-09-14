@@ -10,6 +10,7 @@
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
+use super::BuildMetadata;
 use super::{BuildContext, Packager};
 use crate::plugins::plugin::plugin_identity;
 
@@ -36,7 +37,7 @@ impl Packager for MsixPackager {
 
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
         let cfg = ctx.cfg;
-        let msix = &cfg.msix;
+        let msix = cfg.msix();
 
         if msix.publisher.trim().is_empty() {
             bail!("msix.publisher is required to build an MSIX package");
@@ -54,15 +55,15 @@ impl Packager for MsixPackager {
 
         // Stage the install tree and the `contents:` overlay (file_info /
         // expand / disown_subtree apply to the payload paths).
-        super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let _ = super::apply_contents_full(cfg, ctx.staging_root, "msix")?;
+        super::stage_install_tree(cfg.config(), ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        let _ = super::apply_contents_full(cfg.config(), ctx.staging_root, "msix")?;
 
         let version = to_msix_version(ctx.debian_version);
         let arch = msix_arch(&msix.arch, &ctx.job.arch);
-        let manifest = build_manifest(cfg, &version, &arch);
+        let manifest = build_manifest(cfg.config(), &version, &arch);
         let signer = build_signer(ctx)?;
 
-        let file_name = format!("{}_{version}_{arch}.msix", cfg.package_name);
+        let file_name = format!("{}_{version}_{arch}.msix", cfg.package_name());
         let out_dir = super::output_dir(ctx.staging_root)?;
         let dest = out_dir.join(&file_name);
 
@@ -80,7 +81,7 @@ fn build_signer(ctx: &BuildContext) -> Result<Option<xcommon::Signer>> {
     };
     let key = std::fs::read_to_string(key_path)
         .with_context(|| format!("reading signing key '{}'", key_path.display()))?;
-    let cert_path = ctx.cfg.signature.cert_file.trim();
+    let cert_path = ctx.cfg.signature().cert_file.trim();
     let combined = if cert_path.is_empty() {
         key
     } else {
@@ -98,7 +99,7 @@ fn build_manifest(
     version: &str,
     arch: &str,
 ) -> lx_lib::msixarchive::MsixManifest {
-    let msix = &cfg.msix;
+    let msix = cfg.msix();
 
     let mut applications = Vec::new();
     let mut needs_full_trust = false;
@@ -162,7 +163,7 @@ fn build_manifest(
     }
 
     lx_lib::msixarchive::MsixManifest {
-        name: cfg.package_name.clone(),
+        name: cfg.package_name().clone(),
         version: version.to_string(),
         publisher: msix.publisher.clone(),
         arch: arch.to_string(),

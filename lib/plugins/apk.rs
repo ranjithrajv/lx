@@ -45,8 +45,9 @@ impl Packager for ApkPackager {
         let cfg = ctx.cfg;
         let job = ctx.job;
 
-        super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let (_conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "apk")?;
+        super::stage_install_tree(cfg.config(), ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        let (_conffiles, file_meta) =
+            super::apply_contents_full(cfg.config(), ctx.staging_root, "apk")?;
 
         let version = ctx.debian_version.to_string();
         let revision = if ctx.build_version.trim().is_empty() {
@@ -57,7 +58,7 @@ impl Packager for ApkPackager {
         // Alpine combines version + revision into `pkgver` (`1.0.0-r1`).
         let pkgver = format!("{version}-r{revision}");
         let arch = lx_lib::apkarchive::to_alpine_arch(&job.arch);
-        let file_name = format!("{}-{pkgver}.apk", cfg.package_name);
+        let file_name = format!("{}-{pkgver}.apk", cfg.package_name());
 
         let relations = cfg.effective_relations("apk");
         let mut depends = split_list(&relations.depends);
@@ -72,14 +73,14 @@ impl Packager for ApkPackager {
         let out_dir = super::output_dir(ctx.staging_root)?;
         let dest = out_dir.join(&file_name);
 
-        let url = super::resolve_homepage(cfg);
+        let url = super::resolve_homepage(cfg.config());
         let description = cfg.effective_description();
         let meta = lx_lib::apkarchive::PackageMeta {
-            name: &cfg.package_name,
+            name: cfg.package_name(),
             version: &pkgver,
             description: &description,
             url: &url,
-            license: &cfg.license_spdx,
+            license: cfg.license_spdx(),
             depends: &depends,
             provides: &provides,
             replaces: &replaces,

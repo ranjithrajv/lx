@@ -9,6 +9,7 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+use super::BuildMetadata;
 use super::{BuildContext, Packager, SourcePackager, PACKAGED_FROM_LINE};
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
@@ -39,7 +40,7 @@ impl Packager for DebPackager {
 
         // Stage install tree under ctx.staging_root, then layer the
         // `contents:` overlay (completions, units, desktop files, ...).
-        super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        super::stage_install_tree(cfg.config(), ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
         self.archive_staged_tree(ctx)
     }
 }
@@ -63,27 +64,27 @@ impl SourcePackager for DebPackager {
 fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let cfg = ctx.cfg;
     let job = ctx.job;
-    let (conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "deb")?;
+    let (conffiles, file_meta) = super::apply_contents_full(cfg.config(), ctx.staging_root, "deb")?;
     let conffiles: Vec<String> = conffiles.into_iter().map(|c| c.path).collect();
 
     // Render control/changelog/copyright.
     let control = render_control(
-        cfg,
+        cfg.config(),
         job,
         ctx.debian_version,
         ctx.build_version,
         &ctx.detected_deps,
     );
-    let changelog = render_changelog(cfg, job, ctx.debian_version, ctx.build_version);
+    let changelog = render_changelog(cfg.config(), job, ctx.debian_version, ctx.build_version);
     let doc_dir = ctx
         .staging_root
         .join("usr")
         .join("share")
         .join("doc")
-        .join(&cfg.package_name);
+        .join(cfg.package_name());
     std::fs::create_dir_all(&doc_dir)?;
     write_changelog_gz(&doc_dir, &changelog, ctx.mtime)?;
-    write_copyright(&doc_dir, cfg, ctx.license, job.published_at)?;
+    write_copyright(&doc_dir, cfg.config(), ctx.license, job.published_at)?;
 
     // Archive via debarchive. Maintainer scripts and the conffiles
     // list ride along as extra control members.
@@ -94,15 +95,15 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
         dist = job.dist,
         arch = job.arch
     );
-    let full_version_epoch = lx_lib::pkgmeta::with_epoch(&cfg.epoch, &full_version);
+    let full_version_epoch = lx_lib::pkgmeta::with_epoch(cfg.epoch(), &full_version);
     // Filename never includes epoch (':' not filename-safe).
-    let deb_name = format!("{}_{}.deb", cfg.package_name, full_version);
+    let deb_name = format!("{}_{}.deb", cfg.package_name(), full_version);
 
     let _ = full_version_epoch; // already in control
 
     let mut extras = super::maintainer_script_members(ctx)?;
     // Deb-specific extras: debconf templates/config, rules, triggers.
-    extras.extend(super::deb_extra_members(cfg)?);
+    extras.extend(super::deb_extra_members(cfg.config())?);
     if !conffiles.is_empty() {
         extras.push(lx_lib::debarchive::ControlMember {
             name: "conffiles".to_string(),
@@ -165,7 +166,7 @@ pub fn render_control(
     detected_deps: &[String],
 ) -> String {
     let full_version = lx_lib::pkgmeta::with_epoch(
-        &cfg.epoch,
+        cfg.epoch(),
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
     // Per-format overrides applied for "deb".
@@ -177,8 +178,8 @@ pub fn render_control(
         }
     }
     let relations = relations.render();
-    let homepage = super::resolve_homepage(cfg);
-    let extra_fields = super::render_extra_fields(&cfg.fields);
+    let homepage = super::resolve_homepage(cfg.config());
+    let extra_fields = super::render_extra_fields(cfg.fields());
     // Determine architecture: explicit override > arch variant > job arch.
     let arch = if cfg.effective_architecture() == "all" || cfg.effective_architecture() == "any" {
         cfg.effective_architecture()
@@ -191,7 +192,7 @@ pub fn render_control(
         "Section: {}\nPriority: {}\nPackage: {pkg}\nVersion: {full_version}\nArchitecture: {arch}\nMaintainer: {maintainer}\nHomepage: {homepage}\nDescription: {desc}\n{PACKAGED_FROM_LINE}\n{relations}{extra_fields}",
         cfg.effective_section(),
         cfg.effective_priority(),
-        pkg = cfg.package_name,
+        pkg = cfg.package_name(),
         maintainer = cfg.effective_maintainer(),
         desc = cfg.effective_description(),
     )
@@ -204,11 +205,11 @@ pub fn render_changelog(
     build_version: &str,
 ) -> String {
     let full_version = lx_lib::pkgmeta::with_epoch(
-        &cfg.epoch,
+        cfg.epoch(),
         &format!("{version}-{build_version}+{dist}", dist = job.dist),
     );
     lx_lib::pkgmeta::render_changelog_entry(
-        &cfg.package_name,
+        cfg.package_name(),
         &full_version,
         &job.dist,
         version,
@@ -236,10 +237,10 @@ pub fn write_copyright(
 ) -> Result<()> {
     use std::io::Write;
     let text = lx_lib::pkgmeta::render_copyright(
-        &cfg.package_name,
-        &cfg.github_repo,
+        cfg.package_name(),
+        cfg.github_repo(),
         license,
-        &cfg.license_spdx,
+        cfg.license_spdx(),
         published_at,
     );
     let mut f = std::fs::File::create(output_dir.join("copyright"))?;

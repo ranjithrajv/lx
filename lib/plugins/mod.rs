@@ -33,9 +33,11 @@ pub mod rpm;
 pub mod signer;
 
 mod contents;
+mod metadata;
 mod staging;
 
 pub use contents::*;
+pub use metadata::BuildMetadata;
 pub use staging::*;
 
 use anyhow::{Context, Result};
@@ -48,8 +50,10 @@ use lx_lib::github::RepoLicense;
 /// Context passed to a plugin's build method. Contains everything the plugin
 /// needs to render its control/spec metadata and archive the staged tree.
 pub struct BuildContext<'a> {
-    /// The full package config (package_name, github_repo, epoch, etc.).
-    pub cfg: &'a PackageConfig,
+    /// The package metadata this plugin may read. Narrower than the full
+    /// `PackageConfig` so a format only depends on what it uses; shared
+    /// helpers that need everything get it via `cfg.config()`.
+    pub cfg: &'a dyn BuildMetadata,
     /// Resolved job (dist, arch, asset, tag, published_at).
     pub job: &'a crate::build::ResolvedJob,
     /// Directory containing the extracted binary tree to stage (binary_dir).

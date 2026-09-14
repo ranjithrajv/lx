@@ -36,7 +36,12 @@ impl Packager for RpmPackager {
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
         // Stage install tree under ctx.staging_root (same layout as deb),
         // then archive it as an rpm.
-        super::stage_install_tree(ctx.cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        super::stage_install_tree(
+            ctx.cfg.config(),
+            ctx.binary_dir,
+            ctx.staging_root,
+            ctx.mtime,
+        )?;
         self.archive_staged_tree(ctx)
     }
 
@@ -67,7 +72,7 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
 
     // Layer the `contents:` overlay. Config-typed entries become
     // `%config` / `%config(noreplace)` markers.
-    let (configs, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "rpm")?;
+    let (configs, file_meta) = super::apply_contents_full(cfg.config(), ctx.staging_root, "rpm")?;
 
     // RPM metadata: name, version, release, arch, summary, description,
     // license. Version is the stripped upstream version; release encodes
@@ -75,20 +80,20 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let version = ctx.debian_version.to_string();
     let release = super::format_release(ctx.build_version, &job.dist);
     let summary = cfg.effective_description();
-    let homepage = super::resolve_homepage(cfg);
+    let homepage = super::resolve_homepage(cfg.config());
     let description = format!(
         "{summary}\nPackaged from the upstream release ({homepage}) for RPM-based distributions.",
     );
-    let license = if cfg.license_spdx.is_empty() {
+    let license = if cfg.license_spdx().is_empty() {
         "NOASSERTION"
     } else {
-        cfg.license_spdx.as_str()
+        cfg.license_spdx()
     };
 
     // RPM filename convention: {name}-{version}-{release}.{arch}.rpm
     let rpm_name = format!(
         "{}-{}-{}.{}.rpm",
-        cfg.package_name,
+        cfg.package_name(),
         version,
         release,
         to_rpm_arch(&job.arch)
@@ -103,21 +108,21 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     // paths in the build environment, same as deb/rpm script config),
     // applying templating when enabled. Upgrade scripts fall back to the
     // cross-format `*_script` fields (`lx convert` writes those).
-    let pre_install = super::render_script_body(cfg, job, &cfg.scripts.preinstall)?;
-    let post_install = super::render_script_body(cfg, job, &cfg.scripts.postinstall)?;
-    let pre_uninstall = super::render_script_body(cfg, job, &cfg.scripts.preremove)?;
-    let post_uninstall = super::render_script_body(cfg, job, &cfg.scripts.postremove)?;
+    let pre_install = super::render_script_body(cfg.config(), job, &cfg.scripts().preinstall)?;
+    let post_install = super::render_script_body(cfg.config(), job, &cfg.scripts().postinstall)?;
+    let pre_uninstall = super::render_script_body(cfg.config(), job, &cfg.scripts().preremove)?;
+    let post_uninstall = super::render_script_body(cfg.config(), job, &cfg.scripts().postremove)?;
     let pre_trans = super::render_script_body(
-        cfg,
+        cfg.config(),
         job,
-        pick(&cfg.scripts.pretrans, &cfg.scripts.preupgrade_script),
+        pick(&cfg.scripts().pretrans, &cfg.scripts().preupgrade_script),
     )?;
     let post_trans = super::render_script_body(
-        cfg,
+        cfg.config(),
         job,
-        pick(&cfg.scripts.posttrans, &cfg.scripts.postupgrade_script),
+        pick(&cfg.scripts().posttrans, &cfg.scripts().postupgrade_script),
     )?;
-    let verify = super::render_script_body(cfg, job, &cfg.scripts.verify)?;
+    let verify = super::render_script_body(cfg.config(), job, &cfg.scripts().verify)?;
 
     // Parse RPM triggers from config. Each trigger is a
     // "package: script_path" pair. Scripts are read relative to the
@@ -126,19 +131,19 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let mut trigger_flags: Vec<rpm::DependencyFlags> = Vec::new();
     for (field, flag) in [
         (
-            &cfg.rpm.trigger_pre_install,
+            &cfg.rpm().trigger_pre_install,
             rpm::DependencyFlags::TRIGGERPREIN,
         ),
         (
-            &cfg.rpm.trigger_post_install,
+            &cfg.rpm().trigger_post_install,
             rpm::DependencyFlags::TRIGGERIN,
         ),
         (
-            &cfg.rpm.trigger_pre_uninstall,
+            &cfg.rpm().trigger_pre_uninstall,
             rpm::DependencyFlags::TRIGGERUN,
         ),
         (
-            &cfg.rpm.trigger_post_uninstall,
+            &cfg.rpm().trigger_post_uninstall,
             rpm::DependencyFlags::TRIGGERPOSTUN,
         ),
     ] {
@@ -194,36 +199,36 @@ fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
         relations: rpm_relations,
         triggers,
         trigger_flags,
-        compression: cfg.rpm.compression.clone(),
-        auto_provides: cfg.rpm.auto_provides,
-        auto_requires: cfg.rpm.auto_requires,
-        defines: cfg.rpm.defines.clone(),
+        compression: cfg.rpm().compression.clone(),
+        auto_provides: cfg.rpm().auto_provides,
+        auto_requires: cfg.rpm().auto_requires,
+        defines: cfg.rpm().defines.clone(),
         config_files,
         config_noreplace_files,
-        epoch: cfg.epoch.trim().parse::<u32>().ok(),
-        buildhost: cfg.rpm.buildhost.clone(),
+        epoch: cfg.epoch().trim().parse::<u32>().ok(),
+        buildhost: cfg.rpm().buildhost.clone(),
     };
     // Fields accepted for nfpm parity that the in-process rpm crate cannot
     // express: report them rather than dropping them silently.
-    if !cfg.rpm.group.is_empty() {
+    if !cfg.rpm().group.is_empty() {
         eprintln!(
             "    ⚠ rpm.group is ignored: the rpm crate hardcodes Group to \"Unspecified\" (needs header injection)"
         );
     }
-    if !cfg.rpm.prefixes.is_empty() {
+    if !cfg.rpm().prefixes.is_empty() {
         eprintln!(
             "    ⚠ rpm.prefixes is not supported by the in-process rpm builder; ignoring {:?}",
-            cfg.rpm.prefixes
+            cfg.rpm().prefixes
         );
     }
-    if !cfg.rpm.requires_post.is_empty() {
+    if !cfg.rpm().requires_post.is_empty() {
         eprintln!(
             "    ⚠ rpm.requires_post has no distinct post-requires setter in the rpm crate; ignoring {:?}",
-            cfg.rpm.requires_post
+            cfg.rpm().requires_post
         );
     }
     let meta = lx_lib::rpmarchive::PackageMeta {
-        name: &cfg.package_name,
+        name: cfg.package_name(),
         version: &version,
         release: &release,
         summary: &summary,
