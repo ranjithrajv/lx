@@ -866,8 +866,61 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         eprintln!("⚠️  Performance regression detected: {w}");
     }
 
+    emit_post_build_artifacts(PostBuildInputs {
+        args: &args,
+        cfg: &cfg,
+        release: &release,
+        jobs: &jobs,
+        provenance: &provenance,
+        dists: &dists,
+        arch_assets: &arch_assets,
+        format: &effective_format,
+        forge_source: &effective_forge_source,
+        license: license.as_ref(),
+        build_start,
+        telemetry: &telemetry,
+    })?;
+    Ok(())
+}
+
+/// Everything the post-build artifact phase needs, grouped so `run` stays a
+/// short pipeline and this phase can change independently of build setup.
+struct PostBuildInputs<'a> {
+    args: &'a BuildArgs,
+    cfg: &'a PackageConfig,
+    release: &'a lx_lib::github::Release,
+    jobs: &'a [ResolvedJob],
+    provenance: &'a [crate::summary::ProvenanceEntry],
+    dists: &'a [String],
+    arch_assets: &'a [(String, Asset)],
+    format: &'a str,
+    forge_source: &'a str,
+    license: Option<&'a lx_lib::github::RepoLicense>,
+    build_start: std::time::Instant,
+    telemetry: &'a lx_lib::telemetry::Telemetry,
+}
+
+/// Emit everything derived from a completed build: the lock file, summary,
+/// SBOM, source package, checksum sidecars, shell installer, and cosign
+/// signatures.
+fn emit_post_build_artifacts(input: PostBuildInputs<'_>) -> Result<()> {
+    let PostBuildInputs {
+        args,
+        cfg,
+        release,
+        jobs,
+        provenance,
+        dists,
+        arch_assets,
+        format,
+        forge_source,
+        license,
+        build_start,
+        telemetry,
+    } = input;
+
     if args.update_lock {
-        write_lock_file(&args.config, &effective_forge_source, &jobs, &provenance)?;
+        write_lock_file(&args.config, forge_source, jobs, provenance)?;
     }
 
     if args.summary {
@@ -880,13 +933,13 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 build_version: args.build_version.clone(),
                 github_repo: cfg.github_repo.clone(),
                 architectures: arch_assets.iter().map(|(a, _)| a.clone()).collect(),
-                distributions: dists.clone(),
+                distributions: dists.to_vec(),
                 max_parallel: args.max_parallel,
                 start: build_start,
                 telemetry: telemetry.summary_json(),
-                provenance: provenance.clone(),
-                package_format: effective_format.clone(),
-                source: effective_forge_source.clone(),
+                provenance: provenance.to_vec(),
+                package_format: format.to_string(),
+                source: forge_source.to_string(),
             },
         )?;
     }
@@ -918,7 +971,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     }
 
     if args.source {
-        let rel = cfg.effective_relations(&effective_format);
+        let rel = cfg.effective_relations(format);
         let pkg = crate::source::Pkg {
             name: cfg.package_name.clone(),
             github_repo: cfg.github_repo.clone(),
@@ -928,7 +981,6 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             build_version: args.build_version.clone(),
             epoch: cfg.epoch.clone(),
             license_spdx: license
-                .as_ref()
                 .map(|l| l.spdx.clone())
                 .unwrap_or_else(|| "NOASSERTION".to_string()),
             depends: rel.depends,
@@ -943,24 +995,24 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             priority: cfg.priority.clone(),
             fields: cfg.fields.clone(),
             published_at: release.published_at,
-            license: license.clone(),
+            license: license.cloned(),
         };
-        crate::plugins::get_source_packager(&effective_format)
-            .ok_or_else(|| anyhow::anyhow!("'{effective_format}' has no source-package format"))?
+        crate::plugins::get_source_packager(format)
+            .ok_or_else(|| anyhow::anyhow!("'{format}' has no source-package format"))?
             .generate_source_package(&args.output, &pkg)?;
     }
 
-    // Feature 1: Checksum sidecars (.sha256, .sha512) for integrity verification.
+    // Checksum sidecars (.sha256, .sha512) for integrity verification.
     lx_lib::checksum_sidecar::generate_checksum_sidecars(&args.output)?;
 
-    // Feature 2: Shell installer script (curl | sh).
+    // Shell installer script (curl | sh).
     lx_lib::shell_installer::generate_shell_installer(
         &args.output,
         &cfg.package_name,
         &release.tag_name,
     )?;
 
-    // Feature 4: Cosign signing (Sigstore keyless).
+    // Cosign signing (Sigstore keyless).
     if args.cosign {
         for entry in std::fs::read_dir(&args.output)? {
             let path = entry?.path();
