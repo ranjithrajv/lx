@@ -145,41 +145,34 @@ pub fn homepage_for(host: &str, repo: &str) -> String {
     format!("https://{host}/{repo}")
 }
 
+/// Build a `https://{host}/{repo}` homepage, falling back to `default_host`
+/// when `host` is empty and normalizing a configured host (strip scheme and a
+/// trailing slash). Shared by every provider helper below.
+pub fn homepage_with_host(repo: &str, host: &str, default_host: &str) -> String {
+    let h = if host.is_empty() {
+        default_host
+    } else {
+        host.trim_end_matches('/')
+            .trim_start_matches("https://")
+            .trim_start_matches("http://")
+    };
+    homepage_for(h, repo)
+}
+
 pub fn homepage_for_github(repo: &str) -> String {
     homepage_for(DEFAULT_GITHUB_HOST, repo)
 }
 
 pub fn homepage_for_gitlab(repo: &str, host: &str) -> String {
-    let h = if host.is_empty() {
-        DEFAULT_GITLAB_HOST
-    } else {
-        host.trim_end_matches('/')
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-    };
-    homepage_for(h, repo)
+    homepage_with_host(repo, host, DEFAULT_GITLAB_HOST)
 }
 
 pub fn homepage_for_gitea(repo: &str, host: &str) -> String {
-    let h = if host.is_empty() {
-        DEFAULT_GITEA_HOST
-    } else {
-        host.trim_end_matches('/')
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-    };
-    homepage_for(h, repo)
+    homepage_with_host(repo, host, DEFAULT_GITEA_HOST)
 }
 
 pub fn homepage_for_forgejo(repo: &str, host: &str) -> String {
-    let h = if host.is_empty() {
-        DEFAULT_FORGEJO_HOST
-    } else {
-        host.trim_end_matches('/')
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-    };
-    homepage_for(h, repo)
+    homepage_with_host(repo, host, DEFAULT_FORGEJO_HOST)
 }
 
 pub fn homepage_for_bitbucket(repo: &str) -> String {
@@ -188,25 +181,11 @@ pub fn homepage_for_bitbucket(repo: &str) -> String {
 }
 
 pub fn homepage_for_gerrit(repo: &str, host: &str) -> String {
-    let h = if host.is_empty() {
-        DEFAULT_GERRIT_HOST
-    } else {
-        host.trim_end_matches('/')
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-    };
-    homepage_for(h, repo)
+    homepage_with_host(repo, host, DEFAULT_GERRIT_HOST)
 }
 
 pub fn homepage_for_gitee(repo: &str, host: &str) -> String {
-    let h = if host.is_empty() {
-        DEFAULT_GITEE_HOST
-    } else {
-        host.trim_end_matches('/')
-            .trim_start_matches("https://")
-            .trim_start_matches("http://")
-    };
-    homepage_for(h, repo)
+    homepage_with_host(repo, host, DEFAULT_GITEE_HOST)
 }
 
 /// SourceForge projects are identified by a bare project name (no owner),

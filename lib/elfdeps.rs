@@ -41,7 +41,6 @@ const GLIBC_SONAMES: &[&str] = &[
     "ld-linux-aarch64.so.1",
     "ld-linux-armhf.so.3",
     "ld-linux.so.2",
-    "ld-linux-aarch64.so.1",
     "ld-linux-x86-64-musl.so.1",
     "ld-musl-x86_64.so.1",
     "ld-musl-aarch64.so.1",
