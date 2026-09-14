@@ -107,17 +107,24 @@ without editing the core pipeline for a new one:
 
 `lx convert` reads a built `.deb`, `.rpm`, or `.pkg.tar.zst`, extracts the
 control fields and install tree, and rebuilds natively in the target format
-(`lib/convert.rs`). `lx init --from-aur` turns an AUR `PKGBUILD` into a
-starter `package.yaml` (shell becomes comments, never executed), and legacy
-`debian-multiarch-builder` `package.yaml` keys load as-is.
+(`lib/convert.rs`). All three readers are **in-process**: deb and Arch via
+`debarchive`/`tar`, RPM via the `rpm` crate (control fields, scriptlets, and
+payload) — no `rpm`, `rpm2cpio`, or `cpio` on `PATH`. `lx init --from-aur`
+turns an AUR `PKGBUILD` into a starter `package.yaml` (shell becomes
+comments, never executed), and legacy `debian-multiarch-builder`
+`package.yaml` keys load as-is.
 
 This is 🟡 because the import surface is deliberately narrower than a
 general converter:
 
 - `lx convert` is **deb↔rpm↔arch only** — no `apk`/`ipk`, and no `msix`,
   `osxpkg`, `freebsd`, or `snap`.
-- Reading an `.rpm` needs `rpm`, `rpm2cpio`, and `cpio` on `PATH` (there is
-  no native RPM reader yet); reading `.deb`/Arch is in-process.
+- It rebuilds the target's model rather than copying raw bytes, carrying
+  relation fields (`Provides`/`Recommends`/`Suggests`/`Conflicts`/
+  `Replaces`/`Breaks`/`Pre-Depends`), `Section`/`Priority`, and epoch, and
+  rewriting dependency syntax and names across formats. But anything the
+  target model doesn't express is dropped: conffile/`%config` flags,
+  capabilities, xattrs, RPM triggers, debconf, and signatures.
 - It converts **packages `lx` itself can produce**, not arbitrary fpm
   outputs with richer per-file metadata.
 

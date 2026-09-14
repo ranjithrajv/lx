@@ -93,3 +93,88 @@ fn convert_rejects_unknown_target_format() {
         .to_string()
         .contains("unsupported target format"));
 }
+
+/// Build a real `.rpm` in-process (no `rpm`/`rpm2cpio`/`cpio` on PATH) so the
+/// conversion test exercises the native RPM reader.
+fn tiny_rpm(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    use lx_lib::rpmarchive::{self, BuildOptions, PackageMeta, RpmRelations};
+    let root = dir.join("rpmroot");
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/bin/hello"), b"payload").unwrap();
+    let rpm = dir.join(name);
+    let opts = BuildOptions {
+        relations: RpmRelations {
+            requires: vec![rpm::Dependency::greater_eq("glibc", "2.17")],
+            recommends: vec![rpm::Dependency::any("bash")],
+            conflicts: vec![rpm::Dependency::any("old-pkg")],
+            obsoletes: vec![rpm::Dependency::any("legacy")],
+            ..Default::default()
+        },
+        epoch: Some(2),
+        ..Default::default()
+    };
+    rpmarchive::build_with_options(
+        &root,
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            summary: "hi",
+            description: "hi",
+            license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        1_735_689_600,
+        &rpm,
+        &opts,
+        &lx_lib::filemeta::FileMetaMap::new(),
+    )
+    .unwrap();
+    rpm
+}
+
+#[test]
+fn convert_rpm_to_deb_in_process_carries_metadata() {
+    let dir = tempfile::tempdir().unwrap();
+    let rpm = tiny_rpm(dir.path(), "hello-1.0-1.x86_64.rpm");
+
+    run(ConvertArgs {
+        input: rpm,
+        to: Some("deb".to_string()),
+        output: dir.path().join("out"),
+        package_name: None,
+        version: None,
+        arch: None,
+        distribution: None,
+        build_version: "1".to_string(),
+        dry_run: false,
+    })
+    .unwrap();
+
+    let deb = std::fs::read_dir(dir.path().join("out"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().map(|x| x == "deb").unwrap_or(false))
+        .expect("a .deb was produced");
+    let ctrl = lx_lib::repo::read_control(&deb).unwrap();
+
+    // Arch normalized RPM→deb.
+    assert_eq!(ctrl.get("Architecture").map(String::as_str), Some("amd64"));
+    // Epoch carried into the deb Version.
+    assert!(
+        ctrl.get("Version").unwrap().starts_with("2:"),
+        "epoch carried: {:?}",
+        ctrl.get("Version")
+    );
+    // Relation syntax rewritten RPM→deb, and non-Depends relations carried.
+    assert!(
+        ctrl.get("Depends").unwrap().contains("glibc (>= 2.17)"),
+        "dep syntax converted: {:?}",
+        ctrl.get("Depends")
+    );
+    assert!(ctrl.get("Recommends").unwrap().contains("bash"));
+    assert!(ctrl.get("Conflicts").unwrap().contains("old-pkg"));
+    assert!(ctrl.get("Replaces").unwrap().contains("legacy"));
+}

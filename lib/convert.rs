@@ -63,6 +63,21 @@ struct SourceMeta {
     maintainer: String,
     description: String,
     depends: String,
+    recommends: String,
+    suggests: String,
+    conflicts: String,
+    replaces: String,
+    provides: String,
+    breaks: String,
+    predepends: String,
+    /// Debian `Section` / RPM `Group` (best effort), carried so a converted
+    /// package lands in the right section instead of defaulting.
+    section: String,
+    /// Debian `Priority` (empty means the target default).
+    priority: String,
+    /// Package epoch, re-emitted in the target's own field (`<epoch>:` in a
+    /// deb Version, the RPM/Arch epoch tag).
+    epoch: String,
     distribution: String,
     /// Maintainer scripts extracted from the source package, keyed by script
     /// name (e.g. "preinst", "postinst", "prerm", "postrm" for deb;
@@ -156,7 +171,10 @@ pub fn run(args: ConvertArgs) -> Result<()> {
     // move `args` (which is borrowed later by `build_target`).
     let package_name = args.package_name.clone().unwrap_or(meta.package);
     let version = args.version.clone().unwrap_or(meta.version);
-    let arch = args.arch.clone().unwrap_or(meta.arch);
+    let arch = args
+        .arch
+        .clone()
+        .unwrap_or_else(|| normalize_arch(&meta.arch, source_format, &target));
     let distribution = args.distribution.clone().unwrap_or(meta.distribution);
     let meta = SourceMeta {
         package: package_name,
@@ -187,8 +205,11 @@ pub fn run(args: ConvertArgs) -> Result<()> {
 
     fs::create_dir_all(&args.output)?;
 
-    // Build the target package from the extracted install tree.
-    let built = build_target(&meta, &install_tree, &target, &args)?;
+    // Build the target package from the extracted install tree. The work
+    // dir must outlive the copy below: the plugin writes the built artifact
+    // under it, so a `TempDir` owned by `build_target` would be dropped (and
+    // the artifact deleted) before we copy it out.
+    let built = build_target(&meta, &install_tree, &target, &args, tmp.path())?;
 
     let final_name = format!(
         "{}_{}-{}+{}_{}.{}",
@@ -230,16 +251,72 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
     let ctrl = crate::repo::read_control(input)?;
     let get = |k: &str| ctrl.get(k).cloned().unwrap_or_default();
     let scripts = extract_deb_scripts(input, tmp)?;
+    let (epoch, version) = split_deb_epoch(&get("Version"));
     Ok(SourceMeta {
         package: get("Package"),
-        version: get("Version"),
+        version: version.clone(),
         arch: get("Architecture"),
         maintainer: get("Maintainer"),
         description: get("Description"),
         depends: get("Depends"),
-        distribution: infer_dist_from_version(&get("Version")),
+        recommends: get("Recommends"),
+        suggests: get("Suggests"),
+        conflicts: get("Conflicts"),
+        replaces: get("Replaces"),
+        provides: get("Provides"),
+        breaks: get("Breaks"),
+        predepends: get("Pre-Depends"),
+        section: get("Section"),
+        priority: get("Priority"),
+        epoch,
+        distribution: infer_dist_from_version(&version),
         scripts,
     })
+}
+
+/// Split a Debian `Version` into (`epoch`, `version`). `1:2.3-1` ->
+/// (`1`, `2.3-1`); a version with no numeric epoch is returned unchanged.
+fn split_deb_epoch(raw: &str) -> (String, String) {
+    match raw.split_once(':') {
+        Some((epoch, rest))
+            if !epoch.is_empty() && epoch.chars().all(|c| c.is_ascii_digit()) =>
+        {
+            (epoch.to_string(), rest.to_string())
+        }
+        _ => (String::new(), raw.to_string()),
+    }
+}
+
+/// Normalize a source package's architecture name into `target`'s
+/// convention, canonicalizing through the Debian name (RPM `x86_64` -> deb
+/// `amd64` -> pacman `x86_64`). An architecture already in the target's own
+/// convention passes through unchanged.
+fn normalize_arch(arch: &str, source: &str, target: &str) -> String {
+    let deb = if source == "deb" {
+        arch.to_string()
+    } else {
+        from_rpm_arch(arch).to_string()
+    };
+    match target {
+        "deb" => deb,
+        "rpm" => lx_lib::constants::to_rpm_arch(&deb).to_string(),
+        "arch" => lx_lib::constants::to_pacman_arch(&deb).to_string(),
+        _ => arch.to_string(),
+    }
+}
+
+/// Inverse of [`lx_lib::constants::to_rpm_arch`] for the architectures lx
+/// emits (`x86_64` -> `amd64`, `aarch64` -> `arm64`, ...).
+fn from_rpm_arch(arch: &str) -> &str {
+    match arch {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        "armhfp" | "armv7hl" | "armv7h" => "armhf",
+        "i686" => "i386",
+        "ppc64le" => "ppc64el",
+        "loongarch64" => "loong64",
+        other => other,
+    }
 }
 
 /// Extract maintainer scripts (preinst/postinst/prerm/postrm) from a .deb.
@@ -307,6 +384,21 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
     let description = pkg.metadata.get_summary().unwrap_or_default().to_string();
 
     let depends = format_rpm_requires(&pkg.metadata.get_requires().unwrap_or_default());
+    // RPM auto-`Provides` are sonames/file paths (`libc.so.6()(64bit)`,
+    // `config(...)`) that have no meaning as Debian virtual packages, so they
+    // are deliberately not carried; conflicts/recommends/obsoletes are real
+    // package names.
+    let recommends = format_rpm_requires(&pkg.metadata.get_recommends().unwrap_or_default());
+    let conflicts = format_rpm_requires(&pkg.metadata.get_conflicts().unwrap_or_default());
+    let replaces = format_rpm_requires(&pkg.metadata.get_obsoletes().unwrap_or_default());
+    let section = pkg.metadata.get_group().unwrap_or_default().to_string();
+    let epoch = pkg
+        .metadata
+        .get_epoch()
+        .ok()
+        .filter(|e| *e > 0)
+        .map(|e| e.to_string())
+        .unwrap_or_default();
 
     let scripts = extract_rpm_scripts(&pkg);
 
@@ -317,8 +409,14 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         maintainer,
         description,
         depends,
+        recommends,
+        conflicts,
+        replaces,
+        section,
+        epoch,
         distribution: "el9".to_string(),
         scripts,
+        ..Default::default()
     })
 }
 
@@ -389,30 +487,52 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
             break;
         }
     }
-    let mut fields = BTreeMap::new();
-    // Collect all `depend` lines (Arch PKGBUILD dependencies).
-    let mut depends = Vec::new();
+    // `.PKGINFO` keys can repeat (`depend`, `provides`, `conflicts`, ...), so
+    // collect every value per key instead of last-wins.
+    let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for line in pkginfo.lines() {
         if let Some((k, v)) = line.split_once(" = ") {
             let k = k.trim();
             let v = v.trim();
-            if k == "depend" && !v.is_empty() {
-                depends.push(v.to_string());
-            } else {
-                fields.insert(k, v);
+            if !k.is_empty() && !v.is_empty() {
+                fields.entry(k.to_string()).or_default().push(v.to_string());
             }
         }
     }
-    let get = |k: &str| fields.get(k).copied().unwrap_or("").to_string();
+    let get = |k: &str| {
+        fields
+            .get(k)
+            .and_then(|v| v.last())
+            .cloned()
+            .unwrap_or_default()
+    };
+    let join = |k: &str| fields.get(k).map(|v| v.join(", ")).unwrap_or_default();
+    // `optdepend` entries are `pkg: reason`; only the package name maps to a
+    // target Recommends.
+    let recommends = fields
+        .get("optdepend")
+        .map(|v| {
+            v.iter()
+                .map(|s| s.split(':').next().unwrap_or(s).trim().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
     Ok(SourceMeta {
         package: get("pkgname"),
         version: get("pkgver"),
         arch: get("arch"),
         maintainer: get("packager"),
         description: get("pkgdesc"),
-        depends: depends.join(", "),
+        depends: join("depend"),
+        recommends,
+        conflicts: join("conflicts"),
+        replaces: join("replaces"),
+        provides: join("provides"),
+        epoch: get("epoch"),
         distribution: "arch".to_string(),
         scripts: BTreeMap::new(),
+        ..Default::default()
     })
 }
 
@@ -729,22 +849,36 @@ fn scan_and_fill_deps(mut meta: SourceMeta, install_tree: &Path) -> Result<Sourc
 /// need mapping via `pkgname::conventional_name` heuristics + the
 /// `depmap` deb→rpm/arch tables. Unknown names pass through untouched.
 fn convert_dep_names(mut meta: SourceMeta, ecosystem: &str, target: &str) -> SourceMeta {
-    if meta.depends.trim().is_empty() {
-        return meta;
-    }
     let eco = if ecosystem.is_empty() {
         infer_ecosystem_from_dep(&meta.depends)
     } else {
         ecosystem.to_string()
     };
-    let deps: Vec<String> = meta
-        .depends
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|dep| map_dep_name(dep, &eco, target))
-        .collect();
-    meta.depends = deps.join(", ");
+    let map = |value: &str| -> String {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|dep| map_dep_name(dep, &eco, target))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let depends = map(&meta.depends);
+    let recommends = map(&meta.recommends);
+    let suggests = map(&meta.suggests);
+    let conflicts = map(&meta.conflicts);
+    let replaces = map(&meta.replaces);
+    let provides = map(&meta.provides);
+    let breaks = map(&meta.breaks);
+    let predepends = map(&meta.predepends);
+    meta.depends = depends;
+    meta.recommends = recommends;
+    meta.suggests = suggests;
+    meta.conflicts = conflicts;
+    meta.replaces = replaces;
+    meta.provides = provides;
+    meta.breaks = breaks;
+    meta.predepends = predepends;
     meta
 }
 
@@ -958,17 +1092,34 @@ fn system_name_for(deb: &str, target: &str) -> String {
 /// `name (>= version)` (parenthesized). This function normalizes
 /// every source format into the target format's expected syntax.
 fn convert_deps_syntax(mut meta: SourceMeta, source: &str, target: &str) -> SourceMeta {
-    if meta.depends.is_empty() || source == target {
+    if source == target {
         return meta;
     }
-    let deps: Vec<String> = meta
-        .depends
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|dep| map_dep_syntax(dep, source, target))
-        .collect();
-    meta.depends = deps.join(", ");
+    let map = |value: &str| -> String {
+        value
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|dep| map_dep_syntax(dep, source, target))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let depends = map(&meta.depends);
+    let recommends = map(&meta.recommends);
+    let suggests = map(&meta.suggests);
+    let conflicts = map(&meta.conflicts);
+    let replaces = map(&meta.replaces);
+    let provides = map(&meta.provides);
+    let breaks = map(&meta.breaks);
+    let predepends = map(&meta.predepends);
+    meta.depends = depends;
+    meta.recommends = recommends;
+    meta.suggests = suggests;
+    meta.conflicts = conflicts;
+    meta.replaces = replaces;
+    meta.provides = provides;
+    meta.breaks = breaks;
+    meta.predepends = predepends;
     meta
 }
 
@@ -1107,12 +1258,12 @@ fn build_target(
     install_tree: &Path,
     target_format: &str,
     args: &ConvertArgs,
+    work_dir: &Path,
 ) -> Result<PathBuf> {
     let plugin = crate::plugins::get_packager(target_format)
         .ok_or_else(|| anyhow::anyhow!("unknown target plugin '{target_format}'"))?;
 
-    let tmp = tempfile::tempdir()?;
-    let staging_root = tmp.path().join("staging");
+    let staging_root = work_dir.join("staging");
     fs::create_dir_all(&staging_root)?;
 
     // Stage the install tree: copy everything under install_tree into staging.
@@ -1127,6 +1278,16 @@ fn build_target(
         description: meta.description.clone(),
         maintainer: meta.maintainer.clone(),
         depends: meta.depends.clone(),
+        recommends: meta.recommends.clone(),
+        suggests: meta.suggests.clone(),
+        conflicts: meta.conflicts.clone(),
+        replaces: meta.replaces.clone(),
+        provides: meta.provides.clone(),
+        breaks: meta.breaks.clone(),
+        predepends: meta.predepends.clone(),
+        section: meta.section.clone(),
+        priority: meta.priority.clone(),
+        epoch: meta.epoch.clone(),
         package_format: target_format.to_string(),
         ..Default::default()
     };
@@ -1303,7 +1464,36 @@ mod tests {
             rpm::Dependency::any("/bin/sh"),
             rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4"),
         ];
-        assert_eq!(format_rpm_requires(&deps), "bash, glibc >= 2.17, zlib < 1.3");
+        assert_eq!(
+            format_rpm_requires(&deps),
+            "bash, glibc >= 2.17, zlib < 1.3"
+        );
+    }
+
+    #[test]
+    fn splits_debian_epoch_only_when_numeric() {
+        assert_eq!(
+            split_deb_epoch("1:2.3-1"),
+            ("1".to_string(), "2.3-1".to_string())
+        );
+        assert_eq!(
+            split_deb_epoch("2.3-1"),
+            (String::new(), "2.3-1".to_string())
+        );
+        assert_eq!(
+            split_deb_epoch("abc:1"),
+            (String::new(), "abc:1".to_string())
+        );
+    }
+
+    #[test]
+    fn normalizes_arch_through_the_debian_name() {
+        assert_eq!(normalize_arch("x86_64", "rpm", "deb"), "amd64");
+        assert_eq!(normalize_arch("aarch64", "arch", "deb"), "arm64");
+        assert_eq!(normalize_arch("amd64", "deb", "rpm"), "x86_64");
+        assert_eq!(normalize_arch("amd64", "deb", "arch"), "x86_64");
+        // Unknown architectures pass through.
+        assert_eq!(normalize_arch("mips64el", "deb", "deb"), "mips64el");
     }
 
     #[test]
