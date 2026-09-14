@@ -3,7 +3,8 @@
 A map of the tools around `lx`: what each one is actually for, which
 stage of the "upstream software → installed on a machine" pipeline it
 occupies, and where `lx` overlaps, complements, or deliberately stays
-out of the way.
+out of the way. Maturity is tracked separately, as
+[technology readiness (TRL)](#technology-readiness-trl).
 
 This is the broad survey. For field-by-field parity use
 [`comparison/lx-vs-nfpm.md`](comparison/lx-vs-nfpm.md) and
@@ -213,6 +214,67 @@ Legend: ✅ does it · 🟡 partial / adjacent · — out of scope.
 | Flatpak / Snap / AppImage | ✅ | 🟡 | ✅ | ✅ | ✅ | ✅ | — |
 | `mise` / `aqua` / `ubi` / `eget` / `asdf` / `pkgx` | ✅ | — | — | 🟡 | — | ✅ | — |
 | **`lx`** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+---
+
+## Technology readiness (TRL)
+
+Everything above is about **capability** — which stage of the pipeline a
+tool occupies. [TRL](https://en.wikipedia.org/wiki/Technology_readiness_level)
+is about **maturity**: how proven that capability is in real use. The
+standard scale runs 1–9:
+
+| TRL | Meaning |
+|---|---|
+| 1–3 | Basic principles → experimental proof of concept |
+| 4 | Validated in a lab |
+| 5 | Validated in a relevant environment |
+| 6 | Demonstrated in a relevant environment |
+| 7 | Prototype demonstrated in an operational environment |
+| 8 | Complete and qualified; in wide operational use |
+| 9 | Proven in operational use, at scale, for years |
+
+Most of the incumbent landscape is TRL 9 — these are not experiments:
+
+| TRL | Representative tools in this map |
+|---|---|
+| 9 | `dpkg`/`apt`, `rpm`/`dnf`, `pacman`/`makepkg`, `abuild`, `reprepro`/`aptly`/`apt-ftparchive`, `createrepo_c`, `fpm`, `nfpm`, `cargo-deb`, GoReleaser, Nix, Flatpak, Snap, AppImage |
+| 8 | `cargo-dist`, `deb-get`, OBS and the hosted repo SaaS (Cloudsmith/Gemfury/PackageCloud) |
+| 7 | Established `*2deb` converters |
+| 6 | **`lx` — today** |
+
+### Where `lx` is, and what moves it up
+
+`lx` is **TRL 6**: the pipeline is demonstrated in a relevant environment.
+Every stage runs end to end and is covered by tests — real `dpkg-deb
+--info`, `dpkg-source -x`, and `lintian` accept the output, and the
+producer→distributor→consumer loop works — but there is no tagged release
+yet and only a few operators have run the whole loop.
+
+| Level | What it would take for `lx` |
+|---|---|
+| 6 (now) | End-to-end works and is test-covered; reference tooling accepts the output; no tagged release |
+| 7 | First tagged musl-static release, and an independent operator running build → publish → install/upgrade |
+| 8 | Sustained use across the Debian, rpm, and Arch families; multiple independent maintainers; an upgrade/regression history |
+| 9 | Years of field upgrades and a security-response record |
+
+Readiness is not uniform across the pipeline either — the newer surfaces
+are deliberately rated lower than the core:
+
+| Dimension | TRL | Rationale |
+|---|---|---|
+| deb/rpm/arch packagers | 6 | Verified against the reference tools and `lintian`; pre-release |
+| apk/ipk packagers | 5 | Implemented and indexable; less reference-tool verification |
+| Consumer, Debian | 6 | The original path; exercised in tests and CI |
+| Consumer, rpm/arch | 5 | Format-aware client added recently; no field use yet |
+| Repository indexes, apt | 6 | Functional `reprepro`/`apt-ftparchive` replacement for the small loop |
+| Repository indexes, rpm/pacman/apk/opkg | 5 | Newer; per-format signing wired but field-unproven |
+| musl-static builds | 5 | Logic in place; the cross-architecture link is not yet proven in a release |
+| `lx`'s own release pipeline | 4 | Workflow exists; no tagged release has run it end to end |
+
+The takeaway for adoption: use the core build/verify path (TRL 6) with
+confidence, but treat the newest surfaces as you would any early tool —
+pin versions, verify the output yourself, and file what breaks.
 
 ---
 
