@@ -1,24 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Package-index plugin dimension: one backend per package index, covering
-//! both sides of the index lifecycle.
+//! Package-index plugin dimension: one backend per package index, split into
+//! two role traits so a backend carries only the methods it can honour:
 //!
-//! This dimension merges what were two complementary plugin types:
+//! * [`WriteIndex`]: turn built artifacts into a servable repository index
+//!   (`lx repo`) — `apt`, `opkg`, `pacman`, `apk`, `rpm`.
+//! * [`ReadIndex`]: fan out across upstream package indexes (`lx index`) —
+//!   `lx-community`, `aur`, `repology`, `custom`.
 //!
-//! * the **write** side (formerly `RepoIndexer`): turn built artifacts into a
-//!   servable repository index (`lx repo`) — `apt`, `opkg`, `pacman`, `apk`,
-//!   `rpm`.
-//! * the **read** side (formerly `IndexSource`): fan out across upstream
-//!   package indexes (`lx index`) — `lx-community`, `aur`, `repology`,
-//!   `custom`.
-//!
-//! Both are a [`PackageIndex`]. Every role method has a default, so a backend
-//! overrides only the half it implements; the other half fails with an
-//! actionable error keyed off [`PackageIndex::id`]/[`PackageIndex::capabilities`].
-//! This is the read/write counterpart of the `RepoIndexer`/`IndexSource`
-//! split it replaces: a future backend that both publishes *and* consumes an
-//! index (e.g. reading back a locally generated repository) implements both
-//! halves; today the two sets remain disjoint.
+//! Both extend the common [`PackageIndex`] marker (id + instance label). The
+//! registry ([`IndexBackend`]) stores an optional factory per role, so a
+//! backend's capabilities are derived from which factories it registers
+//! rather than declared a second time. A future backend that both publishes
+//! *and* consumes an index (e.g. reading back a locally generated repository)
+//! registers both factories; today the two sets remain disjoint.
 //!
 //! ## Canonical ids vs. formats
 //!
@@ -116,18 +111,9 @@ pub struct IndexOptions<'a> {
     pub sign_key_id: &'a str,
 }
 
-/// One package-index backend: publishes a local index (write) and/or
-/// consumes an upstream one (read).
-///
-/// Implementors are the merge of the former `RepoIndexer` and `IndexSource`:
-/// `apt`, `opkg`, `pacman`, `apk`, `rpm` are write-capable; `lx-community`,
-/// `aur` and `repology` are read-capable. A backend that does both is
-/// possible (the trait does not restrict it).
-///
-/// Every role method has a default so a backend only writes the half it
-/// supports; the defaults fail with an actionable message instead of
-/// panicking. `name`/`description` (from [`Plugin`]) and `capabilities` are
-/// required; `id` defaults to `name`.
+/// Common surface of every package-index backend, regardless of role:
+/// identity (from [`Plugin`]) plus the configured instance label. The actual
+/// behaviour lives in the role traits [`ReadIndex`] / [`WriteIndex`].
 pub trait PackageIndex: Plugin {
     /// Canonical id (`apt`, `opkg`, `pacman`, `apk`, `rpm`, `lx-community`,
     /// `aur`, `repology`). See [`BACKEND_IDS`]. Defaults to the plugin's
@@ -136,9 +122,6 @@ pub trait PackageIndex: Plugin {
         self.name()
     }
 
-    /// Roles this backend implements.
-    fn capabilities(&self) -> Capabilities;
-
     /// Configured instance label. Read backends override this with the
     /// `indexes.yaml` source name (used as `IndexHit::source` and the
     /// `--repo` filter); stateless write backends keep the [`id`](Self::id)
@@ -146,24 +129,36 @@ pub trait PackageIndex: Plugin {
     fn instance_name(&self) -> &str {
         self.id()
     }
+}
 
-    // -----------------------------------------------------------------
-    // Write role (was `RepoIndexer`)
-    // -----------------------------------------------------------------
+/// The read role: consume an upstream package index (`lx index`).
+///
+/// Implemented by `lx-community`, `custom`, `aur`, and `repology`. A backend
+/// that cannot install (metadata-only, e.g. Repology) still implements
+/// [`install`](Self::install) and returns an actionable error.
+pub trait ReadIndex: PackageIndex {
+    /// Search this index for projects matching `pattern`.
+    fn search(&self, pattern: Option<&str>) -> Result<Vec<IndexHit>>;
 
-    /// Artifact file extension this backend consumes (without dot), if it
-    /// can publish an index.
-    fn file_extension(&self) -> Option<&'static str> {
-        None
-    }
+    /// Look up one package in this index.
+    fn info(&self, package: &str) -> Result<Option<IndexHit>>;
+
+    /// Refresh this index's local cache; `Ok(true)` when it changed.
+    fn update(&self) -> Result<bool>;
+
+    /// Install a package from this index.
+    fn install(&self, package: &str, opts: InstallOpts) -> Result<()>;
+}
+
+/// The write role: publish a local repository index (`lx repo`).
+///
+/// Implemented by `apt`, `opkg`, `pacman`, `apk`, and `rpm`.
+pub trait WriteIndex: PackageIndex {
+    /// Artifact file extension this backend consumes (without dot).
+    fn file_extension(&self) -> Option<&'static str>;
 
     /// Write the repository index for `artifacts` into `dir`.
-    fn build_index(&self, _dir: &Path, _artifacts: &[PathBuf], _opts: &IndexOptions) -> Result<()> {
-        anyhow::bail!(
-            "'{}' cannot publish a package index (read-only source)",
-            self.id()
-        )
-    }
+    fn build_index(&self, dir: &Path, artifacts: &[PathBuf], opts: &IndexOptions) -> Result<()>;
 
     /// Sign the index this backend just wrote.
     ///
@@ -178,157 +173,123 @@ pub trait PackageIndex: Plugin {
         }
         Ok(())
     }
-
-    // -----------------------------------------------------------------
-    // Read role (was `IndexSource`)
-    // -----------------------------------------------------------------
-
-    /// Search this index for projects matching `pattern`.
-    fn search(&self, _pattern: Option<&str>) -> Result<Vec<IndexHit>> {
-        anyhow::bail!("'{}' cannot search (write-only indexer)", self.id())
-    }
-
-    /// Look up one package in this index.
-    fn info(&self, _package: &str) -> Result<Option<IndexHit>> {
-        Ok(None)
-    }
-
-    /// Refresh this index's local cache; `Ok(true)` when it changed.
-    fn update(&self) -> Result<bool> {
-        Ok(false)
-    }
-
-    /// Install a package from this index.
-    fn install(&self, _package: &str, _opts: InstallOpts) -> Result<()> {
-        anyhow::bail!("'{}' is not installable", self.id())
-    }
 }
 
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
 
-/// A registered [`PackageIndex`] backend: its canonical id, capabilities and
-/// a factory. `make` takes the configured instance name (write backends
-/// ignore it; read backends label their cache with it).
+/// A registered package-index backend: its canonical id and an optional
+/// factory per role. `name` is the configured instance name (write backends
+/// ignore it; read backends label their cache with it) and `url` is the
+/// configured source URL (`custom`), or the built-in default.
+type ReadFactory = fn(name: &str, url: Option<&str>) -> Box<dyn ReadIndex>;
+type WriteFactory = fn(name: &str, url: Option<&str>) -> Box<dyn WriteIndex>;
+
 #[derive(Clone, Copy, Debug)]
 pub struct IndexBackend {
     /// Canonical id, see [`BACKEND_IDS`].
     pub id: &'static str,
-    /// Roles this backend implements.
+    /// Roles this backend implements, derived from which factories are set.
     pub capabilities: Capabilities,
-    make: fn(name: &str, url: Option<&str>) -> Box<dyn PackageIndex>,
+    read: Option<ReadFactory>,
+    write: Option<WriteFactory>,
 }
 
 impl IndexBackend {
-    /// Instantiate this backend, labelling the instance with `name`.
-    pub fn make(&self, name: &str) -> Box<dyn PackageIndex> {
-        (self.make)(name, None)
+    /// A read-only backend.
+    fn reader(id: &'static str, make: ReadFactory) -> Self {
+        Self {
+            id,
+            capabilities: Capabilities::READ,
+            read: Some(make),
+            write: None,
+        }
     }
 
-    /// Instantiate this backend, passing a configured source URL (used by
-    /// `custom`; ignored by the built-in backends).
-    pub fn make_with(&self, name: &str, url: Option<&str>) -> Box<dyn PackageIndex> {
-        (self.make)(name, url)
+    /// A write-only backend.
+    fn writer(id: &'static str, make: WriteFactory) -> Self {
+        Self {
+            id,
+            capabilities: Capabilities::WRITE,
+            read: None,
+            write: Some(make),
+        }
     }
 
-    /// Human-readable description, taken from the backend instance so the
-    /// registry does not duplicate it.
-    pub fn description(&self) -> &'static str {
-        self.make(self.id).description()
+    /// Instantiate the read role, if this backend has one.
+    pub fn make_reader(&self, name: &str) -> Option<Box<dyn ReadIndex>> {
+        self.make_reader_with(name, None)
+    }
+
+    /// Instantiate the read role with a configured source URL (used by
+    /// `custom`; ignored by the built-in read backends).
+    pub fn make_reader_with(&self, name: &str, url: Option<&str>) -> Option<Box<dyn ReadIndex>> {
+        self.read.map(|make| make(name, url))
+    }
+
+    /// Instantiate the write role, if this backend has one.
+    pub fn make_writer(&self, name: &str) -> Option<Box<dyn WriteIndex>> {
+        self.write.map(|make| make(name, None))
     }
 }
 
 // Write-side factories. Repo indexers are stateless, so the arguments are ignored.
-fn make_apt(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_apt(_name: &str, _url: Option<&str>) -> Box<dyn WriteIndex> {
     Box::new(apt::AptIndexer)
 }
 
-fn make_opkg(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_opkg(_name: &str, _url: Option<&str>) -> Box<dyn WriteIndex> {
     Box::new(opkg::OpkgIndexer)
 }
 
-fn make_pacman(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_pacman(_name: &str, _url: Option<&str>) -> Box<dyn WriteIndex> {
     Box::new(pacman::PacmanIndexer)
 }
 
-fn make_apk(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_apk(_name: &str, _url: Option<&str>) -> Box<dyn WriteIndex> {
     Box::new(apk::ApkIndexer)
 }
 
-fn make_rpm(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_rpm(_name: &str, _url: Option<&str>) -> Box<dyn WriteIndex> {
     Box::new(rpm::RpmIndexer)
 }
 
 // Read-side factories. `name` is the configured `indexes.yaml` source name;
 // `url` is the configured git URL (`custom`), or the built-in default.
-fn make_lx_community(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_lx_community(name: &str, _url: Option<&str>) -> Box<dyn ReadIndex> {
     Box::new(lx_community::GitIndexSource::lx_community(name))
 }
 
-fn make_aur(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_aur(name: &str, _url: Option<&str>) -> Box<dyn ReadIndex> {
     Box::new(aur::AurSource::new(name))
 }
 
-fn make_repology(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_repology(name: &str, _url: Option<&str>) -> Box<dyn ReadIndex> {
     Box::new(repology::RepologySource::new(name))
 }
 
-fn make_custom(name: &str, url: Option<&str>) -> Box<dyn PackageIndex> {
+fn make_custom(name: &str, url: Option<&str>) -> Box<dyn ReadIndex> {
     Box::new(lx_community::GitIndexSource::custom(
         name,
         url.unwrap_or(lx_community::GitIndexSource::DEFAULT_URL),
     ))
 }
 
-/// All known backends, in [`BACKEND_IDS`] order.
+/// All known backends, in [`BACKEND_IDS`] order. Each registers the factory
+/// (or factories) for the role(s) it implements; capabilities are derived
+/// from what is registered.
 pub fn all_index_backends() -> Vec<IndexBackend> {
     vec![
-        IndexBackend {
-            id: "apt",
-            capabilities: Capabilities::WRITE,
-            make: make_apt,
-        },
-        IndexBackend {
-            id: "opkg",
-            capabilities: Capabilities::WRITE,
-            make: make_opkg,
-        },
-        IndexBackend {
-            id: "pacman",
-            capabilities: Capabilities::WRITE,
-            make: make_pacman,
-        },
-        IndexBackend {
-            id: "apk",
-            capabilities: Capabilities::WRITE,
-            make: make_apk,
-        },
-        IndexBackend {
-            id: "rpm",
-            capabilities: Capabilities::WRITE,
-            make: make_rpm,
-        },
-        IndexBackend {
-            id: "lx-community",
-            capabilities: Capabilities::READ,
-            make: make_lx_community,
-        },
-        IndexBackend {
-            id: "aur",
-            capabilities: Capabilities::READ,
-            make: make_aur,
-        },
-        IndexBackend {
-            id: "repology",
-            capabilities: Capabilities::READ,
-            make: make_repology,
-        },
-        IndexBackend {
-            id: "custom",
-            capabilities: Capabilities::READ,
-            make: make_custom,
-        },
+        IndexBackend::writer("apt", make_apt),
+        IndexBackend::writer("opkg", make_opkg),
+        IndexBackend::writer("pacman", make_pacman),
+        IndexBackend::writer("apk", make_apk),
+        IndexBackend::writer("rpm", make_rpm),
+        IndexBackend::reader("lx-community", make_lx_community),
+        IndexBackend::reader("aur", make_aur),
+        IndexBackend::reader("repology", make_repology),
+        IndexBackend::reader("custom", make_custom),
     ]
 }
 

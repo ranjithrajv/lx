@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{Capabilities, IndexOptions, PackageIndex};
+use super::{IndexOptions, PackageIndex, WriteIndex};
 use crate::plugins::plugin::plugin_identity;
 
 /// OpenWrt/opkg repository: a `Packages` index plus `Packages.gz`, built
@@ -17,11 +17,9 @@ plugin_identity!(
     "opkg repository (Packages, Packages.gz)"
 );
 
-impl PackageIndex for OpkgIndexer {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::WRITE
-    }
+impl PackageIndex for OpkgIndexer {}
 
+impl WriteIndex for OpkgIndexer {
     fn file_extension(&self) -> Option<&'static str> {
         Some("ipk")
     }

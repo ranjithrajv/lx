@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
-use super::{parse_key_value, Capabilities, IndexOptions, PackageIndex};
+use super::{parse_key_value, IndexOptions, PackageIndex, WriteIndex};
 use crate::plugins::plugin::plugin_identity;
 
 /// Alpine apk repository: an `APKINDEX.tar.gz` archive containing the
@@ -16,11 +16,9 @@ plugin_identity!(
     "Alpine repository (APKINDEX.tar.gz from .PKGINFO; RSA-signed index)"
 );
 
-impl PackageIndex for ApkIndexer {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::WRITE
-    }
+impl PackageIndex for ApkIndexer {}
 
+impl WriteIndex for ApkIndexer {
     fn file_extension(&self) -> Option<&'static str> {
         Some("apk")
     }

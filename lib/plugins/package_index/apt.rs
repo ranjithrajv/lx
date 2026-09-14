@@ -3,7 +3,7 @@
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use super::{Capabilities, IndexOptions, PackageIndex};
+use super::{IndexOptions, PackageIndex, WriteIndex};
 use crate::plugins::plugin::plugin_identity;
 
 /// Debian/Ubuntu apt repository: `Packages`, `Packages.gz`, `Release`, and
@@ -17,11 +17,9 @@ plugin_identity!(
     "apt repository (Packages, Packages.gz, Release, InRelease)"
 );
 
-impl PackageIndex for AptIndexer {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::WRITE
-    }
+impl PackageIndex for AptIndexer {}
 
+impl WriteIndex for AptIndexer {
     fn file_extension(&self) -> Option<&'static str> {
         Some("deb")
     }

@@ -7,7 +7,7 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use super::{Capabilities, PackageIndex};
+use super::{PackageIndex, ReadIndex};
 use crate::index::{IndexHit, InstallOpts};
 use crate::plugins::plugin::plugin_identity;
 
@@ -79,14 +79,12 @@ plugin_identity!(
 );
 
 impl PackageIndex for AurSource {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::READ
-    }
-
     fn instance_name(&self) -> &str {
         &self.name
     }
+}
 
+impl ReadIndex for AurSource {
     fn search(&self, pattern: Option<&str>) -> Result<Vec<IndexHit>> {
         let json = match pattern {
             Some(p) => self.rpc(&format!("type=search&arg={p}")),

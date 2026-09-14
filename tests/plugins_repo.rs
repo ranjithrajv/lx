@@ -64,7 +64,8 @@ fn opkg_writes_packages_from_ipk() {
     let arts = artifacts_with_ext(tmp.path(), "ipk").unwrap();
     get_index_backend("ipk")
         .unwrap()
-        .make("ipk")
+        .make_writer("ipk")
+        .unwrap()
         .build_index(tmp.path(), &arts, &opts("openwrt", "test"))
         .unwrap();
 
@@ -97,7 +98,8 @@ fn pacman_writes_a_db_tarball_from_pkg() {
     let arts = artifacts_with_ext(tmp.path(), "zst").unwrap();
     get_index_backend("arch")
         .unwrap()
-        .make("arch")
+        .make_writer("arch")
+        .unwrap()
         .build_index(tmp.path(), &arts, &opts("core", "test"))
         .unwrap();
 
@@ -129,7 +131,8 @@ fn apk_writes_an_apkindex_tarball_from_apk() {
     let arts = artifacts_with_ext(tmp.path(), "apk").unwrap();
     get_index_backend("apk")
         .unwrap()
-        .make("apk")
+        .make_writer("apk")
+        .unwrap()
         .build_index(tmp.path(), &arts, &opts("alpine", "test"))
         .unwrap();
 

@@ -18,7 +18,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::{Capabilities, PackageIndex};
+use super::{PackageIndex, ReadIndex};
 use crate::debs::{detect_dist, detect_dpkg_arch};
 use crate::index::{IndexHit, InstallOpts};
 use crate::plugins::plugin::plugin_identity;
@@ -362,14 +362,12 @@ plugin_identity!(
 );
 
 impl PackageIndex for RepologySource {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::READ
-    }
-
     fn instance_name(&self) -> &str {
         &self.name
     }
+}
 
+impl ReadIndex for RepologySource {
     fn search(&self, pattern: Option<&str>) -> Result<Vec<IndexHit>> {
         let re = match pattern {
             Some(p) => Some(Regex::new(&format!("(?i){p}"))?),

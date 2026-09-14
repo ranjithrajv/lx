@@ -7,7 +7,7 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::{Capabilities, PackageIndex};
+use super::{PackageIndex, ReadIndex};
 use crate::debs::{confirm, detect_dist};
 use crate::index::{detect_host_format, IndexHit, InstallOpts};
 use crate::install_pkg::{detect_arch, install_prebuilt};
@@ -191,14 +191,12 @@ impl crate::plugins::plugin::Plugin for GitIndexSource {
 }
 
 impl PackageIndex for GitIndexSource {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::READ
-    }
-
     fn instance_name(&self) -> &str {
         &self.name
     }
+}
 
+impl ReadIndex for GitIndexSource {
     fn search(&self, pattern: Option<&str>) -> Result<Vec<IndexHit>> {
         let re = match pattern {
             Some(p) => Some(Regex::new(&format!("(?i){p}"))?),

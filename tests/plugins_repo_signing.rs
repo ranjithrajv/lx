@@ -170,7 +170,8 @@ fn rpm_writes_repomd_asc() {
     };
     get_index_backend("rpm")
         .unwrap()
-        .make("rpm")
+        .make_writer("rpm")
+        .unwrap()
         .sign_index(tmp.path(), &opts)
         .unwrap();
     let asc = std::fs::read_to_string(repodata.join("repomd.xml.asc")).unwrap();
@@ -192,7 +193,10 @@ fn apk_index_is_rsa_signed() {
     .unwrap();
 
     let arts = artifacts_with_ext(tmp.path(), "apk").unwrap();
-    let indexer = get_index_backend("apk").unwrap().make("apk");
+    let indexer = get_index_backend("apk")
+        .unwrap()
+        .make_writer("apk")
+        .unwrap();
     let base = IndexOptions {
         suite: "alpine",
         origin: "test",
@@ -331,7 +335,10 @@ fn apk_verifies_with_real_apk_static() {
     std::fs::create_dir_all(&arch_dir).unwrap();
     let repo_apk = arch_dir.join(apk.file_name().unwrap());
     std::fs::copy(&apk, &repo_apk).unwrap();
-    let indexer = get_index_backend("apk").unwrap().make("apk");
+    let indexer = get_index_backend("apk")
+        .unwrap()
+        .make_writer("apk")
+        .unwrap();
     indexer
         .build_index(
             &arch_dir,

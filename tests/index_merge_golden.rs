@@ -21,7 +21,7 @@
 use lx_lib::index::InstallOpts;
 use lx_lib::plugins::package_index::{
     all_index_backends, artifacts_with_ext, get_index_backend, Capabilities, IndexOptions,
-    PackageIndex, BACKEND_IDS,
+    WriteIndex, BACKEND_IDS,
 };
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -32,10 +32,11 @@ use std::path::{Path, PathBuf};
 const GOLDEN_SUITE: &str = "golden";
 
 /// Instantiate the write backend for a `--format`-style value.
-fn indexer(fmt: &str) -> Box<dyn PackageIndex> {
+fn indexer(fmt: &str) -> Box<dyn WriteIndex> {
     get_index_backend(fmt)
         .unwrap_or_else(|| panic!("no backend for '{fmt}'"))
-        .make(fmt)
+        .make_writer(fmt)
+        .unwrap_or_else(|| panic!("backend for '{fmt}' has no write role"))
 }
 
 fn opts(suite: &str) -> IndexOptions<'_> {
@@ -498,17 +499,23 @@ fn union_lookup_accepts_ids_and_format_aliases() {
 
     // Read backends carry the configured instance name for `IndexHit::source`
     // and the `--repo` filter, while `id()` stays canonical.
-    let aur = get_index_backend("aur").unwrap().make("my-aur");
+    let aur = get_index_backend("aur")
+        .unwrap()
+        .make_reader("my-aur")
+        .expect("aur is a read backend");
     assert_eq!(aur.id(), "aur");
     assert_eq!(aur.instance_name(), "my-aur");
 
-    // A read backend reports the read role; write-role methods fail with an
-    // actionable error rather than panicking, and Repology stays
-    // metadata-only.
-    let repology = get_index_backend("repology").unwrap().make("repology");
-    assert!(repology.capabilities().can_read());
-    assert!(repology
-        .build_index(Path::new("."), &[], &opts("stable"))
-        .is_err());
+    // Roles are separated at the type level: a read backend exposes no write
+    // factory, and a metadata-only read backend (Repology) still reports an
+    // actionable error rather than panicking when asked to install.
+    assert!(get_index_backend("repology")
+        .unwrap()
+        .make_writer("repology")
+        .is_none());
+    let repology = get_index_backend("repology")
+        .unwrap()
+        .make_reader("repology")
+        .expect("repology is a read backend");
     assert!(repology.install("curl", InstallOpts::default()).is_err());
 }

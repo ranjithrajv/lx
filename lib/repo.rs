@@ -105,7 +105,9 @@ fn run_format(args: &RepoArgs) -> Result<()> {
             backend.id
         );
     }
-    let indexer = backend.make(format);
+    let indexer = backend
+        .make_writer(format)
+        .ok_or_else(|| anyhow::anyhow!("'{}' cannot publish a repository index", backend.id))?;
     let ext = indexer
         .file_extension()
         .ok_or_else(|| anyhow::anyhow!("'{}' has no artifact extension", backend.id))?;

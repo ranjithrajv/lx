@@ -115,7 +115,8 @@ fn pacman_accepts_generated_db() {
     let pkg = tiny_arch_pkg(&repo);
     get_index_backend("arch")
         .unwrap()
-        .make("arch")
+        .make_writer("arch")
+        .unwrap()
         .build_index(&repo, &[pkg], &opts("core"))
         .unwrap();
     // pacman fetches `<repo>.db`; expose the tar.gz under that name.
@@ -188,7 +189,8 @@ fn opkg_accepts_generated_index() {
     std::fs::copy(&ipk, repo.join("hello_1.0-1_x86_64.ipk")).unwrap();
     get_index_backend("ipk")
         .unwrap()
-        .make("ipk")
+        .make_writer("ipk")
+        .unwrap()
         .build_index(
             &repo,
             &[repo.join("hello_1.0-1_x86_64.ipk")],
@@ -288,7 +290,8 @@ fn dnf_accepts_generated_repodata() {
     };
     get_index_backend("rpm")
         .unwrap()
-        .make("rpm")
+        .make_writer("rpm")
+        .unwrap()
         .build_index(&repo, &[rpm], &opts("test"))
         .unwrap();
 

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::plugins::package_index::{get_index_backend, PackageIndex};
+use crate::plugins::package_index::{get_index_backend, ReadIndex};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Registry {
@@ -141,7 +141,7 @@ impl Registry {
 /// Build the concrete source instances for every enabled entry by looking
 /// each one up in the [`crate::plugins::package_index`] registry. A `custom`
 /// entry passes its configured git URL to the backend.
-pub fn active_sources(reg: &Registry) -> Vec<Box<dyn PackageIndex>> {
+pub fn active_sources(reg: &Registry) -> Vec<Box<dyn ReadIndex>> {
     reg.sources
         .iter()
         .filter(|s| s.enabled)
@@ -151,7 +151,7 @@ pub fn active_sources(reg: &Registry) -> Vec<Box<dyn PackageIndex>> {
                 SourceKind::Custom { url } => Some(url.as_str()),
                 _ => None,
             };
-            Some(backend.make_with(&s.name, url))
+            backend.make_reader_with(&s.name, url)
         })
         .collect()
 }
@@ -171,7 +171,9 @@ mod tests {
         assert!(backend.capabilities.can_read());
         assert!(!backend.capabilities.can_write());
 
-        let src = backend.make_with("my-index", Some("https://example.com/index.git"));
+        let src = backend
+            .make_reader_with("my-index", Some("https://example.com/index.git"))
+            .expect("custom backend has a read role");
         assert_eq!(src.name(), "custom");
         assert_eq!(src.instance_name(), "my-index");
     }

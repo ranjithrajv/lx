@@ -4,7 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{Capabilities, IndexOptions, PackageIndex};
+use super::{IndexOptions, PackageIndex, WriteIndex};
 use crate::plugins::plugin::plugin_identity;
 
 /// RPM (dnf/yum/zypper) repository: a `repodata/repomd.xml` plus a gzipped
@@ -18,11 +18,9 @@ plugin_identity!(
     "RPM repository (repodata/repomd.xml + primary.xml.gz)"
 );
 
-impl PackageIndex for RpmIndexer {
-    fn capabilities(&self) -> Capabilities {
-        Capabilities::WRITE
-    }
+impl PackageIndex for RpmIndexer {}
 
+impl WriteIndex for RpmIndexer {
     fn file_extension(&self) -> Option<&'static str> {
         Some("rpm")
     }
