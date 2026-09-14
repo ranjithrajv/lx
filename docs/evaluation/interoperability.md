@@ -206,8 +206,10 @@ Collected, so the ✅ rows above are not read as universal:
   `pkg:arch` qualifiers, `debian/shlibs.local`, and full
   `-e`/`-T`/`-O`/`-d`/`-p`/`-l` parity are not covered
   (`docs/architecture/replacements.md` §2.6).
-- **Conversion is a subset.** deb↔rpm↔arch only, in-process for deb/Arch,
-  host-tool-dependent for rpm.
+- **Conversion is a subset.** deb↔rpm↔arch only, with in-process readers for
+  all three, but the target model can't express conffile/`%config` flags,
+  capabilities, xattrs, RPM triggers, debconf, or signatures, so those are
+  dropped.
 - **No upstream attestation consumption** (see I7).
 - **`dpkg-sig` is not implemented**, and a live `debsig-verify` test does
   not exist.
