@@ -1,7 +1,7 @@
 # RPM compression, AutoProv/AutoReq, macro expansion
 
 **Date:** 2026-09-11
-**Status:** Implemented
+**Status:** Implemented (compression); best-effort (auto_provides/auto_requires); not applied (defines)
 **Context:** fpm has `--rpm-compression`, `--rpm-autoprov`, `--rpm-autoreq`,
 `--rpm-macro-expansion`, `--rpm-rpmbuild-define`. nfpm has `rpm.compression`.
 lx didn't expose any of these — RPM packaging that needed to suppress
@@ -36,7 +36,13 @@ rpm:
   `defines` to `RpmConfig`; added `true_default()` serde helper.
 - `lib/rpmarchive.rs` — added same fields to `BuildOptions`; wired
   `compression` through to `rpm::PackageBuilder::compression()`.
+  `auto_provides`/`auto_requires` scan the staged ELF payload
+  (`auto_elf_relations`) and emit `name()(N bit)` provides/requires, the
+  in-process analogue of rpmbuild's find-provides/find-requires.
 - `lib/plugins/rpm.rs` — passes `cfg.rpm.*` through to `BuildOptions`.
+- **`defines` is not applied**: the in-process builder has no rpmbuild
+  macro engine. It is accepted for config compatibility and lx warns (once)
+  rather than dropping it silently.
 
 ## Files changed
 

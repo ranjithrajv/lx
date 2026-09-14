@@ -1996,8 +1996,9 @@ fn build_one(
         }
     }
 
-    // 6. Optional post-build detach signing for deb (skipped when method is
-    // debsign — that embeds `_gpgorigin` inside the plugin build).
+    // 6. Optional post-build detach signing for deb/arch (deb is skipped when
+    // method is debsign — that embeds `_gpgorigin` inside the plugin build).
+    // pacman package signatures are detached, so arch always signs detached.
     if let Some(key) = cfg.effective_sign_key(args.sign_key.as_deref()) {
         if format == "deb" && sign_method == "detach" {
             let req = lx_lib::sign::SignRequest {
@@ -2013,6 +2014,21 @@ fn build_one(
                 final_path.display(),
                 cfg.effective_sign_type()
             );
+        } else if format == "arch" {
+            // pacman verifies a detached signature over the package file; a
+            // `debsign`-style embedded signature has no equivalent.
+            if sign_method == "debsign" {
+                eprintln!("    ⚠ --sign-method debsign has no arch equivalent; using detach");
+            }
+            let req = lx_lib::sign::SignRequest {
+                key_file: &key,
+                key_id: &sign_key_id,
+                passphrase: sign_passphrase.as_deref(),
+            };
+            let sig = lx_lib::sign::gpg_detach_sign(&final_path, &req)?;
+            println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
+        } else if format == "apk" || format == "ipk" {
+            eprintln!("    ⚠ --sign-key is not supported for {format} packages; skipping");
         }
     }
 
@@ -2050,7 +2066,7 @@ fn build_one(
 
 /// Signing passphrase resolution shared by both formats:
 /// `$LX_SIGN_PASSPHRASE`, falling back to `$NFPM_PASSPHRASE` (nfpm parity).
-fn resolve_sign_passphrase() -> Option<String> {
+pub(crate) fn resolve_sign_passphrase() -> Option<String> {
     for var in ["LX_SIGN_PASSPHRASE", "NFPM_PASSPHRASE"] {
         if let Ok(v) = std::env::var(var) {
             if !v.trim().is_empty() {

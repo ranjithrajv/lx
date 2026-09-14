@@ -264,9 +264,9 @@ overrides:
 | RPM triggers (4 types) | `--rpm-trigger-*` | ❌ | ✅ `rpm.trigger_*` (deps + best-effort script) |
 | digest algorithm | `--rpm-digest sha256` | ❌ | ❌ |
 | compression | `--rpm-compression xz` | ✅ `rpm.compression` | ✅ `rpm.compression` (gzip/xz/lzma/zstd/none) |
-| AutoProv/AutoReq | `--rpm-autoprov` | ❌ | ✅ `rpm.auto_provides` / `rpm.auto_requires` |
-| macro expansion | `--rpm-macro-expansion` | ❌ | ✅ `rpm.defines` |
-| rpmbuild define | `--rpm-rpmbuild-define` | ❌ | ✅ `rpm.defines` |
+| AutoProv/AutoReq | `--rpm-autoprov` | ❌ | ✅ `rpm.auto_provides` / `rpm.auto_requires` (best-effort: sonames scanned from the payload) |
+| macro expansion | `--rpm-macro-expansion` | ❌ | ⚠️ `rpm.defines` accepted but not applied (no rpmbuild macro engine; warned) |
+| rpmbuild define | `--rpm-rpmbuild-define` | ❌ | ⚠️ `rpm.defines` accepted but not applied (no rpmbuild macro engine; warned) |
 | custom tag | `--rpm-tag` | ❌ | ❌ |
 
 ### Build-time hooks (lx only)

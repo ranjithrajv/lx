@@ -241,6 +241,152 @@ fn native_signing_round_trip_with_generated_key() {
 }
 
 #[test]
+fn predepends_fold_into_requires_with_prereq_flag() {
+    let rel = parse_rpm_relations("", "", "", "", "", "", "", "prereq-pkg");
+    let dep = rel
+        .requires
+        .iter()
+        .find(|d| d.name == "prereq-pkg")
+        .expect("prereq-pkg in requires");
+    assert!(dep.flags.contains(rpm::DependencyFlags::PREREQ));
+}
+
+#[test]
+fn config_files_get_config_flags() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("etc")).unwrap();
+    std::fs::write(root.path().join("etc/keep.conf"), b"a=1").unwrap();
+    std::fs::write(root.path().join("etc/replace.conf"), b"b=2").unwrap();
+    let rpm_path = root.path().join("hello.rpm");
+    let opts = BuildOptions {
+        config_files: vec!["/etc/keep.conf".into()],
+        config_noreplace_files: vec!["/etc/replace.conf".into()],
+        ..Default::default()
+    };
+    build_with_options(
+        root.path(),
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            summary: "test",
+            description: "desc",
+            license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &opts,
+    )
+    .unwrap();
+
+    let pkg = rpm::Package::open(&rpm_path).unwrap();
+    let entries = pkg.metadata.get_file_entries().unwrap();
+    let flag = |p: &str| {
+        entries
+            .iter()
+            .find(|e| e.path.to_string_lossy() == p)
+            .unwrap_or_else(|| panic!("missing {p}"))
+            .flags
+    };
+    assert!(flag("/etc/keep.conf").contains(rpm::FileFlags::CONFIG));
+    assert!(!flag("/etc/keep.conf").contains(rpm::FileFlags::NOREPLACE));
+    assert!(flag("/etc/replace.conf").contains(rpm::FileFlags::NOREPLACE));
+}
+
+#[test]
+fn auto_requires_scans_elf_payload() {
+    // A small, real dynamically linked ELF whose DT_NEEDED entries exercise
+    // the find-requires path. Skip when no suitable system binary exists.
+    let candidate = ["/usr/bin/true", "/bin/true", "/usr/bin/ls", "/bin/ls"]
+        .iter()
+        .map(std::path::Path::new)
+        .find(|p| p.is_file() && std::fs::metadata(p).map(|m| m.len()).unwrap_or(0) < 5_000_000);
+    let Some(candidate) = candidate else {
+        eprintln!("skipping: no small system ELF available");
+        return;
+    };
+
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::copy(candidate, root.path().join("usr/bin/hello")).unwrap();
+
+    let rpm_path = root.path().join("hello.rpm");
+    let opts = BuildOptions {
+        auto_requires: true,
+        auto_provides: false,
+        ..Default::default()
+    };
+    build_with_options(
+        root.path(),
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            summary: "test",
+            description: "desc",
+            license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &opts,
+    )
+    .unwrap();
+
+    let pkg = rpm::Package::open(&rpm_path).unwrap();
+    let requires: Vec<String> = pkg
+        .metadata
+        .get_requires()
+        .unwrap()
+        .into_iter()
+        .map(|d| d.name)
+        .collect();
+    assert!(
+        requires
+            .iter()
+            .any(|r| r.ends_with("()(64bit)") || r.ends_with("()(32bit)")),
+        "expected an auto-generated soname require, got {requires:?}"
+    );
+}
+
+#[test]
+fn rpm_epoch_header_is_emitted() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+    let rpm_path = root.path().join("hello.rpm");
+    let opts = BuildOptions {
+        epoch: Some(2),
+        ..Default::default()
+    };
+    build_with_options(
+        root.path(),
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            summary: "test",
+            description: "desc",
+            license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        1_735_689_600,
+        &rpm_path,
+        &opts,
+    )
+    .unwrap();
+    let pkg = rpm::Package::open(&rpm_path).unwrap();
+    assert_eq!(pkg.metadata.get_epoch().unwrap(), 2);
+}
+
+#[test]
 fn build_srpm_produces_valid_rpm_with_spec_and_source() {
     let tmp = tempfile::tempdir().unwrap();
     let srpm_path = tmp.path().join("hello-1.0-1.fedora.src.rpm");

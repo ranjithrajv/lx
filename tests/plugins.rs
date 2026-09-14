@@ -677,3 +677,92 @@ fn apply_contents_respects_packager_filter() {
     assert!(root.path().join("usr/share/all").is_file());
     assert!(!root.path().join("usr/share/rpm-only").exists());
 }
+
+/// Arch plugin: relation + contents-config wiring end to end, verified by
+/// reading the generated `.PKGINFO`.
+#[test]
+fn arch_plugin_emits_relations_and_backup() {
+    let plugin = get_packager("arch").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let binary_dir = tmp.path().join("binary");
+    std::fs::create_dir_all(&binary_dir).unwrap();
+    let bin_path = binary_dir.join("hello");
+    std::fs::write(&bin_path, fake_elf_bytes()).unwrap();
+    std::fs::set_permissions(&bin_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    // Build-environment config file for the contents overlay.
+    let env = tempfile::tempdir().unwrap();
+    std::fs::write(env.path().join("hello.conf"), b"key=value\n").unwrap();
+
+    let staging_root = tmp.path().join("root");
+    std::fs::create_dir_all(&staging_root).unwrap();
+
+    let cfg = PackageConfig {
+        package_name: "hello".into(),
+        github_repo: "owner/hello".into(),
+        description: "test".into(),
+        maintainer: "t <t@example.com>".into(),
+        license_spdx: "MIT".into(),
+        package_format: "arch".into(),
+        depends: "glibc (>= 2.34), openssl".into(),
+        recommends: "bash-completion".into(),
+        conflicts: "hello-legacy".into(),
+        provides: "hello-cli".into(),
+        replaces: "hello-old".into(),
+        contents: vec![lx_lib::config::ContentEntry {
+            src: env.path().join("hello.conf").to_string_lossy().into(),
+            dst: "/etc/hello.conf".into(),
+            kind: "config|noreplace".into(),
+            packager: String::new(),
+        }],
+        ..Default::default()
+    };
+    let job = lx_lib::build::ResolvedJob {
+        dist: "arch".into(),
+        arch: "amd64".into(),
+        asset: lx_lib::github::Asset {
+            name: "hello.tar.gz".into(),
+            size: None,
+            browser_download_url: String::new(),
+        },
+        tag: "v1.0.0".into(),
+        published_at: Some(1_735_689_600),
+    };
+    let ctx = BuildContext {
+        cfg: &cfg,
+        job: &job,
+        binary_dir: &binary_dir,
+        staging_root: &staging_root,
+        license: None,
+        debian_version: "1.0.0",
+        build_version: "1",
+        mtime: 1_735_689_600,
+        sign_key: None,
+        sign_key_id: "",
+        sign_passphrase: None,
+        sign_method: "detach",
+        detected_deps: Vec::new(),
+    };
+    let out = plugin.build(&ctx).unwrap();
+
+    let bytes = std::fs::read(&out).unwrap();
+    let dec = zstd::stream::read::Decoder::new(bytes.as_slice()).unwrap();
+    let mut ar = tar::Archive::new(dec);
+    let mut pkginfo = String::new();
+    for entry in ar.entries().unwrap() {
+        let mut e = entry.unwrap();
+        if e.path().unwrap().to_string_lossy() == ".PKGINFO" {
+            std::io::Read::read_to_string(&mut e, &mut pkginfo).unwrap();
+        }
+    }
+    assert!(pkginfo.contains("depend = glibc>=2.34\n"), "{pkginfo}");
+    assert!(pkginfo.contains("depend = openssl\n"), "{pkginfo}");
+    assert!(
+        pkginfo.contains("optdepend = bash-completion\n"),
+        "{pkginfo}"
+    );
+    assert!(pkginfo.contains("conflict = hello-legacy\n"), "{pkginfo}");
+    assert!(pkginfo.contains("provides = hello-cli\n"), "{pkginfo}");
+    assert!(pkginfo.contains("replaces = hello-old\n"), "{pkginfo}");
+    assert!(pkginfo.contains("backup = etc/hello.conf\n"), "{pkginfo}");
+}

@@ -281,6 +281,10 @@ script mapping, deb triggers, `deb.compression`, `rpm.compression` /
 `auto_provides` / `auto_requires` / `defines`, `contents[].packager`,
 `disable_globbing`, and the `debsign`-style `_gpgorigin` signature. The
 GPG passphrase env var falls back to `$NFPM_PASSPHRASE` for nfpm parity.
+`rpm.auto_provides`/`auto_requires` are best-effort scans of the staged
+ELF payload (sonames as `name()(N bit)`); `rpm.defines` is accepted but not
+applied — the in-process builder has no rpmbuild macro engine, and lx warns
+instead of dropping it silently.
 
 **Where nfpm still wins:** `msix` (Windows) output; per-file
 `file_info.mode/owner/group/lang`; `disown_subtree`; `expand: true`.

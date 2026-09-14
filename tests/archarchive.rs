@@ -146,6 +146,113 @@ fn pkginfo_contains_required_fields() {
 }
 
 #[test]
+fn debian_relations_translate_to_pacman() {
+    assert_eq!(
+        debian_relations_to_pacman(
+            "libc6 (>= 2.34), libssl3 | libssl1.1, foo:any, bar (<< 2.0), baz [amd64]"
+        ),
+        vec!["libc6>=2.34", "libssl3", "foo", "bar<2.0", "baz"]
+    );
+    assert_eq!(
+        debian_relations_to_pacman("zlib1g (>= 1:1.2.0), bash (<= 5.0)"),
+        vec!["zlib1g>=1:1.2.0", "bash<=5.0"]
+    );
+    assert!(debian_relations_to_pacman("  ").is_empty());
+}
+
+#[test]
+fn pkginfo_with_relations_emits_every_tag() {
+    let depends = vec!["glibc".to_string(), "libfoo.so=1-64".to_string()];
+    let optdepends = vec!["git: version control".to_string()];
+    let conflicts = vec!["oldpkg".to_string()];
+    let provides = vec!["virtualpkg=1.0".to_string()];
+    let replaces = vec!["legacy".to_string()];
+    let backup = vec!["etc/foo.conf".to_string()];
+    let relations = PackageRelations {
+        depends: &depends,
+        optdepends: &optdepends,
+        conflicts: &conflicts,
+        provides: &provides,
+        replaces: &replaces,
+        backup: &backup,
+    };
+    let s = render_pkginfo_with(
+        &PackageMeta {
+            name: "foo",
+            version: "1.0",
+            release: "1",
+            description: "desc",
+            url: "https://ex.com",
+            license: "MIT",
+        },
+        &relations,
+        Some("Jane <jane@example.com>"),
+        "2:1.0-1",
+        "x86_64",
+        0,
+        10,
+    );
+    assert!(s.contains("pkgver = 2:1.0-1"), "{s}");
+    assert!(s.contains("packager = Jane <jane@example.com>"), "{s}");
+    assert!(s.contains("depend = glibc\n"), "{s}");
+    assert!(s.contains("depend = libfoo.so=1-64\n"), "{s}");
+    assert!(s.contains("optdepend = git: version control\n"), "{s}");
+    assert!(s.contains("conflict = oldpkg\n"), "{s}");
+    assert!(s.contains("provides = virtualpkg=1.0\n"), "{s}");
+    assert!(s.contains("replaces = legacy\n"), "{s}");
+    assert!(s.contains("backup = etc/foo.conf\n"), "{s}");
+}
+
+#[test]
+fn build_with_relations_round_trips_pkginfo() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(root.path().join("usr/bin")).unwrap();
+    std::fs::write(root.path().join("usr/bin/hello"), b"payload").unwrap();
+    let depends = vec!["glibc".to_string()];
+    let relations = PackageRelations {
+        depends: &depends,
+        ..Default::default()
+    };
+    let out = root.path().join("hello-1.0-1-x86_64.pkg.tar.zst");
+    build_with_relations(
+        root.path(),
+        &PackageMeta {
+            name: "hello",
+            version: "1.0",
+            release: "1",
+            description: "test",
+            url: "https://example.com",
+            license: "MIT",
+        },
+        &relations,
+        Some("Tester <t@example.com>"),
+        None,
+        "amd64",
+        1_735_689_600,
+        &out,
+        None,
+    )
+    .unwrap();
+
+    let bytes = std::fs::read(&out).unwrap();
+    let dec = zstd::stream::read::Decoder::new(bytes.as_slice()).unwrap();
+    let mut ar = tar::Archive::new(dec);
+    let mut pkginfo = String::new();
+    for entry in ar.entries().unwrap() {
+        let mut entry = entry.unwrap();
+        if entry.path().unwrap().to_string_lossy() == ".PKGINFO" {
+            use std::io::Read;
+            entry.read_to_string(&mut pkginfo).unwrap();
+        }
+    }
+    assert!(pkginfo.contains("depend = glibc\n"), "{pkginfo}");
+    assert!(
+        pkginfo.contains("packager = Tester <t@example.com>"),
+        "{pkginfo}"
+    );
+}
+
+#[test]
 fn render_install_script_both_hooks() {
     let s = render_install_script("echo pre", "post").unwrap();
     assert!(s.contains("pre_upgrade()"));

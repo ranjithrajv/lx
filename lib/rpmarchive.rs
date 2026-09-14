@@ -73,6 +73,12 @@ impl RpmRelations {
 /// Parse comma-separated relation strings into [`RpmRelations`]. Each
 /// non-empty, trimmed entry becomes a `Dependency::any(name)`. Empty or
 /// whitespace-only strings yield empty vectors.
+///
+/// Debian's `Pre-Depends` has no exact RPM equivalent; entries are folded
+/// into `Requires` with the legacy `PREREQ` flag, which is the closest RPM
+/// ordering guarantee. Debian `Breaks` has no direct RPM equivalent either
+/// and is folded into `Conflicts`.
+#[allow(clippy::too_many_arguments)]
 pub fn parse_rpm_relations(
     depends: &str,
     recommends: &str,
@@ -81,6 +87,7 @@ pub fn parse_rpm_relations(
     replaces: &str,
     provides: &str,
     breaks: &str,
+    predepends: &str,
 ) -> RpmRelations {
     fn parse_list(s: &str) -> Vec<rpm::Dependency> {
         s.split(',')
@@ -94,8 +101,24 @@ pub fn parse_rpm_relations(
     let mut conflicts = parse_list(conflicts);
     conflicts.extend(parse_list(breaks));
 
+    let mut requires = parse_list(depends);
+    // Pre-Depends → Requires with the legacy PREREQ flag.
+    for name in predepends
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if !requires.iter().any(|d| d.name == name) {
+            requires.push(rpm::Dependency {
+                name: name.to_string(),
+                flags: rpm::DependencyFlags::PREREQ,
+                version: String::new(),
+            });
+        }
+    }
+
     RpmRelations {
-        requires: parse_list(depends),
+        requires,
         recommends: parse_list(recommends),
         suggests: parse_list(suggests),
         conflicts,
@@ -165,9 +188,16 @@ pub struct BuildOptions<'a> {
     /// in the payload (rpm's `--auto-requires`). Default: true.
     pub auto_requires: bool,
     /// rpmbuild-style macro definitions (e.g. `_unpackaged_files_terminate_build 0`).
-    /// Each entry is a `"KEY VALUE"` string. Best-effort: applied as builder
-    /// lead macros when the rpm crate supports it.
+    /// Each entry is a `"KEY VALUE"` string. The in-process builder has no
+    /// macro engine, so these are reported as unsupported (a warning) rather
+    /// than silently ignored.
     pub defines: Vec<String>,
+    /// Absolute installed paths marked `%config`.
+    pub config_files: Vec<String>,
+    /// Absolute installed paths marked `%config(noreplace)`.
+    pub config_noreplace_files: Vec<String>,
+    /// RPM epoch header tag. `None` means 0 (the RPM default).
+    pub epoch: Option<u32>,
 }
 
 /// Parse `"package: script_path"` trigger entries from config. The script
@@ -236,6 +266,11 @@ pub fn build_with_options(
     .release(meta.release)
     .source_date(mtime.max(0) as u32);
 
+    // Apply the epoch header tag when the config pins one.
+    if let Some(e) = opts.epoch {
+        builder = builder.epoch(e);
+    }
+
     // Apply payload compression if specified (mirrors fpm's --rpm-compression).
     if !opts.compression.is_empty() {
         if let Ok(comp) = opts.compression.parse::<rpm::CompressionType>() {
@@ -287,6 +322,53 @@ pub fn build_with_options(
         builder = builder.suggests(RpmRelations::rebuild(dep));
     }
 
+    // Best-effort `--auto-requires` / `--auto-provides` (find-requires /
+    // find-provides analogues over the staged ELF payload).
+    if opts.auto_provides || opts.auto_requires {
+        let (auto_requires, auto_provides) = auto_elf_relations(root);
+        if opts.auto_requires {
+            // A package never needs to require a soname it provides itself.
+            let explicit: std::collections::HashSet<&str> = opts
+                .relations
+                .provides
+                .iter()
+                .map(|d| d.name.as_str())
+                .collect();
+            let mut seen: std::collections::HashSet<String> = opts
+                .relations
+                .requires
+                .iter()
+                .map(|d| d.name.clone())
+                .collect();
+            for name in auto_requires {
+                if !explicit.contains(name.as_str()) && seen.insert(name.clone()) {
+                    builder = builder.requires(rpm::Dependency::any(name));
+                }
+            }
+        }
+        if opts.auto_provides {
+            let mut seen: std::collections::HashSet<String> = opts
+                .relations
+                .provides
+                .iter()
+                .map(|d| d.name.clone())
+                .collect();
+            for name in auto_provides {
+                if seen.insert(name.clone()) {
+                    builder = builder.provides(rpm::Dependency::any(name));
+                }
+            }
+        }
+    }
+
+    // `rpm.defines` needs an rpmbuild macro engine; the in-process builder
+    // has none. Report it instead of silently dropping it.
+    if !opts.defines.is_empty() {
+        eprintln!(
+            "  ⚠ rpm.defines is ignored: the in-process builder has no rpmbuild macro engine"
+        );
+    }
+
     // Apply RPM triggers as dependencies with trigger flags. The trigger
     // dependency (the condition) is always emitted. The associated script
     // is emitted alongside as a best-effort scriptlet (true RPM triggers
@@ -323,7 +405,16 @@ pub fn build_with_options(
     let empty_file = tempfile::NamedTempFile::new()?;
     std::fs::write(empty_file.path(), b"")?;
 
-    add_dir_recursive(root, root, &mut builder, empty_file.path())?;
+    // Absolute installed path -> `%config(noreplace)`? (`%config` otherwise.)
+    let mut config_map: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    for f in &opts.config_files {
+        config_map.insert(f.clone(), false);
+    }
+    for f in &opts.config_noreplace_files {
+        config_map.insert(f.clone(), true);
+    }
+
+    add_dir_recursive(root, root, &mut builder, empty_file.path(), &config_map)?;
 
     // Sign during the same build pass when configured — `build_and_sign`
     // embeds the PGP signature header before anything is written.
@@ -363,6 +454,7 @@ fn add_dir_recursive(
     dir: &Path,
     builder: &mut rpm::PackageBuilder,
     empty_file: &Path,
+    config: &std::collections::HashMap<String, bool>,
 ) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read '{}'", dir.display()))?
@@ -394,7 +486,7 @@ fn add_dir_recursive(
         } else if ft.is_dir() {
             // RPM implicitly creates directories for files; we recurse but do
             // not add empty directory entries themselves.
-            add_dir_recursive(original_root, &fs_path, builder, empty_file)?;
+            add_dir_recursive(original_root, &fs_path, builder, empty_file, config)?;
         } else if ft.is_file() {
             // Inherit mode from source file; rpm crate will read it if we
             // don't override, but we set explicitly for determinism.
@@ -408,7 +500,15 @@ fn add_dir_recursive(
 
             // FileMode expects full mode with type bits; regular file is 0o100000 + perms.
             let file_mode = 0o100000 | mode;
-            let opts = rpm::FileOptions::new(rpm_path).mode(file_mode as i32);
+            let mut opts = rpm::FileOptions::new(rpm_path.clone()).mode(file_mode as i32);
+            // `%config` / `%config(noreplace)` marking for contents entries.
+            if let Some(&noreplace) = config.get(&rpm_path) {
+                opts = if noreplace {
+                    opts.is_config_noreplace()
+                } else {
+                    opts.is_config()
+                };
+            }
             let b = std::mem::replace(builder, rpm::PackageBuilder::new("", "", "", "", ""));
             let nb = b
                 .with_file(&fs_path, opts)
@@ -417,6 +517,57 @@ fn add_dir_recursive(
         }
     }
     Ok(())
+}
+
+/// Best-effort find-requires / find-provides over the staged payload.
+///
+/// `requires` collects every `DT_NEEDED` soname (minus the dynamic loader)
+/// as RPM's `name()(N bit)`; `provides` collects the same form for staged
+/// files that look like shared libraries, using the file name as the
+/// SONAME. This is the in-process analogue of rpmbuild's
+/// `%__find_requires`/`%__find_provides` helpers.
+fn auto_elf_relations(root: &Path) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeSet;
+    let mut requires = BTreeSet::new();
+    let mut provides = BTreeSet::new();
+    let Ok(files) = crate::scandeps::find_elf_files(root) else {
+        return (Vec::new(), Vec::new());
+    };
+    for path in files {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        // EI_CLASS: 1 = 32-bit, 2 = 64-bit. find_elf_files already validated
+        // the ELF magic.
+        let bits = match bytes.get(4) {
+            Some(1) => 32,
+            _ => 64,
+        };
+        if let Ok(libs) = crate::elfdeps::needed_libraries(&bytes) {
+            for lib in libs {
+                if is_dynamic_loader(&lib) {
+                    continue;
+                }
+                requires.insert(format!("{lib}()({bits}bit)"));
+            }
+        }
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with("lib") && name.contains(".so") {
+                provides.insert(format!("{name}()({bits}bit)"));
+                provides.insert(name.to_string());
+            }
+        }
+    }
+    (
+        requires.into_iter().collect(),
+        provides.into_iter().collect(),
+    )
+}
+
+/// The dynamic linker is loaded by the kernel, not provided as an RPM
+/// dependency, so find-requires skips it.
+fn is_dynamic_loader(soname: &str) -> bool {
+    soname.starts_with("ld-") || soname.starts_with("linux-vdso")
 }
 
 /// Map Debian architecture names to RPM architecture names.

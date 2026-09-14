@@ -404,6 +404,15 @@ fn apply_binary_rename(usr_bin: &Path, rename: &str) -> anyhow::Result<()> {
 /// with a non-empty `packager` field are skipped unless it matches
 /// (case-insensitive), matching nfpm.
 ///
+/// A `contents:` entry staged as a config file. `noreplace` is true for
+/// `config|noreplace` (rpm `%config(noreplace)`, pacman backup-preserved).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedConfig {
+    /// Absolute installed path (e.g. `/etc/foo.conf`).
+    pub path: String,
+    pub noreplace: bool,
+}
+
 /// Returns the absolute installed paths registered as deb conffiles —
 /// entries whose type is `config`, `config|noreplace`, or
 /// `config|missingok`. Other formats ignore the return value.
@@ -412,9 +421,22 @@ pub fn apply_contents(
     root: &Path,
     format: &str,
 ) -> anyhow::Result<Vec<String>> {
+    Ok(apply_contents_with_config(cfg, root, format)?
+        .into_iter()
+        .map(|c| c.path)
+        .collect())
+}
+
+/// Like [`apply_contents`] but keeps the config kind so rpm can mark
+/// `%config(noreplace)` and Arch can build its `backup` list.
+pub fn apply_contents_with_config(
+    cfg: &PackageConfig,
+    root: &Path,
+    format: &str,
+) -> anyhow::Result<Vec<StagedConfig>> {
     let format = format.trim().to_ascii_lowercase();
     let umask = cfg.effective_umask();
-    let mut conffiles = Vec::new();
+    let mut configs = Vec::new();
     for entry in &cfg.contents {
         let packager = entry.packager.trim().to_ascii_lowercase();
         if !packager.is_empty() && packager != format {
@@ -441,7 +463,10 @@ pub fn apply_contents(
                     cfg.disable_globbing,
                     false,
                 )?;
-                conffiles.push(entry.dst.clone());
+                configs.push(StagedConfig {
+                    path: entry.dst.clone(),
+                    noreplace: entry.kind == "config|noreplace",
+                });
             }
             "tree" => {
                 stage_contents_entry(
@@ -474,8 +499,8 @@ pub fn apply_contents(
             ),
         }
     }
-    conffiles.sort();
-    Ok(conffiles)
+    configs.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(configs)
 }
 
 /// Stage a single contents entry, expanding glob patterns when applicable.
@@ -591,6 +616,33 @@ pub fn maintainer_script_members(
         });
     }
     Ok(members)
+}
+
+/// Read a maintainer-script file from the build environment, applying
+/// `template_scripts` rendering when enabled. Returns `None` for an empty
+/// path so callers can skip unset hooks.
+///
+/// Shared by the rpm and Arch plugins; the deb plugin's
+/// [`maintainer_script_members`] does the same inline because it also has to
+/// emit the members as a multi-file control set.
+pub fn render_script_body(
+    cfg: &PackageConfig,
+    job: &crate::build::ResolvedJob,
+    path: &str,
+) -> anyhow::Result<Option<String>> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| anyhow::anyhow!("failed to read script '{path}': {e}"))?;
+    let content = if cfg.template_scripts {
+        let ctx = lx_lib::templating::build_context(cfg, job);
+        lx_lib::templating::render_template(&content, &ctx)
+    } else {
+        content
+    };
+    Ok(Some(content))
 }
 
 /// Read the deb-specific control members from the build environment: debconf

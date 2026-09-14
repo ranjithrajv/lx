@@ -35,58 +35,151 @@ impl Packager for ArchPackager {
     }
 
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
-        let cfg = ctx.cfg;
-        let job = ctx.job;
+        super::stage_install_tree(ctx.cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
+        archive_staged_tree(ctx)
+    }
+}
 
-        super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        // Layer the `contents:` overlay. (Arch has no conffile registry in
-        // .PKGINFO; config-typed entries are staged as regular files.)
-        let _conffiles = super::apply_contents(cfg, ctx.staging_root, "arch")?;
+/// Archive an already-populated `staging_root` into a `.pkg.tar.zst`.
+///
+/// Shared tail of [`ArchPackager::build`]: layers `contents:`, builds
+/// `.PKGINFO`/`.MTREE`, and writes the package. Source-mode builds populate
+/// the staging root from a `DESTDIR` install tree instead of
+/// `stage_install_tree` and reuse this directly.
+pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
+    let cfg = ctx.cfg;
+    let job = ctx.job;
 
-        let version = ctx.debian_version.to_string();
-        let release = super::format_release(ctx.build_version, &job.dist);
-        // Filename: {name}-{version}-{release}-{arch}.pkg.tar.zst
-        // Example: hello-1.0-1.arch-x86_64.pkg.tar.zst
-        let arch_name = to_pacman_arch(&job.arch);
-        let file_name = format!(
-            "{}-{}-{}-{}.pkg.tar.zst",
-            cfg.package_name, version, release, arch_name
-        );
+    // Layer the `contents:` overlay. Config-typed entries become the
+    // pacman `backup` list (preserved on upgrade/removal).
+    let configs = super::apply_contents_with_config(cfg, ctx.staging_root, "arch")?;
 
-        let out_dir = super::output_dir(ctx.staging_root)?;
-        let dest = out_dir.join(&file_name);
+    let version = ctx.debian_version.to_string();
+    let release = super::format_release(ctx.build_version, &job.dist);
+    let epoch = cfg.epoch.trim();
+    // pacman encodes the epoch into the version string (`1:2.0-1`);
+    // makepkg's filename uses the same `get_full_version`.
+    let full_version = if epoch.is_empty() {
+        format!("{version}-{release}")
+    } else {
+        format!("{epoch}:{version}-{release}")
+    };
+    let arch_name = to_pacman_arch(&job.arch);
+    let file_name = format!(
+        "{}-{}-{}.pkg.tar.zst",
+        cfg.package_name, full_version, arch_name
+    );
 
-        let url = super::resolve_homepage(cfg);
-        let description = cfg.effective_description();
-        let license = if cfg.license_spdx.is_empty() {
-            "custom:unknown"
-        } else {
-            cfg.license_spdx.as_str()
-        };
+    let out_dir = super::output_dir(ctx.staging_root)?;
+    let dest = out_dir.join(&file_name);
 
-        let meta = lx_lib::archarchive::PackageMeta {
-            name: &cfg.package_name,
-            version: &version,
-            release: &release,
-            description: &description,
-            url: &url,
-            license,
-        };
-        let install_script = lx_lib::archarchive::render_install_script(
-            &cfg.scripts.preupgrade,
-            &cfg.scripts.postupgrade,
-        );
-        lx_lib::archarchive::build(
-            ctx.staging_root,
-            &meta,
-            &job.arch,
-            ctx.mtime,
-            &dest,
-            install_script.as_deref(),
-        )
-        .with_context(|| format!("failed to build {}", dest.display()))?;
+    let url = super::resolve_homepage(cfg);
+    let description = cfg.effective_description();
+    let license = if cfg.license_spdx.is_empty() {
+        "custom:unknown"
+    } else {
+        cfg.license_spdx.as_str()
+    };
 
-        Ok(dest)
+    // Relation metadata: translate the Debian-style relation fields to
+    // pacman syntax, then merge in ELF-detected dependencies.
+    let rel = cfg.effective_relations("arch");
+    let mut depends = lx_lib::archarchive::debian_relations_to_pacman(&rel.depends);
+    for dep in &ctx.detected_deps {
+        if !dep.trim().is_empty() {
+            depends.push(dep.trim().to_string());
+        }
+    }
+    depends.sort();
+    depends.dedup();
+
+    let mut optdepends = lx_lib::archarchive::debian_relations_to_pacman(&rel.recommends);
+    optdepends.extend(lx_lib::archarchive::debian_relations_to_pacman(
+        &rel.suggests,
+    ));
+    optdepends.sort();
+    optdepends.dedup();
+
+    let mut conflicts = lx_lib::archarchive::debian_relations_to_pacman(&rel.conflicts);
+    conflicts.extend(lx_lib::archarchive::debian_relations_to_pacman(&rel.breaks));
+    conflicts.sort();
+    conflicts.dedup();
+
+    let mut provides = lx_lib::archarchive::debian_relations_to_pacman(&rel.provides);
+    provides.sort();
+    provides.dedup();
+
+    let mut replaces = lx_lib::archarchive::debian_relations_to_pacman(&rel.replaces);
+    replaces.sort();
+    replaces.dedup();
+
+    // pacman `backup` paths are relative, without a leading slash.
+    let backup: Vec<String> = configs
+        .iter()
+        .map(|c| c.path.trim_start_matches('/').to_string())
+        .collect();
+
+    let relations = lx_lib::archarchive::PackageRelations {
+        depends: &depends,
+        optdepends: &optdepends,
+        conflicts: &conflicts,
+        provides: &provides,
+        replaces: &replaces,
+        backup: &backup,
+    };
+
+    let meta = lx_lib::archarchive::PackageMeta {
+        name: &cfg.package_name,
+        version: &version,
+        release: &release,
+        description: &description,
+        url: &url,
+        license,
+    };
+
+    let packager = cfg.effective_packager();
+    let packager = packager.trim();
+    let packager = if packager.is_empty() {
+        None
+    } else {
+        Some(packager)
+    };
+
+    // Upgrade hooks: `scripts.preupgrade_script`/`postupgrade_script`
+    // are the documented cross-format fields (`lx convert` writes
+    // those); fall back to the Arch-native `preupgrade`/`postupgrade`.
+    let pre_path = pick(&cfg.scripts.preupgrade_script, &cfg.scripts.preupgrade);
+    let post_path = pick(&cfg.scripts.postupgrade_script, &cfg.scripts.postupgrade);
+    let pre = super::render_script_body(cfg, job, pre_path)?;
+    let post = super::render_script_body(cfg, job, post_path)?;
+    let install_script = lx_lib::archarchive::render_install_script(
+        pre.as_deref().unwrap_or(""),
+        post.as_deref().unwrap_or(""),
+    );
+
+    lx_lib::archarchive::build_with_relations(
+        ctx.staging_root,
+        &meta,
+        &relations,
+        packager,
+        (!epoch.is_empty()).then_some(epoch),
+        &job.arch,
+        ctx.mtime,
+        &dest,
+        install_script.as_deref(),
+    )
+    .with_context(|| format!("failed to build {}", dest.display()))?;
+
+    Ok(dest)
+}
+
+/// Prefer the cross-format `*_script` field when set, else the Arch-native
+/// inline field.
+fn pick<'a>(preferred: &'a str, fallback: &'a str) -> &'a str {
+    if preferred.trim().is_empty() {
+        fallback
+    } else {
+        preferred
     }
 }
 

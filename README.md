@@ -41,6 +41,16 @@ license files placed at their conventional FHS paths, and genuine `xz`
 source-package compression — all output that real `dpkg-deb`/`dpkg-source`/
 `lintian` accept without complaint, built natively on bare metal — no containers, no emulation, no Debian host required.
 
+The relation and config fields below carry into every format: deb
+`Depends`/`Recommends`/`Suggests`/`Conflicts`/`Replaces`/`Provides`/`Breaks`/
+`Pre-Depends`; rpm `Requires`/`Recommends`/`Suggests`/`Conflicts`/`Obsoletes`/
+`Provides` (plus best-effort `auto_provides`/`auto_requires`); and Arch
+`.PKGINFO` `depend`/`optdepend`/`conflict`/`provides`/`replaces`. `contents:`
+entries of kind `config` become deb conffiles, rpm `%config`/`%config(noreplace)`,
+and the pacman `backup` list. `epoch` is emitted as RPM's epoch header and
+folded into Arch's `pkgver`, and `--sign-key` signs deb/arch detached (rpm
+embeds the PGP signature natively).
+
 It's also trustworthy by default about what it downloads and repackages:
 a build refuses to proceed on an unverified asset unless you explicitly
 say otherwise, every download's verification method and checksum are
@@ -347,8 +357,8 @@ scripts:
   postinstall: ""             # DEBIAN/postinst | %post | —
   preremove: ""               # DEBIAN/prerm | %preun | —
   postremove: ""              # DEBIAN/postrm | %postun | —
-  pretrans: ""                # DEBIAN/preupgrade | %pretrans | —
-  posttrans: ""               # DEBIAN/postupgrade | %posttrans | —
+  pretrans: ""                # — | %pretrans | —
+  posttrans: ""               # — | %posttrans | —
   verify: ""                  # — | %verify | —
   preupgrade_script: ""       # DEBIAN/preupgrade | %pretrans | pre_upgrade()
   postupgrade_script: ""      # DEBIAN/postupgrade | %posttrans | post_upgrade()
@@ -383,14 +393,20 @@ deb:
   triggers_activate_await: [] # activate triggers that wait
   triggers_activate_noawait: [] # activate triggers that don't wait
 
-# RPM-specific: triggers. Ignored by deb/arch. Each entry is
-# "package: script_path" — the package is the trigger condition (fire when
-# this package is installed/removed), the script runs when it fires.
+# RPM-specific: triggers, compression, auto-deps. Ignored by deb/arch.
+# Each trigger entry is "package: script_path" — the package is the trigger
+# condition (fire when this package is installed/removed), the script runs
+# when it fires.
 rpm:
   trigger_pre_install: []     # %triggerprein (before another package installs)
   trigger_post_install: []    # %triggerin (after another package installs)
   trigger_pre_uninstall: []   # %triggerun (before another package removes)
   trigger_post_uninstall: []  # %triggerpostun (after another package removes)
+  compression: ""             # gzip (default) | xz | lzma | zstd | none
+  auto_provides: true         # provide shared-library sonames in the payload
+  auto_requires: true         # require shared-library sonames in the payload
+  defines: []                 # rpmbuild macros — accepted but not applied by
+                              # the in-process builder (warned, never silent)
 
 # Source builds (build_mode: source): fetch the upstream tag and compile on
 # the host instead of repacking release assets. Requires an explicit

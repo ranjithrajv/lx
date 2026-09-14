@@ -62,19 +62,21 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         }
     }
 
+    // Target format: `--format` overrides package.yaml, defaulting to deb.
+    // Source mode now wraps in whatever format is selected.
+    let format = args
+        .format
+        .as_deref()
+        .unwrap_or(&cfg.effective_package_format())
+        .to_ascii_lowercase();
+    if !matches!(format.as_str(), "deb" | "rpm" | "arch") {
+        bail!("build_mode: source supports deb, rpm, and arch (got '{format}')");
+    }
+
     // Suites: configured distributions (or --distributions) minus skips,
-    // with expired suites dropped — same pipeline as binary builds.
-    let mut configured =
-        if !cfg.debian_distributions.is_empty() || !cfg.ubuntu_distributions.is_empty() {
-            let mut out = cfg.debian_distributions.clone();
-            out.extend(cfg.ubuntu_distributions.clone());
-            out
-        } else {
-            lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS
-                .iter()
-                .map(|s| s.to_string())
-                .collect()
-        };
+    // with expired suites dropped — same pipeline as binary builds. Defaults
+    // are per-format (Debian suites, RPM distros, or `arch`).
+    let mut configured = cfg.effective_distributions_for(&format);
     if let Some(d) = &args.distributions {
         configured = d.split(',').map(|s| s.trim().to_string()).collect();
     }
@@ -84,7 +86,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         bail!("no suites to build (build_suites/distributions resolved empty)");
     }
     println!(
-        "source build: {} {version} (suites: {})",
+        "source build: {} {version} (format: {format}; suites: {})",
         cfg.package_name,
         suites.join(" ")
     );
@@ -169,18 +171,19 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     let stage = build_sys.build(cfg, &src_dir, workdir.path())?;
 
     // shlibdeps analogue: ELF DT_NEEDED -> owning host packages.
-    let depends = compute_depends(&stage, cfg);
+    let depends = compute_depends(&stage, cfg, &format);
     println!("depends: {depends}");
     let mut wrap_cfg = cfg.clone();
     wrap_cfg.depends = depends.clone();
 
-    // Wrap one .deb per suite.
+    // Wrap one package per suite using the selected format's plugin.
     std::fs::create_dir_all(&args.output)?;
     let debian_version = lx_lib::pkgmeta::strip_upstream_prefix(&version);
     let mtime = lx_lib::pkgmeta::reproducible_epoch(None);
     let sign_key = cfg.effective_sign_key(args.sign_key.as_deref());
     let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
     let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
+    let sign_passphrase = crate::build::resolve_sign_passphrase();
     let mut built: Vec<PathBuf> = Vec::new();
     for dist in &suites {
         let staging = tempfile::tempdir().context("failed to create staging dir")?;
@@ -207,24 +210,36 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             mtime,
             sign_key: sign_key.as_deref(),
             sign_key_id: &sign_key_id,
-            sign_passphrase: None,
+            sign_passphrase: sign_passphrase.as_deref(),
             sign_method: &sign_method,
             detected_deps: Vec::new(),
         };
-        let deb_tmp = crate::plugins::deb::archive_staged_tree(&ctx)
-            .with_context(|| format!("wrapping {dist}/{host}"))?;
+        let pkg_tmp = match format.as_str() {
+            "rpm" => crate::plugins::rpm::archive_staged_tree(&ctx),
+            "arch" => crate::plugins::arch::archive_staged_tree(&ctx),
+            _ => crate::plugins::deb::archive_staged_tree(&ctx),
+        }
+        .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
         let dest = args.output.join(
-            deb_tmp
+            pkg_tmp
                 .file_name()
-                .ok_or_else(|| anyhow::anyhow!("built .deb has no filename"))?,
+                .ok_or_else(|| anyhow::anyhow!("built package has no filename"))?,
         );
-        std::fs::copy(&deb_tmp, &dest)?;
-        if sign_method == "detach" {
+        std::fs::copy(&pkg_tmp, &dest)?;
+        // rpm embeds its PGP signature inside the build; deb/arch sign a
+        // detached sibling post-build. `debsign` is deb-only and treated as
+        // detach for arch.
+        let detach_sign = match format.as_str() {
+            "deb" => sign_method == "detach",
+            "arch" => true,
+            _ => false,
+        };
+        if detach_sign {
             if let Some(key) = &sign_key {
                 let req = lx_lib::sign::SignRequest {
                     key_file: key,
                     key_id: &sign_key_id,
-                    passphrase: None,
+                    passphrase: sign_passphrase.as_deref(),
                 };
                 lx_lib::sign::gpg_detach_sign(&dest, &req)?;
             }
@@ -274,15 +289,15 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
                 start: build_start,
                 telemetry: telemetry.summary_json(),
                 provenance: vec![],
-                package_format: "deb".to_string(),
+                package_format: format.clone(),
                 source: "source".to_string(),
             },
         )?;
     }
 
-    // Emit .dsc source packages from the built .debs (bash parity:
-    // run_source_build ends with build_source_packages), best-effort.
-    let rel = wrap_cfg.effective_relations("deb");
+    // Emit source packages from the built binaries, best-effort: Debian
+    // `.dsc` + tarballs, an RPM `.src.rpm`, or an Arch `PKGBUILD`.
+    let rel = wrap_cfg.effective_relations(&format);
     let pkg = crate::source::Pkg {
         name: cfg.package_name.clone(),
         github_repo: cfg.github_repo.clone(),
@@ -306,8 +321,13 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         published_at: None,
         license: None,
     };
-    if let Err(e) = crate::source::generate(&args.output, &pkg) {
-        eprintln!("⚠ source package generation failed (debs stand on their own): {e:#}");
+    let source_result = match format.as_str() {
+        "rpm" => crate::source::generate_rpm(&args.output, &pkg),
+        "arch" => crate::source::generate_arch(&args.output, &pkg),
+        _ => crate::source::generate(&args.output, &pkg),
+    };
+    if let Err(e) = source_result {
+        eprintln!("⚠ source package generation failed (binaries stand on their own): {e:#}");
     }
 
     println!("\n✓ built {} package(s) from source", built.len());
@@ -453,7 +473,7 @@ fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
 /// Essential/libc sonames are skipped (they come with every base install);
 /// empty result falls back to the config's `depends:` and finally `libc6`
 /// (bash falls back to `libc6` too).
-fn compute_depends(stage: &Path, cfg: &PackageConfig) -> String {
+fn compute_depends(stage: &Path, cfg: &PackageConfig, format: &str) -> String {
     let mut pkgs = BTreeSet::new();
     let elfs = lx_lib::scandeps::find_elf_files(stage).unwrap_or_default();
     for elf in &elfs {
@@ -479,7 +499,13 @@ fn compute_depends(stage: &Path, cfg: &PackageConfig) -> String {
         if !cfg.depends.trim().is_empty() {
             return cfg.depends.trim().to_string();
         }
-        return "libc6".to_string();
+        // Format-appropriate C-runtime fallback (matches the host-package
+        // naming each format expects).
+        return if format == "deb" {
+            "libc6".to_string()
+        } else {
+            "glibc".to_string()
+        };
     }
     pkgs.into_iter().collect::<Vec<_>>().join(", ")
 }

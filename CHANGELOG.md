@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### deb/rpm/arch build parity
+
+- **Arch dependency metadata**: `.PKGINFO` now emits `depend`, `optdepend`,
+  `conflict`, `provides`, `replaces`, and `backup` (from `contents:` config
+  entries), translating Debian relation syntax to pacman
+  (`libc6 (>= 2.34)` → `libc6>=2.34`). The same fields are rendered into the
+  `PKGBUILD` for `--source` builds.
+- **Arch epoch/packager/signature**: `epoch` is folded into `pkgver` (and the
+  filename), `packager` comes from the config, and `--sign-key` writes a
+  detached `.sig` (pacman-verifiable).
+- **rpm**: `contents:` config entries are marked `%config`/`%config(noreplace)`;
+  `Pre-Depends` folds into `Requires` with the PREREQ flag; `epoch` sets the
+  RPM epoch header; `rpm.auto_provides`/`auto_requires` scan the payload for
+  ELF sonames; `rpm.defines` warns instead of silently doing nothing.
+- **Scripts**: rpm/arch maintainer scripts are now read from their configured
+  file paths (previously the path string itself was embedded as the script
+  body) and `template_scripts` applies to them. The `*_script` upgrade hooks
+  are honored by rpm/arch too, so `lx convert` no longer drops scriptlets on
+  the arch target.
+- **`--bindep`**: ELF-detected dependencies are merged into rpm `Requires` and
+  Arch `depends`, not only deb `Depends`.
+- **`build_mode: source`** now wraps in the selected `--format` (`rpm`/`arch`,
+  not just `deb`), including per-format distributions, signing, and
+  source-package output.
+
 ### Removed: duplicate GitHub source plugin and octocrab
 
 - The second GitHub source plugin (the synchronous client exposed

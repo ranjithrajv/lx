@@ -22,6 +22,98 @@ pub struct PackageMeta<'a> {
     pub license: &'a str,
 }
 
+/// Fallback packager identity when the config doesn't supply one.
+const DEFAULT_PACKAGER: &str = "lx <lx@latest-debs.org>";
+
+/// Optional package-relation metadata for a pacman package. Entries are
+/// already in pacman syntax (`name>=1.2`, `name: description`).
+///
+/// Kept separate from [`PackageMeta`] so existing callers that only need
+/// the core metadata keep working unchanged.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PackageRelations<'a> {
+    /// `depend = ...` entries (hard runtime deps).
+    pub depends: &'a [String],
+    /// `optdepend = ...` entries (Debian Recommends/Suggests).
+    pub optdepends: &'a [String],
+    /// `conflict = ...` entries.
+    pub conflicts: &'a [String],
+    /// `provides = ...` entries.
+    pub provides: &'a [String],
+    /// `replaces = ...` entries.
+    pub replaces: &'a [String],
+    /// `backup = ...` entries — installed paths relative to `/`, no
+    /// leading slash (config files pacman preserves on upgrade).
+    pub backup: &'a [String],
+}
+
+/// Translate a Debian-style dependency relation string into pacman
+/// dependency entries.
+///
+/// `"libc6 (>= 2.34), libssl3 | libssl1.1, foo:any"` becomes
+/// `["libc6>=2.34", "libssl3", "foo"]`. Debian alternatives (`a | b`) keep
+/// the first arm (pacman expresses alternatives via `provides`, not a
+/// single relation); multiarch qualifiers (`foo:amd64`, `foo:any`) and
+/// `[arch]` restrictions are dropped.
+pub fn debian_relations_to_pacman(relation: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for raw in relation.split(',') {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            continue;
+        }
+        // Debian alternative: keep the first arm.
+        let first = raw.split('|').next().unwrap_or(raw).trim();
+        if first.is_empty() {
+            continue;
+        }
+        // Split "name (>= 1.2)" into name + operator/version.
+        let (name, constraint) = match first.split_once('(') {
+            Some((name, ver)) => {
+                let ver = ver.trim().trim_end_matches(')').trim();
+                let (op, value) = split_constraint(ver);
+                (name.trim(), Some((op, value)))
+            }
+            None => (first, None),
+        };
+        // Drop a Debian multiarch qualifier (`foo:any`) or arch restriction
+        // (`foo [amd64]`).
+        let name = name.split(':').next().unwrap_or(name);
+        let name = name.split('[').next().unwrap_or(name).trim();
+        if name.is_empty() {
+            continue;
+        }
+        match constraint {
+            Some((op, value)) if !value.is_empty() => {
+                out.push(format!("{name}{op}{value}"));
+            }
+            _ => out.push(name.to_string()),
+        }
+    }
+    out
+}
+
+/// Split a Debian version constraint (`>= 1.2`, `<< 2.0`, `= 1`) into a
+/// pacman comparison operator and the bare version.
+fn split_constraint(ver: &str) -> (&'static str, String) {
+    let ver = ver.trim();
+    for (deb, pac) in [
+        (">=", ">="),
+        ("<=", "<="),
+        (">>", ">"),
+        ("<<", "<"),
+        ("==", "="),
+        ("=", "="),
+        (">", ">"),
+        ("<", "<"),
+    ] {
+        if let Some(rest) = ver.strip_prefix(deb) {
+            return (pac, rest.trim().replace(' ', ""));
+        }
+    }
+    (">=", ver.replace(' ', ""))
+}
+
 /// Build a pacman package from a staged filesystem tree.
 ///
 /// `root` is the staged tree (e.g. `root/usr/bin/foo` → `/usr/bin/foo`).
@@ -36,14 +128,54 @@ pub fn build(
     arch_path: &Path,
     install_script: Option<&str>,
 ) -> Result<()> {
+    build_with_relations(
+        root,
+        meta,
+        &PackageRelations::default(),
+        None,
+        None,
+        arch,
+        mtime,
+        arch_path,
+        install_script,
+    )
+}
+
+/// Like [`build`] but also emits pacman relation/config metadata
+/// (`depend`, `optdepend`, `conflict`, `provides`, `replaces`, `backup`),
+/// an optional `packager` and an optional epoch (rendered into `pkgver` as
+/// `epoch:version-release`, matching makepkg's `get_full_version`).
+#[allow(clippy::too_many_arguments)]
+pub fn build_with_relations(
+    root: &Path,
+    meta: &PackageMeta,
+    relations: &PackageRelations,
+    packager: Option<&str>,
+    epoch: Option<&str>,
+    arch: &str,
+    mtime: i64,
+    arch_path: &Path,
+    install_script: Option<&str>,
+) -> Result<()> {
     let pacman_arch = to_pacman_arch(arch);
-    let pkgver = format!("{}-{}", meta.version, meta.release);
+    let pkgver = match epoch.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) => format!("{e}:{}-{}", meta.version, meta.release),
+        None => format!("{}-{}", meta.version, meta.release),
+    };
 
     // Calculate installed size by walking the tree.
     let installed_size = calc_installed_size(root)?;
 
     // Render .PKGINFO
-    let pkginfo = render_pkginfo(meta, &pkgver, pacman_arch, mtime, installed_size);
+    let pkginfo = render_pkginfo_with(
+        meta,
+        relations,
+        packager,
+        &pkgver,
+        pacman_arch,
+        mtime,
+        installed_size,
+    );
 
     // Build uncompressed tar in memory.
     let mut tar_bytes = Vec::new();
@@ -133,6 +265,27 @@ pub fn render_pkginfo(
     mtime: i64,
     size: u64,
 ) -> String {
+    render_pkginfo_with(
+        meta,
+        &PackageRelations::default(),
+        None,
+        pkgver,
+        arch,
+        mtime,
+        size,
+    )
+}
+
+/// Like [`render_pkginfo`] but emits pacman relation and config metadata.
+pub fn render_pkginfo_with(
+    meta: &PackageMeta,
+    relations: &PackageRelations,
+    packager: Option<&str>,
+    pkgver: &str,
+    arch: &str,
+    mtime: i64,
+    size: u64,
+) -> String {
     let name = meta.name;
     let desc = if meta.description.is_empty() {
         "No description".to_string()
@@ -150,11 +303,14 @@ pub fn render_pkginfo(
         meta.license
     };
     // packager fallback
-    let packager = "lx <lx@latest-debs.org>";
+    let packager = packager
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or(DEFAULT_PACKAGER);
     // Arch's builddate is unix epoch seconds.
     let builddate = mtime.max(0).to_string();
 
-    format!(
+    let mut out = format!(
         "pkgname = {name}\n\
          pkgver = {pkgver}\n\
          pkgdesc = {desc}\n\
@@ -164,7 +320,26 @@ pub fn render_pkginfo(
          size = {size}\n\
          arch = {arch}\n\
          license = {license}\n"
-    )
+    );
+
+    // Relation/config tags. pacman reads these regardless of order.
+    let tags: [(&str, &[String]); 6] = [
+        ("depend", relations.depends),
+        ("optdepend", relations.optdepends),
+        ("conflict", relations.conflicts),
+        ("provides", relations.provides),
+        ("replaces", relations.replaces),
+        ("backup", relations.backup),
+    ];
+    for (tag, entries) in tags {
+        for entry in entries {
+            let entry = entry.trim();
+            if !entry.is_empty() {
+                out.push_str(&format!("{tag} = {entry}\n"));
+            }
+        }
+    }
+    out
 }
 
 /// Render an Arch `.INSTALL` file from the pre/post-upgrade hooks.

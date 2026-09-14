@@ -196,3 +196,51 @@ fn generate_arch_writes_pkgbuild_with_matching_sha256() {
         "{pkgbuild}"
     );
 }
+
+#[test]
+fn generate_arch_pkgbuild_includes_relations_and_epoch() {
+    let staged = fake_staged_tree();
+    let out_dir = tempfile::tempdir().unwrap();
+    // Epoch-prefixed filename, matching plugins/arch.rs's convention.
+    lx_lib::archarchive::build(
+        staged.path(),
+        &lx_lib::archarchive::PackageMeta {
+            name: "eza",
+            version: "0.23.5",
+            release: "1.arch",
+            description: "eza, packaged from eza-community/eza",
+            url: "https://github.com/eza-community/eza",
+            license: "MIT",
+        },
+        "amd64",
+        1_735_689_600,
+        &out_dir
+            .path()
+            .join("eza-1:0.23.5-1.arch-x86_64.pkg.tar.zst"),
+        None,
+    )
+    .unwrap();
+
+    let mut pkg = test_pkg("1");
+    pkg.depends = "libc6 (>= 2.34), libssl3".into();
+    pkg.recommends = "bash-completion".into();
+    pkg.provides = "eza-cli".into();
+    pkg.conflicts = "eza-legacy".into();
+    pkg.replaces = "eza-old".into();
+    generate_arch(out_dir.path(), &pkg).unwrap();
+
+    let pkgbuild = std::fs::read_to_string(out_dir.path().join("PKGBUILD")).unwrap();
+    assert!(pkgbuild.contains("epoch=1\n"), "{pkgbuild}");
+    assert!(pkgbuild.contains("pkgver=0.23.5"), "{pkgbuild}");
+    assert!(
+        pkgbuild.contains("depends=('libc6>=2.34' 'libssl3')"),
+        "{pkgbuild}"
+    );
+    assert!(
+        pkgbuild.contains("optdepends=('bash-completion')"),
+        "{pkgbuild}"
+    );
+    assert!(pkgbuild.contains("provides=('eza-cli')"), "{pkgbuild}");
+    assert!(pkgbuild.contains("conflicts=('eza-legacy')"), "{pkgbuild}");
+    assert!(pkgbuild.contains("replaces=('eza-old')"), "{pkgbuild}");
+}

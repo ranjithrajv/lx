@@ -77,7 +77,12 @@ all parsed and applied through `effective_relations(format)` in the deb
 plugin. The `Relations` struct renders `Suggests:` and `Pre-Depends:`
 control lines when non-empty. For RPM, relation fields are mapped to
 rpm-crate dependency tags (`requires`, `provides`, `conflicts`,
-`obsoletes`, `recommends`, `suggests`) via `parse_rpm_relations()`.
+`obsoletes`, `recommends`, `suggests`) via `parse_rpm_relations()`, with
+`Pre-Depends` folded in as `Requires` carrying the legacy `PREREQ` flag.
+For Arch, they render as `.PKGINFO` `depend`/`optdepend`/`conflict`/
+`provides`/`replaces` (Debian syntax translated to pacman, e.g.
+`libc6 (>= 2.34)` → `libc6>=2.34`) and the same arrays in the generated
+`PKGBUILD`.
 
 ---
 
@@ -90,7 +95,7 @@ rpm-crate dependency tags (`requires`, `provides`, `conflicts`,
 | **Custom control fields** | ✅ (`deb.fields`) | ✅ (`fields:`) |
 | **Homepage** | ✅ | ✅ (auto-derived from forge URL) |
 | **Summary override** | ✅ (rpm) | ✅ (description as summary) |
-| **Packager** (distinct from maintainer) | ✅ (rpm, arch) | ✅ (rpm header tag, falls back to maintainer) |
+| **Packager** (distinct from maintainer) | ✅ (rpm, arch) | ✅ (rpm header tag + Arch `.PKGINFO` `packager`, falls back to maintainer) |
 | **License** | ✅ | ✅ (SPDX) |
 | **Arch variant** (e.g. amd64v3) | ✅ (deb) | ✅ (deb, `arch_variant:`) |
 | **Umask** | ✅ | ✅ |
