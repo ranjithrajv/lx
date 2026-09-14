@@ -114,6 +114,7 @@ pub mod source_client;
 pub mod sourcebuild;
 pub mod sourceforge;
 pub mod summary;
+pub mod tarutil;
 pub mod telemetry;
 pub mod templating;
 pub mod update;

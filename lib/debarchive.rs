@@ -10,10 +10,9 @@
 
 use anyhow::{bail, Context, Result};
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use crate::filemeta::{self, FileMeta, FileMetaMap};
+use crate::filemeta::FileMetaMap;
 
 /// Build a `.deb` from a staged filesystem tree and a rendered control
 /// file.
@@ -288,7 +287,15 @@ fn build_data_tar(
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_dir_sorted(&mut builder, root, "./", root, mtime, Some(md5sums), meta)?;
+        crate::tarutil::append_dir_sorted(
+            &mut builder,
+            root,
+            "./",
+            root,
+            mtime,
+            Some(md5sums),
+            meta,
+        )?;
         builder.finish()?;
     }
     compress_tar(&tar_bytes, mtime, comp)
@@ -306,7 +313,7 @@ pub fn tar_xz_tree(fs_root: &Path, archive_prefix: &str, mtime: i64) -> Result<V
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_dir_sorted(
+        crate::tarutil::append_dir_sorted(
             &mut builder,
             fs_root,
             archive_prefix,
@@ -406,10 +413,10 @@ fn build_control_tar(
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_file_bytes(&mut builder, "./control", control, 0o644, mtime, None)?;
-        append_file_bytes(&mut builder, "./md5sums", md5sums, 0o644, mtime, None)?;
+        crate::tarutil::append_file_bytes(&mut builder, "./control", control, 0o644, mtime, None)?;
+        crate::tarutil::append_file_bytes(&mut builder, "./md5sums", md5sums, 0o644, mtime, None)?;
         for extra in extras {
-            append_file_bytes(
+            crate::tarutil::append_file_bytes(
                 &mut builder,
                 &format!("./{}", extra.name),
                 &extra.content,
@@ -430,109 +437,6 @@ fn build_control_tar(
 /// member format) using the plain root-relative path regardless of
 /// `archive_prefix` -- only `build_data_tar_gz` (the `.deb` case) passes
 /// `Some`.
-fn append_dir_sorted<W: Write>(
-    builder: &mut tar::Builder<W>,
-    original_root: &Path,
-    archive_prefix: &str,
-    fs_dir: &Path,
-    mtime: i64,
-    mut md5sums: Option<&mut String>,
-    meta: &FileMetaMap,
-) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(fs_dir)
-        .with_context(|| format!("failed to read '{}'", fs_dir.display()))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let fs_path = entry.path();
-        let rel = fs_path
-            .strip_prefix(original_root)
-            .expect("walked path must be under original_root");
-        let archive_path = format!("{archive_prefix}{}", rel.to_string_lossy());
-        let file_type = entry.file_type()?;
-        let entry_meta = filemeta::lookup(meta, &archive_path);
-
-        if file_type.is_symlink() {
-            let target = std::fs::read_link(&fs_path)?;
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_size(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            filemeta::apply_tar_header(
-                &mut header,
-                entry_meta,
-                crate::constants::SYMLINK_MODE,
-                mtime,
-            );
-            header.set_path(&archive_path)?;
-            header.set_link_name(&target)?;
-            header.set_cksum();
-            builder.append(&header, std::io::empty())?;
-        } else if file_type.is_dir() {
-            // `disown_subtree` directories are not owned by the package:
-            // recurse, but omit the explicit directory entry so the parent
-            // file (or the OS) implies it.
-            if !entry_meta.is_some_and(|m| m.disown) {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_size(0);
-                header.set_uid(0);
-                header.set_gid(0);
-                filemeta::apply_tar_header(
-                    &mut header,
-                    entry_meta,
-                    crate::constants::DIR_MODE,
-                    mtime,
-                );
-                header.set_path(format!("{archive_path}/"))?;
-                header.set_cksum();
-                builder.append(&header, std::io::empty())?;
-            }
-            append_dir_sorted(
-                builder,
-                original_root,
-                archive_prefix,
-                &fs_path,
-                mtime,
-                md5sums.as_deref_mut(),
-                meta,
-            )?;
-        } else {
-            let content = std::fs::read(&fs_path)
-                .with_context(|| format!("failed to read '{}'", fs_path.display()))?;
-            let mode = std::fs::metadata(&fs_path)?.permissions().mode() & 0o777;
-            if let Some(sums) = md5sums.as_deref_mut() {
-                let digest = md5::compute(&content);
-                sums.push_str(&format!("{digest:x}  {}\n", rel.to_string_lossy()));
-            }
-            append_file_bytes(builder, &archive_path, &content, mode, mtime, entry_meta)?;
-        }
-    }
-    Ok(())
-}
-
-fn append_file_bytes<W: Write>(
-    builder: &mut tar::Builder<W>,
-    archive_path: &str,
-    content: &[u8],
-    mode: u32,
-    mtime: i64,
-    meta: Option<&FileMeta>,
-) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Regular);
-    header.set_size(content.len() as u64);
-    header.set_uid(0);
-    header.set_gid(0);
-    filemeta::apply_tar_header(&mut header, meta, mode, mtime);
-    header.set_path(archive_path)?;
-    header.set_cksum();
-    builder.append(&header, content)?;
-    Ok(())
-}
-
 /// Deterministic gzip: fixed mtime in the header (no wall-clock leak), no
 /// embedded filename/comment/OS-specific fields left to vary.
 fn gzip(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
@@ -545,11 +449,7 @@ fn gzip(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
 /// built package derives from content + `mtime` alone. Level 9 (best),
 /// matching the previous hardcoded behavior at these sites.
 pub fn deterministic_gzip_bytes(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
-    let mut encoder = flate2::GzBuilder::new()
-        .mtime(mtime.max(0) as u32)
-        .write(Vec::new(), flate2::Compression::new(level));
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
+    crate::tarutil::deterministic_gzip(data, mtime, level)
 }
 
 /// Deterministic xz (single-threaded; the xz container has no

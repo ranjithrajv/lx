@@ -20,11 +20,9 @@
 //! sorted walk, normalized ownership and mtime, no subprocess.
 
 use anyhow::{Context, Result};
-use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use crate::filemeta::{self, FileMeta, FileMetaMap};
+use crate::filemeta::FileMetaMap;
 
 /// Metadata rendered into `.PKGINFO`.
 #[derive(Debug, Clone)]
@@ -126,14 +124,14 @@ pub fn build_full_with_meta(
 ) -> Result<()> {
     // 1. Data member first: its compressed bytes are hashed into .PKGINFO.
     let data_gz = build_data_tar_gz(root, mtime, file_meta)?;
-    let datahash = sha256_hex(&data_gz);
+    let datahash = crate::tarutil::sha256_hex(&data_gz);
 
     // 2. Control member: a tar holding .PKGINFO and any install scripts (no
     //    end-of-archive records, so it concatenates with the data segment).
-    let installed_size = calc_installed_size(root)?;
+    let installed_size = crate::tarutil::calc_installed_size(root)?;
     let pkginfo = render_pkginfo(meta, arch, mtime, installed_size, &datahash);
     let control_tar = build_control_tar(&pkginfo, mtime, control_files)?;
-    let control_gz = deterministic_gzip(&control_tar, mtime, 9)?;
+    let control_gz = crate::tarutil::deterministic_gzip(&control_tar, mtime, 9)?;
 
     // 3. Optional signature segment, prepended over the control segment.
     let signature_gz = match signer {
@@ -164,11 +162,18 @@ pub fn signature_segment(member_name: &str, signature: &[u8], mtime: i64) -> Res
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_file_bytes(&mut builder, member_name, signature, 0o644, mtime, None)?;
+        crate::tarutil::append_file_bytes(
+            &mut builder,
+            member_name,
+            signature,
+            0o644,
+            mtime,
+            None,
+        )?;
     }
     // `tar::Builder` appends end-of-archive records even without `finish()`;
     // apk wants them only on the final data segment.
-    deterministic_gzip(&strip_end_of_archive(tar_bytes), mtime, 9)
+    crate::tarutil::deterministic_gzip(&strip_end_of_archive(tar_bytes), mtime, 9)
 }
 
 /// Drop the trailing 512-byte zero end-of-archive records (`tar::Builder`
@@ -248,7 +253,7 @@ fn build_control_tar(
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_file_bytes(
+        crate::tarutil::append_file_bytes(
             &mut builder,
             ".PKGINFO",
             pkginfo.as_bytes(),
@@ -257,7 +262,14 @@ fn build_control_tar(
             None,
         )?;
         for f in control_files {
-            append_file_bytes(&mut builder, f.name, f.content, f.mode, mtime, None)?;
+            crate::tarutil::append_file_bytes(
+                &mut builder,
+                f.name,
+                f.content,
+                f.mode,
+                mtime,
+                None,
+            )?;
         }
     }
     // No end-of-archive records: the data segment (which keeps them) is the
@@ -269,136 +281,13 @@ fn build_data_tar_gz(root: &Path, mtime: i64, meta: &FileMetaMap) -> Result<Vec<
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_dir_sorted(&mut builder, root, root, mtime, meta)?;
+        crate::tarutil::append_dir_sorted(&mut builder, root, "", root, mtime, None, meta)?;
         builder.finish()?;
     }
-    deterministic_gzip(&tar_bytes, mtime, 9)
-}
-
-fn calc_installed_size(root: &Path) -> Result<u64> {
-    fn walk(dir: &Path, total: &mut u64) -> Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            if ty.is_dir() {
-                walk(&entry.path(), total)?;
-            } else if ty.is_file() {
-                *total += entry.metadata()?.len();
-            }
-        }
-        Ok(())
-    }
-    let mut size = 0u64;
-    if root.exists() {
-        walk(root, &mut size)?;
-    }
-    Ok(size)
-}
-
-fn append_dir_sorted<W: Write>(
-    builder: &mut tar::Builder<W>,
-    original_root: &Path,
-    fs_dir: &Path,
-    mtime: i64,
-    meta: &FileMetaMap,
-) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(fs_dir)
-        .with_context(|| format!("failed to read '{}'", fs_dir.display()))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let fs_path = entry.path();
-        let rel = fs_path
-            .strip_prefix(original_root)
-            .expect("walked path must be under original_root");
-        let archive_path = rel.to_string_lossy().to_string();
-        let file_type = entry.file_type()?;
-        let entry_meta = filemeta::lookup(meta, &archive_path);
-
-        if file_type.is_symlink() {
-            let target = std::fs::read_link(&fs_path)?;
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_size(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            filemeta::apply_tar_header(
-                &mut header,
-                entry_meta,
-                crate::constants::SYMLINK_MODE,
-                mtime,
-            );
-            header.set_path(&archive_path)?;
-            header.set_link_name(&target)?;
-            header.set_cksum();
-            builder.append(&header, std::io::empty())?;
-        } else if file_type.is_dir() {
-            // `disown_subtree` dirs are not owned by the package: skip the
-            // explicit entry, keep the children.
-            if !entry_meta.is_some_and(|m| m.disown) {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_size(0);
-                header.set_uid(0);
-                header.set_gid(0);
-                filemeta::apply_tar_header(
-                    &mut header,
-                    entry_meta,
-                    crate::constants::DIR_MODE,
-                    mtime,
-                );
-                header.set_path(format!("{archive_path}/"))?;
-                header.set_cksum();
-                builder.append(&header, std::io::empty())?;
-            }
-            append_dir_sorted(builder, original_root, &fs_path, mtime, meta)?;
-        } else {
-            let content = std::fs::read(&fs_path)
-                .with_context(|| format!("failed to read '{}'", fs_path.display()))?;
-            let mode = std::fs::metadata(&fs_path)?.permissions().mode() & 0o777;
-            append_file_bytes(builder, &archive_path, &content, mode, mtime, entry_meta)?;
-        }
-    }
-    Ok(())
-}
-
-fn append_file_bytes<W: Write>(
-    builder: &mut tar::Builder<W>,
-    archive_path: &str,
-    content: &[u8],
-    mode: u32,
-    mtime: i64,
-    meta: Option<&FileMeta>,
-) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Regular);
-    header.set_size(content.len() as u64);
-    header.set_uid(0);
-    header.set_gid(0);
-    filemeta::apply_tar_header(&mut header, meta, mode, mtime);
-    header.set_path(archive_path)?;
-    header.set_cksum();
-    builder.append(&header, content)?;
-    Ok(())
+    crate::tarutil::deterministic_gzip(&tar_bytes, mtime, 9)
 }
 
 /// Deterministic gzip member: fixed mtime header, no variable OS field.
-fn deterministic_gzip(data: &[u8], mtime: i64, level: u32) -> Result<Vec<u8>> {
-    let mut encoder = flate2::GzBuilder::new()
-        .mtime(mtime.max(0) as u32)
-        .write(Vec::new(), flate2::Compression::new(level));
-    encoder.write_all(data)?;
-    Ok(encoder.finish()?)
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(data);
-    hex::encode(h.finalize())
-}
-
 /// Map Debian arch to Alpine arch (re-exported for the plugin).
 pub fn to_alpine_arch(debian_arch: &str) -> &'static str {
     crate::constants::to_alpine_arch(debian_arch)

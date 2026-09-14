@@ -11,7 +11,7 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use crate::filemeta::{self, FileMeta, FileMetaMap};
+use crate::filemeta::{self, FileMetaMap};
 
 /// Package metadata fields shared by [`build`] and `render_pkginfo`.
 #[derive(Debug, Clone, Copy)]
@@ -170,7 +170,7 @@ pub fn build_with_relations(
     };
 
     // Calculate installed size by walking the tree.
-    let installed_size = calc_installed_size(root)?;
+    let installed_size = crate::tarutil::calc_installed_size(root)?;
 
     // Render .PKGINFO
     let pkginfo = render_pkginfo_with(
@@ -189,7 +189,7 @@ pub fn build_with_relations(
         let mut builder = tar::Builder::new(&mut tar_bytes);
 
         // .PKGINFO
-        append_file_bytes(
+        crate::tarutil::append_file_bytes(
             &mut builder,
             ".PKGINFO",
             pkginfo.as_bytes(),
@@ -201,12 +201,19 @@ pub fn build_with_relations(
         // but for determinism we need to include it now. Simplest: generate
         // MTREE from the same walk and add as regular file.
         let mtree = render_mtree(root, mtime, file_meta)?;
-        append_file_bytes(&mut builder, ".MTREE", mtree.as_bytes(), 0o644, mtime, None)?;
+        crate::tarutil::append_file_bytes(
+            &mut builder,
+            ".MTREE",
+            mtree.as_bytes(),
+            0o644,
+            mtime,
+            None,
+        )?;
 
         // Optional .INSTALL (pre/post-upgrade hooks).
         if let Some(script) = install_script {
             if !script.trim().is_empty() {
-                append_file_bytes(
+                crate::tarutil::append_file_bytes(
                     &mut builder,
                     ".INSTALL",
                     script.as_bytes(),
@@ -218,7 +225,7 @@ pub fn build_with_relations(
         }
 
         // Payload: recursively add root contents (sorted, normalized).
-        append_dir_sorted(&mut builder, root, "", root, mtime, file_meta)?;
+        crate::tarutil::append_dir_sorted(&mut builder, root, "", root, mtime, None, file_meta)?;
 
         builder.finish()?;
     }
@@ -255,27 +262,6 @@ pub fn extract(arch_path: &Path, dest: &Path) -> Result<()> {
             .with_context(|| format!("failed to unpack '{name}'"))?;
     }
     Ok(())
-}
-
-fn calc_installed_size(root: &Path) -> Result<u64> {
-    fn walk(dir: &Path, total: &mut u64) -> Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            if ty.is_dir() {
-                walk(&entry.path(), total)?;
-            } else if ty.is_file() {
-                *total += entry.metadata()?.len();
-            }
-            // symlinks contribute 0
-        }
-        Ok(())
-    }
-    let mut size = 0u64;
-    if root.exists() {
-        walk(root, &mut size)?;
-    }
-    Ok(size)
 }
 
 pub fn render_pkginfo(
@@ -453,7 +439,7 @@ fn render_mtree(root: &Path, mtime: i64, file_meta: &FileMetaMap) -> Result<Stri
                     .and_then(|m| m.mode)
                     .unwrap_or_else(|| meta.permissions().mode() & 0o777);
                 // sha256 for mtree digest (optional but nice)
-                let digest = sha256_hex(&std::fs::read(&fs_path)?);
+                let digest = crate::tarutil::sha256_hex(&std::fs::read(&fs_path)?);
                 out.push_str(&format!(
                     "{mtree_path} time={time}.0 mode={mode:o} type=file size={size} sha256digest={digest}\n"
                 ));
@@ -464,107 +450,6 @@ fn render_mtree(root: &Path, mtime: i64, file_meta: &FileMetaMap) -> Result<Stri
 
     walk_mtree(root, root, mtime, file_meta, &mut out)?;
     Ok(out)
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(data);
-    hex::encode(h.finalize())
-}
-
-fn append_dir_sorted<W: Write>(
-    builder: &mut tar::Builder<W>,
-    original_root: &Path,
-    archive_prefix: &str,
-    fs_dir: &Path,
-    mtime: i64,
-    meta: &FileMetaMap,
-) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(fs_dir)
-        .with_context(|| format!("failed to read '{}'", fs_dir.display()))?
-        .collect::<std::io::Result<Vec<_>>>()?;
-    entries.sort_by_key(|e| e.file_name());
-
-    for entry in entries {
-        let fs_path = entry.path();
-        let rel = fs_path
-            .strip_prefix(original_root)
-            .expect("walked path must be under original_root");
-        let archive_path = format!("{archive_prefix}{}", rel.to_string_lossy());
-        let file_type = entry.file_type()?;
-        let entry_meta = filemeta::lookup(meta, &archive_path);
-
-        if file_type.is_symlink() {
-            let target = std::fs::read_link(&fs_path)?;
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Symlink);
-            header.set_size(0);
-            header.set_uid(0);
-            header.set_gid(0);
-            filemeta::apply_tar_header(
-                &mut header,
-                entry_meta,
-                crate::constants::SYMLINK_MODE,
-                mtime,
-            );
-            header.set_path(&archive_path)?;
-            header.set_link_name(&target)?;
-            header.set_cksum();
-            builder.append(&header, std::io::empty())?;
-        } else if file_type.is_dir() {
-            if !entry_meta.is_some_and(|m| m.disown) {
-                let mut header = tar::Header::new_gnu();
-                header.set_entry_type(tar::EntryType::Directory);
-                header.set_size(0);
-                header.set_uid(0);
-                header.set_gid(0);
-                filemeta::apply_tar_header(
-                    &mut header,
-                    entry_meta,
-                    crate::constants::DIR_MODE,
-                    mtime,
-                );
-                header.set_path(format!("{archive_path}/"))?;
-                header.set_cksum();
-                builder.append(&header, std::io::empty())?;
-            }
-            append_dir_sorted(
-                builder,
-                original_root,
-                archive_prefix,
-                &fs_path,
-                mtime,
-                meta,
-            )?;
-        } else {
-            let content = std::fs::read(&fs_path)
-                .with_context(|| format!("failed to read '{}'", fs_path.display()))?;
-            let mode = std::fs::metadata(&fs_path)?.permissions().mode() & 0o777;
-            append_file_bytes(builder, &archive_path, &content, mode, mtime, entry_meta)?;
-        }
-    }
-    Ok(())
-}
-
-fn append_file_bytes<W: Write>(
-    builder: &mut tar::Builder<W>,
-    archive_path: &str,
-    content: &[u8],
-    mode: u32,
-    mtime: i64,
-    meta: Option<&FileMeta>,
-) -> Result<()> {
-    let mut header = tar::Header::new_gnu();
-    header.set_entry_type(tar::EntryType::Regular);
-    header.set_size(content.len() as u64);
-    header.set_uid(0);
-    header.set_gid(0);
-    filemeta::apply_tar_header(&mut header, meta, mode, mtime);
-    header.set_path(archive_path)?;
-    header.set_cksum();
-    builder.append(&header, content)?;
-    Ok(())
 }
 
 fn zstd_compress(data: &[u8]) -> Result<Vec<u8>> {
