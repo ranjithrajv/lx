@@ -16,11 +16,10 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct HexRegistrySource;
 
@@ -74,18 +73,7 @@ end
         std::fs::write(project_dir.join("mix.exs"), mix_exs).context("failed to write mix.exs")?;
 
         // mix deps.get downloads and compiles dependencies.
-        let deps_get = Command::new("mix")
-            .args(["deps.get"])
-            .current_dir(&project_dir)
-            .output()
-            .context("failed to run `mix deps.get` (is mix/elixir on PATH?)")?;
-
-        if !deps_get.status.success() {
-            bail!(
-                "mix deps.get failed: {}",
-                String::from_utf8_lossy(&deps_get.stderr)
-            );
-        }
+        staging::run_tool("mix", &["deps.get"], Some(&project_dir), "mix deps.get")?;
 
         // Find the downloaded package in the deps directory.
         let deps_dir = project_dir.join("deps");

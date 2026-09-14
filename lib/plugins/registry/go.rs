@@ -19,7 +19,7 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct GoRegistrySource;
 
@@ -47,18 +47,12 @@ impl RegistrySource for GoRegistrySource {
         let workdir = tempfile::tempdir().context("failed to create go workdir")?;
 
         // Initialize a minimal module so we can `go get` the dependency.
-        let mod_init = Command::new("go")
-            .args(["mod", "init", "lx-temp"])
-            .current_dir(workdir.path())
-            .output()
-            .context("failed to run `go mod init`")?;
-
-        if !mod_init.status.success() {
-            bail!(
-                "go mod init failed: {}",
-                String::from_utf8_lossy(&mod_init.stderr)
-            );
-        }
+        staging::run_tool(
+            "go",
+            &["mod", "init", "lx-temp"],
+            Some(workdir.path()),
+            "go mod init",
+        )?;
 
         // Add the dependency. `go get` downloads and adds to go.mod.
         let dep_spec = if version.trim().is_empty() {
@@ -67,15 +61,12 @@ impl RegistrySource for GoRegistrySource {
             format!("{module_path}@{}", version.trim())
         };
 
-        let go_get = Command::new("go")
-            .args(["get", "-d", &dep_spec])
-            .current_dir(workdir.path())
-            .output()
-            .context("failed to run `go get`")?;
-
-        if !go_get.status.success() {
-            bail!("go get failed: {}", String::from_utf8_lossy(&go_get.stderr));
-        }
+        staging::run_tool(
+            "go",
+            &["get", "-d", &dep_spec],
+            Some(workdir.path()),
+            "go get",
+        )?;
 
         // Find the module in the build list to get the resolved version.
         let list_output = Command::new("go")

@@ -11,13 +11,12 @@
 //!   github_repo: fvm
 //!   version: 3.2.0
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct DartRegistrySource;
 
@@ -62,18 +61,7 @@ dependencies:
             .context("failed to write pubspec.yaml")?;
 
         // dart pub get downloads and resolves dependencies.
-        let pub_get = Command::new("dart")
-            .args(["pub", "get"])
-            .current_dir(&project_dir)
-            .output()
-            .context("failed to run `dart pub get` (is dart on PATH?)")?;
-
-        if !pub_get.status.success() {
-            bail!(
-                "dart pub get failed: {}",
-                String::from_utf8_lossy(&pub_get.stderr)
-            );
-        }
+        staging::run_tool("dart", &["pub", "get"], Some(&project_dir), "dart pub get")?;
 
         // Find the package in the pub cache.
         let pub_cache_dir = find_dart_package_cache(package, &version_arg);
