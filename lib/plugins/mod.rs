@@ -274,7 +274,7 @@ pub fn stage_install_tree(
             if !entry.file_type()?.is_file() {
                 continue;
             }
-            if is_elf(&path)? {
+            if crate::filemeta::is_elf(&path)? {
                 let dest = usr_bin.join(entry.file_name());
                 std::fs::copy(&path, &dest)?;
                 make_executable(&dest)?;
@@ -331,7 +331,7 @@ fn symlink_elf_executables(src_dir: &Path, usr_bin: &Path, abs_prefix: &str) -> 
     for entry in std::fs::read_dir(src_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if entry.file_type()?.is_file() && is_elf(&path)? {
+        if entry.file_type()?.is_file() && crate::filemeta::is_elf(&path)? {
             make_executable(&path)?;
             let name = entry.file_name();
             let target = format!("{abs_prefix}/{}", name.to_string_lossy());
@@ -339,16 +339,6 @@ fn symlink_elf_executables(src_dir: &Path, usr_bin: &Path, abs_prefix: &str) -> 
         }
     }
     Ok(())
-}
-
-pub(crate) fn is_elf(path: &Path) -> anyhow::Result<bool> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let mut magic = [0u8; 4];
-    if f.read_exact(&mut magic).is_err() {
-        return Ok(false);
-    }
-    Ok(&magic == b"\x7fELF")
 }
 
 fn make_executable(path: &Path) -> anyhow::Result<()> {

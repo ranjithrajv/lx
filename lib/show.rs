@@ -84,7 +84,7 @@ fn print_elf_needs(package: &str, declared_deps: &[String]) {
 
     for file in &files {
         let path = std::path::Path::new(file);
-        if !path.is_file() || !crate::build::is_elf(path).unwrap_or(false) {
+        if !path.is_file() || !crate::filemeta::is_elf(path).unwrap_or(false) {
             continue;
         }
         scanned_any = true;

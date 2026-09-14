@@ -14,8 +14,10 @@
 //! Absent entries mean "use the existing behavior", preserving reproducible
 //! builds for everything the config does not override.
 
+use anyhow::Result;
 use std::collections::HashMap;
 use std::ffi::CString;
+use std::path::Path;
 
 /// RPM file classification from `contents[].type` (`doc`/`license`/`readme`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,4 +143,16 @@ pub fn apply_tar_header(
             let _ = header.set_groupname(group);
         }
     }
+}
+
+/// True when `path` begins with the ELF magic (`\x7fELF`). A short/unreadable
+/// file is not an ELF (returns `Ok(false)` for a short read).
+pub fn is_elf(path: &Path) -> Result<bool> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut magic = [0u8; 4];
+    if f.read_exact(&mut magic).is_err() {
+        return Ok(false);
+    }
+    Ok(&magic == b"\x7fELF")
 }

@@ -25,7 +25,7 @@ pub fn make_relocatable(bin_dir: &Path) -> Result<usize> {
         if !entry.file_type()?.is_file() {
             continue;
         }
-        if !is_elf(&path)? {
+        if !crate::filemeta::is_elf(&path)? {
             continue;
         }
         if is_dynamic(&path) {
@@ -46,16 +46,6 @@ pub fn make_relocatable(bin_dir: &Path) -> Result<usize> {
 }
 
 /// True if the file is an ELF binary.
-fn is_elf(path: &Path) -> Result<bool> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let mut magic = [0u8; 4];
-    if f.read_exact(&mut magic).is_err() {
-        return Ok(false);
-    }
-    Ok(&magic == b"\x7fELF")
-}
-
 /// True if the ELF is dynamically linked (has INTERP segment).
 fn is_dynamic(path: &Path) -> bool {
     // Quick check: does it have a PT_INTERP segment?

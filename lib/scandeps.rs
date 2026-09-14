@@ -385,7 +385,7 @@ pub fn find_elf_files(dir: &Path) -> Result<Vec<PathBuf>> {
         let path = entry.path();
         if entry.file_type()?.is_dir() {
             out.extend(find_elf_files(&path)?);
-        } else if crate::build::is_elf(&path).unwrap_or(false) {
+        } else if crate::filemeta::is_elf(&path).unwrap_or(false) {
             out.push(path);
         }
     }

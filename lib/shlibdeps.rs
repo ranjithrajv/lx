@@ -672,17 +672,8 @@ fn collect_elfs(path: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         for entry in std::fs::read_dir(path)? {
             collect_elfs(&entry?.path(), out)?;
         }
-    } else if is_elf(path) {
+    } else if crate::filemeta::is_elf(path).unwrap_or(false) {
         out.push(path.to_path_buf());
     }
     Ok(())
-}
-
-fn is_elf(path: &Path) -> bool {
-    use std::io::Read;
-    let Ok(mut f) = std::fs::File::open(path) else {
-        return false;
-    };
-    let mut magic = [0u8; 4];
-    f.read_exact(&mut magic).is_ok() && &magic == b"\x7fELF"
 }

@@ -2,7 +2,6 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -2272,15 +2271,6 @@ fn verify_sidecar_or_require_flag_source(
 
 pub fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
     crate::plugins::artifact::extract(archive, dest, format)
-}
-
-pub(crate) fn is_elf(path: &Path) -> Result<bool> {
-    let mut f = std::fs::File::open(path)?;
-    let mut magic = [0u8; 4];
-    if f.read_exact(&mut magic).is_err() {
-        return Ok(false);
-    }
-    Ok(&magic == b"\x7fELF")
 }
 
 /// The host's Debian architecture name (`uname -m` mapped to dpkg naming),
