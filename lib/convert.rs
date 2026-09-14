@@ -21,9 +21,10 @@ pub struct ConvertArgs {
     /// Path to the source package file (.deb, .rpm, .pkg.tar.zst).
     pub input: PathBuf,
 
-    /// Target format: deb, rpm, or arch.
+    /// Target format: deb, rpm, or arch. Defaults to this host's native
+    /// format (auto-detected), so `lx convert foo.rpm` on a deb host → deb.
     #[arg(short = 't', long, value_name = "FORMAT")]
-    pub to: String,
+    pub to: Option<String>,
 
     /// Output directory for the converted package.
     #[arg(short = 'o', long, default_value = "dist")]
@@ -74,7 +75,21 @@ pub fn run(args: ConvertArgs) -> Result<()> {
     if !args.input.exists() {
         bail!("input '{}' does not exist", args.input.display());
     }
-    let target = args.to.to_ascii_lowercase();
+    let target = match &args.to {
+        Some(to) => to.to_ascii_lowercase(),
+        None => match crate::info::native_plugin_format()
+            .filter(|format| matches!(*format, "deb" | "rpm" | "arch"))
+        {
+            Some(format) => {
+                println!("--to not given; targeting this host's native format '{format}'");
+                format.to_string()
+            }
+            None => bail!(
+                "no --to given and this host's native format is unknown; \
+                 pass --to deb, --to rpm, or --to arch"
+            ),
+        },
+    };
     if !["deb", "rpm", "arch"].contains(&target.as_str()) {
         bail!(
             "unsupported target format '{}' (expected deb, rpm, or arch)",

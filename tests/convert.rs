@@ -19,7 +19,7 @@ fn convert_deb_to_deb_is_noop_rejected() {
 
     let result = run(ConvertArgs {
         input: deb,
-        to: "deb".to_string(),
+        to: Some("deb".to_string()),
         output: dir.path().to_path_buf(),
         package_name: None,
         version: None,
@@ -41,7 +41,7 @@ fn convert_deb_dry_run_reports_metadata() {
     // Dry run should succeed and not create output.
     run(ConvertArgs {
         input: deb,
-        to: "deb".to_string(),
+        to: Some("deb".to_string()),
         output: dir.path().to_path_buf(),
         package_name: None,
         version: None,
@@ -58,7 +58,7 @@ fn convert_rejects_nonexistent_input() {
     let dir = tempfile::tempdir().unwrap();
     let result = run(ConvertArgs {
         input: dir.path().join("nonexistent.deb"),
-        to: "rpm".to_string(),
+        to: Some("rpm".to_string()),
         output: dir.path().to_path_buf(),
         package_name: None,
         version: None,
@@ -78,7 +78,7 @@ fn convert_rejects_unknown_target_format() {
 
     let result = run(ConvertArgs {
         input: deb,
-        to: "apk".to_string(),
+        to: Some("apk".to_string()),
         output: dir.path().to_path_buf(),
         package_name: None,
         version: None,

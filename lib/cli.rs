@@ -70,6 +70,8 @@ pub enum Commands {
     Shlibdeps(crate::shlibdeps::ShlibdepsArgs),
     /// Show everything lx knows about one package (manifest + dpkg)
     Show(crate::show::ShowArgs),
+    /// Detect and report the host OS and package system
+    Info(crate::info::InfoArgs),
     /// Reinstall the recorded version of an lx-managed package
     Reinstall(crate::reinstall::ReinstallArgs),
     /// Carry legacy `lpt` state (manifest, caches) and workflows to `lx`
@@ -126,6 +128,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Rollback(args) => crate::rollback::run(args, cli.token.as_deref()),
         Commands::List(args) => crate::list::run(args),
         Commands::Show(args) => crate::show::run(args),
+        Commands::Info(args) => crate::info::run(args),
         Commands::Reinstall(args) => crate::reinstall::run(args, cli.token.as_deref()),
         Commands::Repo(args) => crate::repo::run(args),
         Commands::Migrate(args) => crate::migrate::run(args),

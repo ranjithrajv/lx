@@ -406,7 +406,7 @@ fn golden_deb_multi_suite() {
 
     lx_lib::repo::run(lx_lib::repo::RepoArgs {
         dir: tmp.path().to_path_buf(),
-        format: "deb".to_string(),
+        format: Some("deb".to_string()),
         suite: "stable".to_string(),
         multi_suite: true,
         components: "main".to_string(),

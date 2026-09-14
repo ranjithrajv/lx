@@ -17,10 +17,11 @@ pub struct RepoArgs {
     /// files).
     pub dir: PathBuf,
 
-    /// Package format to index: `deb` (default, apt), `ipk` (opkg),
-    /// `arch` (pacman), `apk` (Alpine), or `rpm` (repodata).
-    #[arg(long, default_value = "deb")]
-    pub format: String,
+    /// Package format to index: `deb` (apt), `ipk` (opkg), `arch` (pacman),
+    /// `apk` (Alpine), or `rpm` (repodata). Defaults to this host's native
+    /// format (auto-detected), falling back to `deb`.
+    #[arg(long)]
+    pub format: Option<String>,
 
     /// Suite name recorded in `Release` (default: stable).
     /// Ignored when --multi-suite is used (suite names come from subdirectories).
@@ -54,14 +55,27 @@ pub struct RepoArgs {
     pub sign_key_id: Option<String>,
 }
 
-pub fn run(args: RepoArgs) -> Result<()> {
+pub fn run(mut args: RepoArgs) -> Result<()> {
     if !args.dir.is_dir() {
         bail!("'{}' is not a directory", args.dir.display());
     }
 
+    // Smart default: index as this host's native format unless told otherwise.
+    if args.format.is_none() {
+        let format = crate::info::native_plugin_format().unwrap_or("deb");
+        println!("--format not given; indexing as '{format}' (this host's native format)");
+        args.format = Some(format.to_string());
+    }
+
     // Multi-suite mode is apt-specific; every other case routes through the
     // PackageIndex plugin registry (write role: build + sign).
-    if args.multi_suite && args.format.eq_ignore_ascii_case("deb") {
+    if args.multi_suite
+        && args
+            .format
+            .as_deref()
+            .unwrap_or("deb")
+            .eq_ignore_ascii_case("deb")
+    {
         return run_multi_suite(&args);
     }
     run_format(&args)
@@ -72,10 +86,11 @@ pub fn run(args: RepoArgs) -> Result<()> {
 fn run_format(args: &RepoArgs) -> Result<()> {
     use crate::plugins::package_index::{self, FORMAT_ALIASES};
 
-    let backend = package_index::get_index_backend(&args.format).ok_or_else(|| {
+    let format = args.format.as_deref().unwrap_or("deb");
+    let backend = package_index::get_index_backend(format).ok_or_else(|| {
         anyhow::anyhow!(
             "unsupported --format '{}' (expected one of: {})",
-            args.format,
+            format,
             FORMAT_ALIASES
                 .iter()
                 .map(|(alias, _)| *alias)
@@ -86,11 +101,11 @@ fn run_format(args: &RepoArgs) -> Result<()> {
     if !backend.capabilities.can_write() {
         bail!(
             "--format '{}' resolves to '{}', which cannot publish a repository index",
-            args.format,
+            format,
             backend.id
         );
     }
-    let indexer = backend.make(&args.format);
+    let indexer = backend.make(format);
     let ext = indexer
         .file_extension()
         .ok_or_else(|| anyhow::anyhow!("'{}' has no artifact extension", backend.id))?;

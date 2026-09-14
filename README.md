@@ -145,22 +145,23 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | Command | Purpose |
 |---|---|
 | `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk), `--format all` builds every format, and `--format deb,rpm` builds each listed |
-| `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format |
+| `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format. `--to` defaults to the host's native format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
 | `lx scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx shlibdeps <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
-| `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery |
+| `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery (`package_format` pre-filled from the host) |
 | `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org |
 | `lx update [package]` | Check installed packages against their latest release, no install |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
 | `lx list` | List packages `lx` has installed |
 | `lx show <package>` | Show everything known about one package (manifest + dpkg) |
+| `lx info` | Auto-detect and report the host OS and package system (`--json` for machine-readable output) |
 | `lx reinstall <package>` | Reinstall the recorded version of an `lx`-managed package |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
-| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead |
+| `lx repo <dir>` | Turn a directory of `.deb`s into an apt-servable repository (`Packages`/`Release`/`InRelease`). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead, and defaults to the host's native format |
 | `lx publish [config]` | Build every requested format and generate that format's repository index in one run (`--formats`, default `deb,rpm,arch`), each in its own `<output>/<format>/` subdirectory — the producer→distributor loop |
 | `lx migrate [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx` |
 | `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
@@ -225,10 +226,52 @@ plugin. Maintainer scripts (pre/post-install) are carried over.
 lx convert foo_1.0_amd64.deb --to rpm        # deb → rpm
 lx convert foo-1.0.x86_64.rpm --to deb        # rpm → deb
 lx convert foo-1.0-arch-x86_64.pkg.tar.zst --to deb  # arch → deb
+
+lx convert foo-1.0.x86_64.rpm                 # --to omitted: targets the host's
+                                              # native format (here, deb on Debian)
 ```
 
 Overrides: `--package-name`, `--version`, `--arch`, `--distribution`,
 `--build-version`. Use `--dry-run` to preview metadata without building.
+
+`--to` is optional: when omitted, `lx` targets the host's native format
+(auto-detected, see `lx info`). So `lx convert foo.rpm` on a Debian box
+produces a `.deb`, and `lx convert foo.deb` on an Arch box produces a
+`.pkg.tar.zst`.
+
+### `lx info`
+
+Report what `lx` detects about this host — read-only and offline, nothing is
+downloaded or installed. It parses `/etc/os-release`, runs `uname`, and probes
+`PATH` for the host package manager, then prints the OS, kernel, architecture,
+package manager, native package format, and the distro token `lx install`/
+`lx upgrade` match prebuilt release assets against:
+
+```sh
+lx info            # human report
+lx info --json     # machine-readable, for scripts/CI
+```
+
+```
+Host information
+  OS               Debian GNU/Linux 13 (trixie)
+  OS ID            debian 13
+  Codename         trixie
+  Kernel           6.12.6-amd64
+  Machine          x86_64
+  Architecture     amd64
+  Package manager  apt
+  Package format   deb
+  Asset dist       trixie
+```
+
+Useful when a package is missing from a release (the `Asset dist` token is
+what the consumer looks for) or to confirm which format `lx get` will pick on
+an rpm, pacman, or Alpine host.
+
+The same detection powers smart defaults elsewhere: `lx convert --to`,
+`lx repo --format`, and `lx init`'s `package_format` prompt all fall back to
+the host's native format unless you say otherwise.
 
 Run `lx <command> --help` for the full flag reference. A few worth calling
 out:

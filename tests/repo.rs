@@ -32,7 +32,7 @@ fn repo_command_writes_packages_and_release() {
     tiny_deb(dir.path(), "hello_1.0-1+bookworm_amd64.deb");
     lx_lib::repo::run(lx_lib::repo::RepoArgs {
         dir: dir.path().to_path_buf(),
-        format: "deb".to_string(),
+        format: Some("deb".to_string()),
         suite: "bookworm".to_string(),
         multi_suite: false,
         components: "main".to_string(),
@@ -56,7 +56,7 @@ fn repo_command_rejects_empty_dir() {
     let dir = tempfile::tempdir().unwrap();
     assert!(lx_lib::repo::run(lx_lib::repo::RepoArgs {
         dir: dir.path().to_path_buf(),
-        format: "deb".to_string(),
+        format: Some("deb".to_string()),
         suite: "stable".to_string(),
         multi_suite: false,
         components: "main".to_string(),
@@ -80,7 +80,7 @@ fn multi_suite_repo_writes_per_suite_and_top_level_release() {
 
     run(RepoArgs {
         dir: dir.path().to_path_buf(),
-        format: "deb".to_string(),
+        format: Some("deb".to_string()),
         suite: "stable".to_string(), // ignored in multi-suite mode
         multi_suite: true,
         components: "main".to_string(),
@@ -114,7 +114,7 @@ fn multi_suite_repo_fallback_to_flat_layout() {
 
     run(RepoArgs {
         dir: dir.path().to_path_buf(),
-        format: "deb".to_string(),
+        format: Some("deb".to_string()),
         suite: "stable".to_string(),
         multi_suite: true,
         components: "main".to_string(),

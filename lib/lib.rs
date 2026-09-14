@@ -73,6 +73,7 @@ pub mod gitlab;
 pub mod go_native;
 pub mod http;
 pub mod index;
+pub mod info;
 pub mod install;
 pub mod install_pkg;
 pub mod ipkarchive;

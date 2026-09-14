@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### `lx info` and host-aware defaults
+
+- New `lx info` command auto-detects the host OS and package system
+  (read-only, offline): OS/codename from `/etc/os-release`, kernel and
+  machine from `uname`, the host package manager, its native package format,
+  and the asset dist token `lx install`/`upgrade` match against. `--json`
+  emits it machine-readably.
+- Other commands now dogfood that detection for smart defaults:
+  - `lx convert`'s `--to` is optional and defaults to the host's native
+    format (deb/rpm/arch), so `lx convert foo.rpm` on a deb host targets deb.
+  - `lx repo`'s `--format` defaults to the host's native format (falling back
+    to `deb`) instead of always indexing as apt.
+  - `lx init` prompts for `package_format` with the host's native format
+    pre-filled, and only asks for Debian suites on deb builds (rpm/arch/apk
+    use their built-in distribution sets).
+
 ### Format-aware consumer (`lx get` on rpm and pacman hosts)
 
 - The consumer commands (`install`, `upgrade`, `update`, `remove`, `list`,

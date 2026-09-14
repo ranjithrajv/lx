@@ -52,7 +52,7 @@ fn make_key(out_dir: &Path) -> Option<PathBuf> {
 fn args(dir: &Path, format: &str, key: Option<PathBuf>) -> RepoArgs {
     RepoArgs {
         dir: dir.to_path_buf(),
-        format: format.to_string(),
+        format: Some(format.to_string()),
         suite: "stable".to_string(),
         multi_suite: false,
         components: "main".to_string(),

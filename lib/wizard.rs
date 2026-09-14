@@ -248,12 +248,34 @@ pub fn run(args: InitArgs) -> Result<()> {
     let fmt = prompt("Artifact format (tar.gz/tgz/zip/raw)", "tar.gz");
     cfg.artifact_format = fmt;
 
-    let dists = prompt(
-        "Distributions (comma-separated; blank = all)",
-        "bullseye,bookworm,trixie,forky,sid",
-    );
-    if !dists.trim().is_empty() {
-        cfg.debian_distributions = dists.split(',').map(|s| s.trim().to_string()).collect();
+    // Smart default: prefer this host's native package format, so a config
+    // generated on a Fedora/Arch box builds that format unless changed.
+    let host_format = crate::info::native_plugin_format();
+    let package_format = prompt(
+        "Package format (deb/rpm/arch/apk/ipk)",
+        host_format.unwrap_or("deb"),
+    )
+    .trim()
+    .to_ascii_lowercase();
+    if !package_format.is_empty() {
+        cfg.package_format = package_format;
+    }
+
+    // Debian suites only matter for deb builds; rpm/arch/apk use their own
+    // built-in distribution sets.
+    if cfg.effective_package_format() == "deb" {
+        let dists = prompt(
+            "Distributions (comma-separated; blank = all)",
+            "bullseye,bookworm,trixie,forky,sid",
+        );
+        if !dists.trim().is_empty() {
+            cfg.debian_distributions = dists.split(',').map(|s| s.trim().to_string()).collect();
+        }
+    } else {
+        println!(
+            "  ({} builds use their built-in distributions; edit package.yaml to customize)",
+            cfg.effective_package_format()
+        );
     }
 
     let output = args

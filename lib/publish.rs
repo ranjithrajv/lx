@@ -163,7 +163,7 @@ pub fn run(args: PublishArgs, token: Option<&str>) -> Result<()> {
             println!("\n=== indexing {format} ===");
             let rargs = RepoArgs {
                 dir: args.output.join(format),
-                format: format.clone(),
+                format: Some(format.clone()),
                 suite: args.suite.clone(),
                 multi_suite: false,
                 components: "main".into(),
