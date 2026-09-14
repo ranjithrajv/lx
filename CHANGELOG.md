@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### `lx convert` metadata interoperability
+
+- RPM metadata, scriptlets, and payload are read in-process via the `rpm`
+  crate — no `rpm`, `rpm2cpio`, or `cpio` on `PATH`.
+- Relation fields (`Provides`/`Recommends`/`Suggests`/`Conflicts`/
+  `Replaces`/`Breaks`/`Pre-Depends`), `Section`/`Priority`, and the epoch
+  are now carried into the target, with dependency syntax and names
+  rewritten across formats like `Depends` already was.
+- Architecture is normalized through the Debian name (`x86_64` → `amd64`).
+- Fixed the built artifact being written into a `TempDir` that was dropped
+  before the output was copied, which made a real conversion fail to produce
+  a file (only dry-run paths were exercised before).
+
 ### `lx index` installs join the lx lifecycle; `lx install` consumes the indexes
 
 - `ReadIndex::install` now returns an `InstallOutcome` instead of `()`.
