@@ -170,7 +170,15 @@ pub fn convert_str(text: &str) -> Result<String> {
         }
     }
 
-    // --- keys nfpm has that lx cannot express --------------------------------
+    warn_unhandled_keys(src, &mut warnings);
+
+    render(&out, &warnings)
+}
+
+/// Warn about nfpm top-level keys that were neither converted nor explicitly
+/// acknowledged. The `HANDLED` allow-list lives here, next to the check that
+/// uses it, instead of buried in `convert_str`.
+fn warn_unhandled_keys(src: &Mapping, warnings: &mut Vec<String>) {
     const HANDLED: &[&str] = &[
         "name",
         "version",
@@ -218,18 +226,16 @@ pub fn convert_str(text: &str) -> Result<String> {
     }
     if src.contains_key(Value::String("changelog".into())) {
         warnings.push(
-            "nfpm `changelog:` (chglog YAML) has no lx equivalent; lx auto-generates the Debian changelog from the release."
-                .to_string(),
-        );
+        "nfpm `changelog:` (chglog YAML) has no lx equivalent; lx auto-generates the Debian changelog from the release."
+            .to_string(),
+    );
     }
     if src.contains_key(Value::String("platform".into())) {
         warnings.push(
-            "nfpm `platform:` is not mapped; lx targets Linux for Linux formats and Windows for `msix`."
-                .to_string(),
-        );
+        "nfpm `platform:` is not mapped; lx targets Linux for Linux formats and Windows for `msix`."
+            .to_string(),
+    );
     }
-
-    render(&out, &warnings)
 }
 
 fn render(out: &Mapping, warnings: &[String]) -> Result<String> {
