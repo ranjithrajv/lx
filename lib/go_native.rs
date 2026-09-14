@@ -637,7 +637,7 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         }
     }
 
-    remove_managers(&args, &installed)?;
+    remove_managers(&args, &installed, &format)?;
 
     if !failed.is_empty() {
         anyhow::bail!("{} of {} native installs failed", failed.len(), plan.len());
@@ -668,22 +668,16 @@ fn wanted_sources(args: &GoNativeArgs) -> HashSet<Source> {
         .collect()
 }
 
-/// Host-native format: explicit flag wins, else probe the package managers.
+/// Host-native format: explicit flag wins (via the shared consumer parser),
+/// else the host's own package manager.
 fn detect_format(flag: Option<&str>) -> String {
     if let Some(f) = flag {
+        if let Ok(fmt) = crate::consumer::parse_format(f) {
+            return fmt.name().to_string();
+        }
         return f.trim().to_ascii_lowercase();
     }
-    for (bin, fmt) in [("dpkg", "deb"), ("rpm", "rpm"), ("pacman", "arch")] {
-        if Command::new(bin)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return fmt.to_string();
-        }
-    }
-    "deb".to_string()
+    crate::index::detect_host_format().name().to_string()
 }
 
 fn command_lines(bin: &str, args: &[&str]) -> Option<String> {
@@ -1042,31 +1036,21 @@ fn record_sh_cleanup(installed: &[&PlanEntry]) -> Result<()> {
     Ok(())
 }
 
-/// Check if a package is already installed, format-aware.
+/// Check if a package is already installed, via the shared consumer layer.
 fn is_native_installed(package: &str, format: &str) -> bool {
-    match format {
-        "deb" => debs::dpkg_installed_version(package).is_some(),
-        "rpm" => Command::new("rpm")
-            .args(["-q", package])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false),
-        "arch" => Command::new("pacman")
-            .args(["-Q", package])
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false),
-        _ => false,
-    }
+    let fmt = crate::consumer::format_or_host(format);
+    crate::consumer::installed_version(package, fmt).is_some()
 }
 
-/// Install a native package in the given format.
+/// Install a native package in the given format via the shared consumer
+/// (`lx install`), so rpm/arch get org resolution, sidecar verification,
+/// index fallback, and manifest recording — not a parallel installer.
 fn install_native_package(package: &str, format: &str, token: Option<&str>) -> Result<()> {
     match format {
-        "deb" => crate::install::run(
+        "deb" | "rpm" | "arch" => crate::install::run(
             InstallArgs {
                 package: package.to_string(),
-                format: Some("deb".into()),
+                format: Some(format.to_string()),
                 version: None,
                 arch: None,
                 distribution: None,
@@ -1079,48 +1063,6 @@ fn install_native_package(package: &str, format: &str, token: Option<&str>) -> R
             },
             token,
         ),
-        "rpm" => {
-            // Download the .rpm from latest-debs org and install with rpm.
-            let client = lx_lib::github::GitHubClient::new(token.map(|s| s.to_string()))?;
-            let repo = debs::repo_name(package);
-            let release = client.latest_release(debs::LATEST_DEBS_ORG, &repo)?;
-            let asset = debs::find_asset_any(&release, package).ok_or_else(|| {
-                anyhow::anyhow!("no .rpm for {} in release '{}'", package, release.tag_name)
-            })?;
-            let dest = std::env::temp_dir().join(&asset.name);
-            debs::download(&client, asset, &dest)?;
-            let status = Command::new("rpm")
-                .args(["-Uvh", "--force", &dest.to_string_lossy()])
-                .status()
-                .context("failed to run rpm")?;
-            if !status.success() {
-                bail!("rpm -Uvh failed for {}", package);
-            }
-            Ok(())
-        }
-        "arch" => {
-            // Download the .pkg.tar.zst from latest-debs org and install with pacman.
-            let client = lx_lib::github::GitHubClient::new(token.map(|s| s.to_string()))?;
-            let repo = debs::repo_name(package);
-            let release = client.latest_release(debs::LATEST_DEBS_ORG, &repo)?;
-            let asset = debs::find_asset_any(&release, package).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "no .pkg.tar.zst for {} in release '{}'",
-                    package,
-                    release.tag_name
-                )
-            })?;
-            let dest = std::env::temp_dir().join(&asset.name);
-            debs::download(&client, asset, &dest)?;
-            let status = Command::new("pacman")
-                .args(["-U", "--noconfirm", &dest.to_string_lossy()])
-                .status()
-                .context("failed to run pacman")?;
-            if !status.success() {
-                bail!("pacman -U failed for {}", package);
-            }
-            Ok(())
-        }
         _ => bail!("unsupported native format '{format}'"),
     }
 }
@@ -1167,11 +1109,14 @@ impl ShOrphanManifest {
     }
 }
 
-/// Opt-in manager removal when everything from that manager migrated.
-fn remove_managers(args: &GoNativeArgs, installed: &[&PlanEntry]) -> Result<()> {
+/// Opt-in manager removal when everything from that manager migrated, via
+/// the shared consumer removal (host-native: apt/rpm/pacman) instead of a
+/// hardcoded `apt-get`.
+fn remove_managers(args: &GoNativeArgs, installed: &[&PlanEntry], format: &str) -> Result<()> {
     if !args.remove_manager || installed.is_empty() {
         return Ok(());
     }
+    let host_format = crate::consumer::format_or_host(format);
     for (source, bin, label) in [
         (Source::Snap, "snap", "snapd"),
         (Source::Flatpak, "flatpak", "flatpak"),
@@ -1200,9 +1145,10 @@ fn remove_managers(args: &GoNativeArgs, installed: &[&PlanEntry]) -> Result<()> 
         if !confirm(&format!("Remove {label} itself (`{bin}`)?"))? {
             continue;
         }
-        let _ = Command::new("sudo")
-            .args(["apt-get", "remove", "-y", label])
-            .status();
+        // Already confirmed above; don't prompt twice inside consumer::remove.
+        if let Err(e) = crate::consumer::remove(label, false, true, host_format) {
+            eprintln!("  ⚠ could not remove {label}: {e:#}");
+        }
     }
     Ok(())
 }

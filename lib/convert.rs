@@ -293,97 +293,72 @@ fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, Str
 }
 
 fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
-    let input_s = input.to_string_lossy();
-    let name = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{NAME}", &input_s])
-        .output()
-        .context("rpm not found — install rpm to convert from .rpm")?;
-    let version = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{VERSION}-%{RELEASE}", &input_s])
-        .output()
-        .context("rpm query failed")?;
-    let arch = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{ARCH}", &input_s])
-        .output()
-        .context("rpm query failed")?;
-    let maintainer = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{VENDOR}", &input_s])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    let description = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{SUMMARY}", &input_s])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
+    let pkg = rpm::Package::open(input)
+        .with_context(|| format!("failed to open '{}'", input.display()))?;
+    let name = pkg.metadata.get_name().unwrap_or_default().to_string();
+    let version = pkg.metadata.get_version().unwrap_or_default().to_string();
+    let release = pkg.metadata.get_release().unwrap_or_default().to_string();
+    let version = if release.is_empty() {
+        version
+    } else {
+        format!("{version}-{release}")
+    };
+    let arch = pkg.metadata.get_arch().unwrap_or_default().to_string();
+    let maintainer = pkg.metadata.get_vendor().unwrap_or_default().to_string();
+    let description = pkg.metadata.get_summary().unwrap_or_default().to_string();
 
-    if !name.status.success() {
-        bail!("rpm query failed for '{}'", input.display());
-    }
-
-    // Extract Requires: (package-level runtime dependencies, with version constraints).
-    let depends = Command::new("rpm")
-        .args(["-qp", "--queryformat", "%{REQUIRES}\n", &input_s])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|text| {
-            text.lines()
-                .map(str::trim)
-                .filter(|line| {
-                    !line.is_empty()
-                        && !line.starts_with('/')
-                        && !line.starts_with("rpmlib(")
-                        && !line.starts_with("config(")
-                        && !line.starts_with("interpreter(")
+    let depends = pkg
+        .metadata
+        .get_requires()
+        .map(|deps| {
+            deps.iter()
+                .map(|d| d.name.as_str())
+                .filter(|n| {
+                    !n.is_empty()
+                        && !n.starts_with('/')
+                        && !n.starts_with("rpmlib(")
+                        && !n.starts_with("config(")
+                        && !n.starts_with("interpreter(")
                 })
                 .collect::<Vec<_>>()
                 .join(", ")
         })
         .unwrap_or_default();
 
-    let scripts = extract_rpm_scripts(input)?;
+    let scripts = extract_rpm_scripts(&pkg);
 
     Ok(SourceMeta {
-        package: String::from_utf8_lossy(&name.stdout).trim().to_string(),
-        version: String::from_utf8_lossy(&version.stdout).trim().to_string(),
-        arch: String::from_utf8_lossy(&arch.stdout).trim().to_string(),
-        maintainer: maintainer.trim().to_string(),
-        description: description.trim().to_string(),
+        package: name,
+        version,
+        arch,
+        maintainer,
+        description,
         depends,
         distribution: "el9".to_string(),
         scripts,
     })
 }
 
-/// Extract scriptlets from an RPM via `rpm -qp --queryformat`.
-fn extract_rpm_scripts(input: &Path) -> Result<BTreeMap<String, String>> {
+/// Extract scriptlets from an RPM in-process via the `rpm` crate.
+fn extract_rpm_scripts(pkg: &rpm::Package) -> BTreeMap<String, String> {
     let mut scripts = BTreeMap::new();
-    for (tag, key) in [
-        ("%{PREIN}", "pre"),
-        ("%{POSTIN}", "post"),
-        ("%{PREUN}", "preun"),
-        ("%{POSTUN}", "postun"),
-        ("%{PRETRANS}", "pretrans"),
-        ("%{POSTTRANS}", "posttrans"),
-        ("%{VERIFYSCRIPT}", "verify"),
-    ] {
-        let out = Command::new("rpm")
-            .args(["-qp", "--queryformat", tag, &input.to_string_lossy()])
-            .output();
-        if let Ok(o) = out {
-            if o.status.success() {
-                let body = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if !body.is_empty() && body != "(none)" {
-                    scripts.insert(key.to_string(), body);
-                }
+    let pairs: [(&str, Option<rpm::Scriptlet>); 6] = [
+        ("pre", pkg.metadata.get_pre_install_script().ok()),
+        ("post", pkg.metadata.get_post_install_script().ok()),
+        ("preun", pkg.metadata.get_pre_uninstall_script().ok()),
+        ("postun", pkg.metadata.get_post_uninstall_script().ok()),
+        ("pretrans", pkg.metadata.get_pre_trans_script().ok()),
+        ("posttrans", pkg.metadata.get_post_trans_script().ok()),
+    ];
+    for (key, s) in pairs {
+        if let Some(s) = s {
+            let body = s.script.trim().to_string();
+            if !body.is_empty() && body != "(none)" {
+                scripts.insert(key.to_string(), body);
             }
         }
     }
-    Ok(scripts)
+    scripts
 }
 
 fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
@@ -1099,33 +1074,7 @@ fn extract_install_tree(format: &str, input: &Path, dest: &Path) -> Result<()> {
             }
         }
         "rpm" => {
-            // rpm2cpio + cpio extracts the payload.
-            let cpio = Command::new("rpm2cpio")
-                .arg(input)
-                .output()
-                .context("rpm2cpio not found — install rpm2cpio to convert from .rpm")?;
-            if !cpio.status.success() {
-                bail!("rpm2cpio failed for '{}'", input.display());
-            }
-            let mut cpio_proc = std::process::Command::new("cpio")
-                .args(["-idm", "--no-absolute-filenames"])
-                .current_dir(dest)
-                .stdin(std::process::Stdio::piped())
-                .spawn()
-                .context("cpio not found — install cpio to convert from .rpm")?;
-            {
-                use std::io::Write;
-                cpio_proc
-                    .stdin
-                    .as_mut()
-                    .unwrap()
-                    .write_all(&cpio.stdout)
-                    .context("writing to cpio stdin")?;
-            }
-            let status = cpio_proc.wait()?;
-            if !status.success() {
-                bail!("cpio extract failed for '{}'", input.display());
-            }
+            crate::rpmarchive::extract(input, dest)?;
         }
         "arch" => {
             let data = fs::read(input)?;
