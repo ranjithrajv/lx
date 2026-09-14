@@ -60,3 +60,45 @@ pub fn send_get_with_retry(
     let headers: Vec<_> = auth.into_iter().collect();
     send_get_with_retry_headers(http, url, &headers)
 }
+
+/// RFC 3986 percent-encoding (unreserved = alphanumerics plus `-_.~`) used for
+/// query and path values by every forge client.
+pub fn urlencode(s: &str) -> String {
+    use percent_encoding::{utf8_percent_encode, AsciiSet};
+    const UNRESERVED: &AsciiSet = &percent_encoding::CONTROLS
+        .add(b' ')
+        .add(b'!')
+        .add(b'"')
+        .add(b'#')
+        .add(b'$')
+        .add(b'%')
+        .add(b'&')
+        .add(b'\'')
+        .add(b'(')
+        .add(b')')
+        .add(b'*')
+        .add(b'+')
+        .add(b',')
+        .add(b'/')
+        .add(b':')
+        .add(b';')
+        .add(b'<')
+        .add(b'=')
+        .add(b'>')
+        .add(b'?')
+        .add(b'@')
+        .add(b'[')
+        .add(b'\\')
+        .add(b']')
+        .add(b'^')
+        .add(b'`')
+        .add(b'{')
+        .add(b'|')
+        .add(b'}');
+    utf8_percent_encode(s, UNRESERVED).to_string()
+}
+
+/// Encode `/` inside a path segment (GitLab/Gerrit project ids).
+pub fn encode_path_segment(s: &str) -> String {
+    s.replace('/', "%2F")
+}

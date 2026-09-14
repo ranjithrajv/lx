@@ -84,7 +84,7 @@ impl ForgejoClient {
                 self.base_url,
                 owner,
                 repo,
-                urlencoding_encode(tag)
+                crate::http::urlencode(tag)
             );
             let raw: GiteaReleaseRaw = self.get_json(&url)?;
             Ok(Self::map_release(raw, &full))
@@ -153,7 +153,7 @@ impl ForgejoClient {
                 .created_at
                 .as_deref()
                 .or(raw.published_at.as_deref())
-                .and_then(parse_time),
+                .and_then(crate::release::parse_timestamp),
             body: raw.body,
         }
     }
@@ -164,51 +164,6 @@ impl ForgejoClient {
     {
         crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, AsciiSet};
-    // RFC 3986 unreserved: alphanumerics plus -_.~ are left as-is.
-    const UNRESERVED: &AsciiSet = &percent_encoding::CONTROLS
-        .add(b' ')
-        .add(b'!')
-        .add(b'"')
-        .add(b'#')
-        .add(b'$')
-        .add(b'%')
-        .add(b'&')
-        .add(b'\'')
-        .add(b'(')
-        .add(b')')
-        .add(b'*')
-        .add(b'+')
-        .add(b',')
-        .add(b'/')
-        .add(b':')
-        .add(b';')
-        .add(b'<')
-        .add(b'=')
-        .add(b'>')
-        .add(b'?')
-        .add(b'@')
-        .add(b'[')
-        .add(b'\\')
-        .add(b']')
-        .add(b'^')
-        .add(b'`')
-        .add(b'{')
-        .add(b'|')
-        .add(b'}');
-    utf8_percent_encode(s, UNRESERVED).to_string()
-}
-
-fn parse_time(s: &str) -> Option<i64> {
-    if let Ok(ts) = s.parse::<jiff::Timestamp>() {
-        return Some(ts.as_second());
-    }
-    jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%SZ", s)
-        .ok()
-        .map(|t| t.as_second())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

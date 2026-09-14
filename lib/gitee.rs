@@ -123,7 +123,7 @@ impl GiteeClient {
                 self.base_url,
                 owner,
                 repo,
-                urlencoding_encode(tag)
+                crate::http::urlencode(tag)
             );
             match self.get_json::<GiteeReleaseRaw>(&url) {
                 Ok(raw) => Ok(Self::map_release(raw, owner, repo)),
@@ -186,7 +186,10 @@ impl GiteeClient {
                 raw.tag_name
             ),
             assets,
-            published_at: raw.created_at.as_deref().and_then(parse_gitee_time),
+            published_at: raw
+                .created_at
+                .as_deref()
+                .and_then(crate::release::parse_timestamp),
             body: raw.body,
         }
     }
@@ -197,50 +200,6 @@ impl GiteeClient {
     {
         crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, AsciiSet};
-    const UNRESERVED: &AsciiSet = &percent_encoding::CONTROLS
-        .add(b' ')
-        .add(b'!')
-        .add(b'"')
-        .add(b'#')
-        .add(b'$')
-        .add(b'%')
-        .add(b'&')
-        .add(b'\'')
-        .add(b'(')
-        .add(b')')
-        .add(b'*')
-        .add(b'+')
-        .add(b',')
-        .add(b'/')
-        .add(b':')
-        .add(b';')
-        .add(b'<')
-        .add(b'=')
-        .add(b'>')
-        .add(b'?')
-        .add(b'@')
-        .add(b'[')
-        .add(b'\\')
-        .add(b']')
-        .add(b'^')
-        .add(b'`')
-        .add(b'{')
-        .add(b'|')
-        .add(b'}');
-    utf8_percent_encode(s, UNRESERVED).to_string()
-}
-
-fn parse_gitee_time(s: &str) -> Option<i64> {
-    if let Ok(ts) = s.parse::<jiff::Timestamp>() {
-        return Some(ts.as_second());
-    }
-    jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%S%z", s)
-        .ok()
-        .map(|t| t.as_second())
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -20,6 +20,9 @@ pub fn parse_timestamp(s: &str) -> Option<i64> {
     }
     jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%S%.fZ", s)
         .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%SZ", s))
+        // Gerrit reports "2025-01-01 00:00:00.000000000" (space separated).
+        .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S%.f", s))
+        .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S", s))
         .ok()
         .map(|t| t.as_second())
 }

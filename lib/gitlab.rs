@@ -46,11 +46,7 @@ impl GitlabClient {
     }
 
     pub fn project_encode(repo: &str) -> String {
-        // repo is "owner/repo" -> encode "/" as %2F and other chars
-        // We avoid extra crate by simple percent-encoding for "/" and use
-        // urlencoding for safety: manual replace is sufficient for owner/repo.
-        // For correctness, also encode any other special chars via naive approach.
-        repo.replace('/', "%2F")
+        crate::http::encode_path_segment(repo)
     }
 
     fn auth_header(&self) -> Option<(&'static str, String)> {
@@ -93,7 +89,7 @@ impl GitlabClient {
         let full = format!("{owner}/{repo}");
         self.api_cache(&format!("gitlab_release_{full}_{tag}"), || {
             let id = Self::project_encode(&full);
-            let encoded_tag = urlencoding_encode(tag);
+            let encoded_tag = crate::http::urlencode(tag);
             let url = format!("{}/projects/{}/releases/{}", self.base_url, id, encoded_tag);
             let raw: GitlabReleaseRaw = self.get_json(&url)?;
             Ok(Self::map_release(raw, &full))
@@ -171,42 +167,6 @@ impl GitlabClient {
     {
         crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, AsciiSet};
-    // RFC 3986 unreserved: alphanumerics plus -_.~ are left as-is.
-    const UNRESERVED: &AsciiSet = &percent_encoding::CONTROLS
-        .add(b' ')
-        .add(b'!')
-        .add(b'"')
-        .add(b'#')
-        .add(b'$')
-        .add(b'%')
-        .add(b'&')
-        .add(b'\'')
-        .add(b'(')
-        .add(b')')
-        .add(b'*')
-        .add(b'+')
-        .add(b',')
-        .add(b'/')
-        .add(b':')
-        .add(b';')
-        .add(b'<')
-        .add(b'=')
-        .add(b'>')
-        .add(b'?')
-        .add(b'@')
-        .add(b'[')
-        .add(b'\\')
-        .add(b']')
-        .add(b'^')
-        .add(b'`')
-        .add(b'{')
-        .add(b'|')
-        .add(b'}');
-    utf8_percent_encode(s, UNRESERVED).to_string()
 }
 
 pub fn parse_gitlab_time(s: &str) -> Option<i64> {

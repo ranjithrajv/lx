@@ -122,7 +122,7 @@ impl GerritClient {
             // Gerrit: GET /a/projects/{project}/tags/{tag}
             // Tag endpoint returns a single tag object; we synthesize a Release
             let encoded_project = Self::project_encode(project);
-            let encoded_tag = urlencoding_encode(tag);
+            let encoded_tag = crate::http::urlencode(tag);
             let url = format!(
                 "{}/projects/{}/tags/{}",
                 self.base_url, encoded_project, encoded_tag
@@ -178,9 +178,7 @@ impl GerritClient {
     }
 
     pub fn project_encode(project: &str) -> String {
-        // Gerrit project names may contain slashes, encode each segment
-        // Use %2F for slash, similar to GitLab
-        project.replace('/', "%2F")
+        crate::http::encode_path_segment(project)
     }
 
     pub fn map_tag_to_release(tag: GerritTagInfo, project: &str, host: &str) -> Release {
@@ -215,8 +213,12 @@ impl GerritClient {
             published_at: tag
                 .created
                 .as_deref()
-                .and_then(parse_gerrit_time)
-                .or_else(|| tag.tagger_date.as_deref().and_then(parse_gerrit_time)),
+                .and_then(crate::release::parse_timestamp)
+                .or_else(|| {
+                    tag.tagger_date
+                        .as_deref()
+                        .and_then(crate::release::parse_timestamp)
+                }),
             body: None,
         }
     }
@@ -232,58 +234,6 @@ impl GerritClient {
 fn base64_encode(s: &str) -> String {
     use base64::Engine as _;
     base64::engine::general_purpose::STANDARD.encode(s)
-}
-
-fn urlencoding_encode(s: &str) -> String {
-    use percent_encoding::{utf8_percent_encode, AsciiSet};
-    // RFC 3986 unreserved: alphanumerics plus -_.~ are left as-is.
-    const UNRESERVED: &AsciiSet = &percent_encoding::CONTROLS
-        .add(b' ')
-        .add(b'!')
-        .add(b'"')
-        .add(b'#')
-        .add(b'$')
-        .add(b'%')
-        .add(b'&')
-        .add(b'\'')
-        .add(b'(')
-        .add(b')')
-        .add(b'*')
-        .add(b'+')
-        .add(b',')
-        .add(b'/')
-        .add(b':')
-        .add(b';')
-        .add(b'<')
-        .add(b'=')
-        .add(b'>')
-        .add(b'?')
-        .add(b'@')
-        .add(b'[')
-        .add(b'\\')
-        .add(b']')
-        .add(b'^')
-        .add(b'`')
-        .add(b'{')
-        .add(b'|')
-        .add(b'}');
-    utf8_percent_encode(s, UNRESERVED).to_string()
-}
-
-fn parse_gerrit_time(s: &str) -> Option<i64> {
-    // Gerrit times are like "2025-01-01 00:00:00.000000000" or ISO8601
-    if let Ok(ts) = s.parse::<jiff::Timestamp>() {
-        return Some(ts.as_second());
-    }
-    // Try Gerrit format "2025-01-01 00:00:00.000000000"
-    jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S%.f", s)
-        .ok()
-        .map(|t| t.as_second())
-        .or_else(|| {
-            jiff::Timestamp::strptime("%Y-%m-%d %H:%M:%S", s)
-                .ok()
-                .map(|t| t.as_second())
-        })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
