@@ -11,6 +11,11 @@
   are now carried into the target, with dependency syntax and names
   rewritten across formats like `Depends` already was.
 - Architecture is normalized through the Debian name (`x86_64` → `amd64`).
+- Conffile semantics carry across: a deb `Conffiles` entry, an RPM
+  `%config`/`%config(noreplace)` flag, or a pacman `backup` path is
+  re-registered in the target. RPM's auto-generated `Provides` (self-provide,
+  sonames, file/capability provides) are filtered out while real virtual
+  provides are kept.
 - Fixed the built artifact being written into a `TempDir` that was dropped
   before the output was copied, which made a real conversion fail to produce
   a file (only dry-run paths were exercised before).
