@@ -12,23 +12,34 @@ use std::process::Command;
 
 use crate::index::InstallFormat;
 
+/// Verification and confirmation policy for [`install_prebuilt`]. Grouped
+/// into a struct so callers cannot transpose three adjacent booleans.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InstallPolicy {
+    /// Skip the confirmation prompt.
+    pub assume_yes: bool,
+    /// Skip checksum verification entirely.
+    pub no_verify: bool,
+    /// Proceed (with a warning) when the checksum is missing/mismatched
+    /// instead of failing.
+    pub allow_unverified: bool,
+}
+
 /// Install a prebuilt package at `path` in the given `format`. Prompts for
-/// confirmation unless `yes`. Verifies checksum before install when
-/// `expected_sha` is provided (non-empty). Returns `true` when the package was
-/// installed, `false` when the user aborted the prompt.
+/// confirmation unless `policy.assume_yes`. Verifies checksum before install
+/// when `expected_sha` is provided (non-empty). Returns `true` when the
+/// package was installed, `false` when the user aborted the prompt.
 pub fn install_prebuilt(
     path: &Path,
     filename: &str,
     format: InstallFormat,
     expected_sha: &str,
-    yes: bool,
-    no_verify: bool,
-    allow_unverified: bool,
+    policy: InstallPolicy,
 ) -> Result<bool> {
-    if !no_verify && !expected_sha.is_empty() {
+    if !policy.no_verify && !expected_sha.is_empty() {
         let actual = crate::lx_lib::checksum::sha256_file(path)?;
         if actual != expected_sha {
-            if allow_unverified {
+            if policy.allow_unverified {
                 eprintln!("⚠ checksum mismatch for {filename}; installing anyway");
             } else {
                 bail!(
@@ -42,7 +53,7 @@ pub fn install_prebuilt(
         }
     }
 
-    if !yes
+    if !policy.assume_yes
         && !confirm(
             &format!("Install {filename} via `sudo {}`?", install_cmd(format)),
             false,

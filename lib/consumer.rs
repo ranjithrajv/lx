@@ -232,7 +232,18 @@ pub fn is_newer(installed: &str, candidate: &str, format: InstallFormat) -> Resu
 /// Integrity is the caller's responsibility (sidecar or provenance pin), so
 /// the redundant in-process re-hash in `install_prebuilt` is skipped.
 pub fn install(path: &Path, filename: &str, format: InstallFormat, yes: bool) -> Result<()> {
-    install_pkg::install_prebuilt(path, filename, format, "", yes, true, false)?;
+    install_pkg::install_prebuilt(
+        path,
+        filename,
+        format,
+        "",
+        install_pkg::InstallPolicy {
+            assume_yes: yes,
+            // Integrity is the caller's responsibility here.
+            no_verify: true,
+            allow_unverified: false,
+        },
+    )?;
     Ok(())
 }
 

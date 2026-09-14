@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use super::{PackageIndex, ReadIndex};
 use crate::debs::{confirm, detect_dist};
 use crate::index::{detect_host_format, IndexHit, InstallOpts, InstallOutcome};
-use crate::install_pkg::{detect_arch, install_prebuilt};
+use crate::install_pkg::{detect_arch, install_prebuilt, InstallPolicy};
 
 const RECIPES_DIR: &str = "recipes";
 const STALE_HOURS: u64 = 24;
@@ -302,9 +302,11 @@ impl ReadIndex for GitIndexSource {
                             filename,
                             pkg_fmt,
                             expected_sha,
-                            opts.yes,
-                            opts.no_verify,
-                            opts.allow_unverified,
+                            InstallPolicy {
+                                assume_yes: opts.yes,
+                                no_verify: opts.no_verify,
+                                allow_unverified: opts.allow_unverified,
+                            },
                         )?;
                         if !installed {
                             return Ok(None);
