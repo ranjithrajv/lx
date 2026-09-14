@@ -25,14 +25,14 @@ today, and then to what it does not.
 
 | What Fresh described | What `lx` does |
 |---|---|
-| Nine-plus channels, each fragile | One `package.yaml` → deb/rpm/arch/apk/ipk, built in-process; zero-config from a forge URL |
+| Nine-plus channels, each fragile | One `package.yaml` → deb/rpm/arch/apk/ipk; `--format all` builds them in one run, and `lx publish` also writes each format's repo index |
 | Debian won't take the package without packaging every Rust dependency | `lx` builds a real `.deb` from your release or source *without* entering Debian's dependency policy; `--source` emits a valid `.dsc` if you later want to |
 | A binary built on new Ubuntu won't load on old Ubuntu | `musl: true` → musl-static, no glibc dependency; `lx get install` falls back to a `+musl_{arch}.deb` |
-| No automatic updates for `.deb`/`.rpm` | `lx repo` writes signed apt **and** rpm indices (plus pacman/apk/opkg), meant to be served as plain static files |
+| No automatic updates for `.deb`/`.rpm` | `lx publish` builds the formats and writes signed apt **and** rpm indices (plus pacman/apk/opkg), meant to be served as plain static files |
 | Mise broke when a trust root rotated out from under you | Fail-closed checksum verification and `--pinned-metadata`; no third-party trust root sits in the path |
 | AUR went read-only and releases stopped | AUR is an *input* (`lx init --from-aur`), not a dependency; Arch packages are built natively, without `makepkg` |
 | Flatpak's sandbox flags, AppImage's FUSE and slow squashfs | A native package: no sandbox, no FUSE, no squashfs mount — it starts at the speed of the binary |
-| "Do I need a package manager at all? I'll write a self-updater." | `lx` is that updater, but it keeps `apt`/`dnf`/`dpkg` as the source of truth instead of replacing them |
+| "Do I need a package manager at all? I'll write a self-updater." | `lx` is that updater on deb, rpm, and pacman hosts, and keeps `apt`/`dnf`/`dpkg`/`pacman` as the source of truth instead of replacing them |
 
 ## One config, every native format
 
@@ -45,10 +45,10 @@ is an output choice.
 You don't even need a config file to see the shape of it:
 
 ```sh
-lx discover sinelaw/fresh                          # print a starter package.yaml
-lx build https://github.com/sinelaw/fresh          # debs, every published arch
-lx build https://github.com/sinelaw/fresh --format rpm
-lx build https://github.com/sinelaw/fresh --format arch
+lx discover sinelaw/fresh                    # print a starter package.yaml
+lx build https://github.com/sinelaw/fresh    # debs for every published arch
+lx build package.yaml --format all           # deb, rpm, arch, apk, ipk in one run
+lx publish package.yaml                      # ... plus every format's repo index
 ```
 
 A minimal config, once you want to pin asset patterns, set dependencies,
@@ -62,7 +62,7 @@ description: "A terminal-based code editor"
 maintainer: "Jane Doe <jane@example.com>"
 license_spdx: Apache-2.0
 musl: true
-package_format: deb        # or rpm / arch / apk / ipk
+package_format: deb        # or rpm / arch / apk / ipk; --format all overrides
 ```
 
 Everything above is written in-process: `lx` never shells out to
@@ -127,11 +127,12 @@ This is the part of the Fresh post that asks for the right thing:
 > both apt and dnf would remember that and update a package.
 
 `lx repo` is that, using each distro's own mechanism instead of a bespoke
-updater:
+updater — and `lx publish` runs the whole build-and-index loop in one command:
 
 ```sh
-lx repo ./dist/debs --format deb --multi-suite --origin fresh --sign-key "$KEY"
-lx repo ./dist/rpms --format rpm --sign-key "$KEY"
+lx publish package.yaml --origin fresh --sign-key "$KEY"      # build + index every format
+lx repo ./dist/deb --format deb --multi-suite --origin fresh  # or index an existing directory
+lx repo ./dist/rpm --format rpm --sign-key "$KEY"
 ```
 
 The output is plain files — `Packages`/`Packages.gz`/`Release`/`InRelease`
@@ -158,6 +159,12 @@ other package, because they *are* any other package. No npm install script
 that re-downloads a binary, no parallel updater, no per-channel release
 checklist. `lx repo` writes pacman, apk, and opkg indices the same way, so
 one static tree can serve the other families too.
+
+The client side is no longer Debian-only either: `lx get install`/`upgrade`
+resolve the *host's* native format (deb on dpkg hosts, rpm on rpm hosts, arch
+on pacman hosts; `--format` to override) and read whichever org
+`LX_INDEX_ORG` names, so the same `lx`-managed update path works across
+families.
 
 ## Mise, AUR, and the "channel broke and nobody noticed" class of bug
 
@@ -201,13 +208,16 @@ emergency measure. The observation worth making is that the self-updater
 is the hard part, and it's the part you don't have to write yourself.
 
 If the musl binary is the payload, `lx` packages it; the update path is
-the native repo above. If you'd rather not run a repo, `lx` is the
-client for the community index:
+the native repo above. If you'd rather not run a repo, `lx` is the client —
+and it is not Debian-only: on an rpm or pacman host the same commands fetch
+that host's native asset and compare versions with that format's own
+ordering.
 
 ```sh
-lx get install fresh
+lx get install fresh            # deb, rpm, or arch — whichever this host is
+lx get install --format rpm fresh
 lx get upgrade fresh
-lx rollback fresh          # if the new release is bad
+lx rollback fresh               # if the new release is bad
 ```
 
 `lx` records what it installed in a local manifest (`installed.json`) and
@@ -229,15 +239,21 @@ A post that only lists wins isn't worth sending, so:
 - **Maturity.** `lx` is new (2026), pre-1.0, with far fewer contributors
   than `fpm` or `nfpm`. The output packages are standard and checkable —
   real `dpkg-deb --info`, `dpkg-source -x`, and `lintian` accept them — but
-  the tool adopting them is young.
+  the tool adopting them is young, and its own first tagged release has not
+  shipped yet.
+- **No upstream attestation verification yet.** `lx` verifies checksums and
+  a local `--pinned-metadata` pin; it does not yet consume Sigstore or
+  GitHub artifact attestations, so an upstream that publishes only an
+  attestation (no checksum sidecar) fails closed rather than being trusted.
 - **Breadth.** No `osxpkg`, `freebsd`, `snap`, `tar`, `zip`, or
   self-extracting output, and no per-file owner/group/mode. Those stay with
   `fpm` and `nfpm`; `lx` complements rather than replaces them.
 - **Hosted infrastructure.** `lx repo` is a generator, not a CDN. There is
   no snapshotting, retention policy, or sync service.
-- **The matrix doesn't vanish.** One config, but you still choose formats
-  and architectures, and source builds are native-arch only — one runner
-  per architecture.
+- **The matrix shrinks but doesn't vanish.** `--format all`/`lx publish`
+  remove the per-format invocations, but you still choose formats and
+  architectures, and source builds are native-arch only — one runner per
+  architecture.
 
 ## What it would look like for Fresh
 
@@ -245,12 +261,12 @@ The distance from here to a shipped set of packages is small:
 
 1. **Look, without committing.** `lx discover sinelaw/fresh` prints a
    starter config from the release assets; `lx build
-   https://github.com/sinelaw/fresh` produces debs for every arch the
-   release publishes, checksum-verified.
+   https://github.com/sinelaw/fresh --format all` produces every format for
+   every arch the release publishes, checksum-verified.
 2. **Add a `package.yaml`** (the one above; `musl: true` if the release
    already ships a musl asset).
-3. **Run it on release.** The composite action is a drop-in for the
-   existing packaging workflow:
+3. **Run it on release.** The composite action covers the Debian path as a
+   drop-in for the existing packaging workflow:
 
    ```yaml
    - uses: ranjithrajv/lx@v1
@@ -258,20 +274,22 @@ The distance from here to a shipped set of packages is small:
        config-file: package.yaml
        version: ${{ github.ref_name }}
        build-version: '1'
+       # lx-version: v0.1.0   # use a prebuilt musl-static lx instead of compiling
        # lintian-check: 'true'
    ```
 
-   The action emits `packages`, `source-packages`, and `summary-path`
-   outputs. The same engine builds rpm and arch with `lx build --format
-   rpm|arch`, which a release job can call per format.
-4. **Publish the repo.** Run `lx repo` over the artifacts and push the
-   result to Pages. That single static tree is the apt and dnf source from
-   the section above.
+   `lx` itself is built the same way now — its release workflow produces
+   musl-static binaries — so the action can consume a pinned release
+   (`lx-version`) instead of compiling from source. For the full multi-format
+   release, one run step does it: `lx publish package.yaml --sign-key "$KEY"`.
+4. **Publish the repo.** `lx publish` already wrote each format's signed
+   index under `dist/<format>/`; push that directory to Pages and it is the
+   apt and dnf source from the section above.
 
 The expensive part of the Fresh list — nine toolchains, each with its own
-release and its own failure mode — collapses to one config and one
-command. If any of it doesn't hold for Fresh's actual asset names, or for
-a C dependency that won't build against musl, that is exactly the kind of
+release and its own failure mode — collapses to one config and one command
+(`lx publish`). If any of it doesn't hold for Fresh's actual asset names, or
+for a C dependency that won't build against musl, that is exactly the kind of
 bug worth filing rather than working around.
 
 ## See also
