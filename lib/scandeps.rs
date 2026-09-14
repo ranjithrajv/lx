@@ -394,7 +394,9 @@ pub fn find_elf_files(dir: &Path) -> Result<Vec<PathBuf>> {
 
 /// Scan a directory for ELF binaries and compute runtime `depends:` from
 /// their `DT_NEEDED` sonames. Essential/libc sonames are skipped; remaining
-/// sonames are resolved to package names via the host's package manager.
+/// sonames are resolved to versioned relations via the host's dpkg
+/// `symbols`/`shlibs` databases when available, else to bare package names
+/// via the host's package manager.
 ///
 /// Returns `(depends_string, non_essential_sonames)` where:
 /// - `depends_string` is ready to use in a PackageConfig
@@ -405,32 +407,26 @@ pub fn compute_depends_from_dir(
     declared_depends: &str,
     musl: bool,
 ) -> (String, std::collections::BTreeSet<String>) {
-    let mut pkgs = std::collections::BTreeSet::new();
-    let mut all_sonames = std::collections::BTreeSet::new();
-
     let elfs = find_elf_files(dir).unwrap_or_default();
-    for elf in &elfs {
-        let bytes = match std::fs::read(elf) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let needed = lx_lib::elfdeps::needed_libraries(&bytes).unwrap_or_default();
-        for soname in needed {
-            all_sonames.insert(soname.clone());
-            if lx_lib::elfdeps::is_essential_libc_soname(&soname) {
-                continue;
-            }
-            if let Some(pkg) = pkg_owner(&soname) {
-                pkgs.insert(pkg.to_string());
+    let scan = lx_lib::shlibdeps::scan_elfs(&elfs);
+
+    // Prefer the dpkg symbols/shlibs databases (versioned, dpkg-shlibdeps
+    // parity); fall back per-soname to the host package-manager lookup.
+    let db = lx_lib::shlibdeps::ShlibsDb::host();
+    let res = lx_lib::shlibdeps::resolve(&scan.needs, db, None, &std::collections::BTreeSet::new());
+    let mut names = res.resolved_names;
+    let mut pkgs = res.relations;
+    for soname in &res.unresolved {
+        if let Some(pkg) = pkg_owner(soname) {
+            if names.insert(pkg.to_ascii_lowercase()) {
+                pkgs.push(pkg);
             }
         }
     }
+    pkgs.sort();
 
-    // Filter to non-essential sonames for comparison.
-    let non_essential: std::collections::BTreeSet<String> = all_sonames
-        .into_iter()
-        .filter(|s| !lx_lib::elfdeps::is_essential_libc_soname(s))
-        .collect();
+    // Non-essential sonames, for declared-vs-actual comparison.
+    let non_essential = scan.sonames;
 
     if pkgs.is_empty() {
         if musl {

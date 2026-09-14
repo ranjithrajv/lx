@@ -61,6 +61,9 @@ pub enum Commands {
     /// Scan a release binary's ELF shared-library dependencies (helps
     /// verify/fill in package.yaml's depends:)
     ScanDeps(crate::scandeps::ScanDepsArgs),
+    /// Resolve ELF libraries to versioned Debian `Depends` (dpkg-shlibdeps
+    /// parity: reads the dpkg symbols/shlibs databases)
+    Shlibdeps(crate::shlibdeps::ShlibdepsArgs),
     /// Show everything lx knows about one package (manifest + dpkg)
     Show(crate::show::ShowArgs),
     /// Reinstall the recorded version of an lx-managed package
@@ -130,6 +133,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::GoNative(args) => crate::go_native::run(args, cli.token.as_deref()),
         Commands::Index(args) => crate::index::run(args, cli.token.as_deref()),
         Commands::ScanDeps(args) => crate::scandeps::run(args, cli.token.as_deref()),
+        Commands::Shlibdeps(args) => crate::shlibdeps::run(args),
         Commands::JsonSchema(args) => crate::schema::run(args),
         Commands::Get(cmd) => match cmd {
             GetCommands::Install(a) => crate::install::run(a, cli.token.as_deref()),

@@ -65,6 +65,10 @@ pub struct InstallOpts {
     pub allow_unverified: bool,
     pub yes: bool,
     pub download_only: Option<PathBuf>,
+    /// Install missing host build dependencies before building from a recipe
+    /// (AUR `makedepends` + the build system's toolchain) via the host
+    /// package manager. Off by default.
+    pub install_build_deps: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +215,11 @@ pub struct InstallOptsCli {
     pub yes: bool,
     #[arg(long)]
     pub download_only: Option<PathBuf>,
+    /// When building from a recipe (AUR/LX community), install the missing
+    /// host build dependencies (AUR `makedepends` + the build system's
+    /// toolchain) via the host package manager before compiling.
+    #[arg(long)]
+    pub install_build_deps: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -362,6 +371,7 @@ fn run_install(opts: InstallOptsCli) -> Result<()> {
         allow_unverified: opts.allow_unverified,
         yes: opts.yes,
         download_only: opts.download_only,
+        install_build_deps: opts.install_build_deps,
     };
     for src in &sources {
         if src.info(&opts.package)?.is_some() {

@@ -146,7 +146,7 @@ pub fn generate_schema() -> serde_json::Value {
             "build_depends": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Host packages the source compile needs (caller/CI installs them; lx never apt-gets)"
+                "description": "Host packages the source compile needs, in host-distro names. Caller/CI installs them by default; `lx build --install-build-deps` installs the missing ones via the host package manager."
             },
             "cmake_flags": {
                 "type": "array",

@@ -19,8 +19,10 @@
 //!   cells; run lx once per native host here).
 //! - `build_depends_suites` / `build_apt_sources` are accepted for config
 //!   compat but not applied (container-only concepts); `build_depends`
-//!   names host packages the caller/CI must have installed — lx never
-//!   apt-gets on its own.
+//!   names host packages the caller/CI must have installed. With
+//!   `--install-build-deps`, lx installs the missing ones (plus the build
+//!   system's toolchain) via the host package manager first; without it,
+//!   lx never installs packages on its own.
 
 use anyhow::{bail, Context, Result};
 use std::collections::BTreeSet;
@@ -29,6 +31,7 @@ use std::process::Command;
 use std::time::Instant;
 
 use crate::build::BuildArgs;
+use crate::builddeps;
 use crate::config::PackageConfig;
 use crate::plugins::build_system::{self, BuildSystem};
 
@@ -97,22 +100,23 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         None // auto-detect after fetch
     };
 
-    // Toolchain + build-dep sanity before any download. For cmake, verify
-    // cmake + ninja are present; other build systems check their own tools
-    // after resolution (below).
-    if build_sys_name == Some("cmake") {
-        require_tool("cmake")?;
-        require_tool("ninja")?;
-    }
-    if !cfg.build_depends.is_empty() {
-        let missing = missing_host_packages(&cfg.build_depends);
-        if !missing.is_empty() {
-            bail!(
-                "missing host build dependencies: {} (install them, e.g. apt-get install -y {})",
-                missing.join(" "),
-                missing.join(" ")
-            );
+    // Toolchain + build-dep sanity before any download. For an explicitly
+    // configured build system, ensure (or report) its tools now; an
+    // auto-detected build system is handled after resolution (below).
+    if let Some(name) = build_sys_name {
+        if let Some(bs) = build_system::get_build_system(name) {
+            ensure_tool_deps(&args, &bs.required_tools())?;
         }
+    }
+    // Explicit host build dependencies (host-distro package names).
+    builddeps::ensure_build_deps(&cfg.build_depends, args.install_build_deps, args.dry_run)?;
+
+    if args.dry_run {
+        println!(
+            "dry run: would fetch {version} and compile for suites: {}",
+            suites.join(" ")
+        );
+        return Ok(());
     }
 
     // Fetch + extract the source tag.
@@ -151,7 +155,10 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         }
     };
 
-    // Build-system-specific tool checks.
+    // Build-system-specific tool checks: install/report the tool packages
+    // first (for an auto-detected build system), then verify each tool is
+    // actually on PATH.
+    ensure_tool_deps(&args, &build_sys.required_tools())?;
     for tool in build_sys.required_tools() {
         require_tool(tool)?;
     }
@@ -338,20 +345,15 @@ pub(crate) fn require_tool(name: &str) -> Result<()> {
     }
 }
 
-/// Host packages checked via `dpkg -s`; returns the missing subset.
-/// Non-dpkg hosts treat every entry as missing (explicit error beats a
-/// half-configured compile).
-fn missing_host_packages(deps: &[String]) -> Vec<String> {
-    deps.iter()
-        .filter(|d| {
-            Command::new("dpkg")
-                .args(["-s", d])
-                .output()
-                .map(|o| !o.status.success())
-                .unwrap_or(true)
-        })
-        .cloned()
-        .collect()
+/// Ensure (or report) the host packages providing a build system's tools.
+/// No-op when no recognised package manager is on `PATH` — the plain
+/// [`require_tool`] check below still catches a missing binary.
+fn ensure_tool_deps(args: &BuildArgs, tools: &[&str]) -> Result<()> {
+    let Some(pm) = builddeps::HostPm::detect() else {
+        return Ok(());
+    };
+    let deps = builddeps::resolve(&[], tools, pm);
+    builddeps::ensure_build_deps(&deps, args.install_build_deps, args.dry_run)
 }
 
 /// Download the source tag tarball, extract it, return the source dir.

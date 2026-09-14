@@ -536,8 +536,11 @@ pub struct PackageConfig {
     /// (e.g. `*-linux-musl*`) over glibc variants.
     #[serde(default)]
     pub musl: bool,
-    /// Extra host packages the compile needs (installed via the host
-    /// package manager by the caller/CI; lx itself never apt-gets).
+    /// Extra host packages the compile needs, in **host-distro package
+    /// names**. By default the caller/CI installs them and lx only reports
+    /// what is missing; with `lx build --install-build-deps` lx installs
+    /// the missing ones (plus the selected build system's toolchain) via the
+    /// host package manager first.
     #[serde(default)]
     pub build_depends: Vec<String>,
     /// Enable ERB-like templating for maintainer scripts (preinstall,

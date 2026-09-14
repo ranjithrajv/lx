@@ -376,6 +376,7 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
             artifact_cache_dir: None,
             verify: false,
             sandbox: false,
+            install_build_deps: opts.install_build_deps,
             sbom: false,
             cosign: false,
             cross_target: None,

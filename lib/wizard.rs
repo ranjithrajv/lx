@@ -307,6 +307,8 @@ fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
         license: Vec<String>,
         #[serde(default, rename = "Depends")]
         depends: Vec<String>,
+        #[serde(default, rename = "MakeDepends")]
+        make_depends: Vec<String>,
         #[serde(default, rename = "Maintainer")]
         maintainer: String,
     }
@@ -377,6 +379,12 @@ fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
         yaml.push_str(&format!(
             "# WARNING: Arch dependency names kept verbatim — map to Debian names:\ndepends: \"{}\"\n",
             m.depends.join(", ")
+        ));
+    }
+    if !m.make_depends.is_empty() {
+        yaml.push_str(&format!(
+            "# WARNING: Arch makedepends kept verbatim — map to host-distro names:\nbuild_depends: [{}]\n",
+            m.make_depends.join(", ")
         ));
     }
     if !m.maintainer.is_empty() {

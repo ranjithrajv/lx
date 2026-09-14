@@ -165,24 +165,8 @@ fn pkgbuild_to_yaml(package: &str, pkgbuild: &str) -> String {
     let pkgver = field("pkgver=");
     let url = field("url=");
     let license = field("license=");
-    let depends: Vec<String> = pkgbuild
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("depends=("))
-        .map(|s| {
-            s.split(&[')', '\'', '"'])
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(|v| {
-                    v.split_once(['>', '=', '<'])
-                        .map(|(n, _)| n)
-                        .unwrap_or(v)
-                        .trim()
-                })
-                .filter(|v| !v.is_empty())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
+    let depends = bash_array(pkgbuild, "depends");
+    let makedepends = bash_array(pkgbuild, "makedepends");
 
     let mut out = String::new();
     out.push_str(&format!(
@@ -208,8 +192,73 @@ fn pkgbuild_to_yaml(package: &str, pkgbuild: &str) -> String {
             depends.join(", ")
         ));
     }
+    if !makedepends.is_empty() {
+        out.push_str(&format!(
+            "# WARNING: Arch makedepends kept verbatim — map to host-distro names:\nbuild_depends: [{}]\n",
+            makedepends.join(", ")
+        ));
+    }
     out.push_str(
         "# This PKGBUILD compiles from source. Consider:\n#   build_mode: source\n#   build_system: cmake   # or: custom + build_commands/install_commands\n#   build_suites: [trixie, forky, sid]\n#   architectures: [<this-host-arch>]\n",
     );
     out
+}
+
+/// Extract a single-line bash array assignment (`name=(...)`) as a list,
+/// stripping quotes and any version constraint. Multi-line arrays are not
+/// handled — the simple form is the common case.
+fn bash_array(pkgbuild: &str, name: &str) -> Vec<String> {
+    let prefix = format!("{name}=(");
+    let Some(rest) = pkgbuild
+        .lines()
+        .find_map(|l| l.trim().strip_prefix(&prefix))
+    else {
+        return Vec::new();
+    };
+    rest.split(&[')', '\'', '"'])
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| {
+            v.split_once(['>', '=', '<'])
+                .map(|(n, _)| n)
+                .unwrap_or(v)
+                .trim()
+        })
+        .filter(|v| !v.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bash_array_strips_quotes_and_versions() {
+        let pkgbuild = "depends=('glibc' 'openssl>=3.0' \"zlib\")\n";
+        assert_eq!(
+            bash_array(pkgbuild, "depends"),
+            vec!["glibc", "openssl", "zlib"]
+        );
+        assert!(bash_array(pkgbuild, "makedepends").is_empty());
+    }
+
+    #[test]
+    fn pkgbuild_to_yaml_emits_makedepends_as_build_depends() {
+        let pkgbuild = "pkgver=1.2.3\nurl=https://example.com/x\nlicense=('MIT')\n\
+                        depends=('libfoo')\nmakedepends=('cmake' 'ninja' 'git')\n\nbuild() {\n  true\n}\n";
+        let yaml = pkgbuild_to_yaml("x", pkgbuild);
+        assert!(yaml.contains("depends: \"libfoo\""), "{yaml}");
+        assert!(
+            yaml.contains("build_depends: [cmake, ninja, git]"),
+            "{yaml}"
+        );
+        assert!(yaml.contains("version: \"1.2.3\""), "{yaml}");
+    }
+
+    #[test]
+    fn pkgbuild_to_yaml_omits_empty_makedepends() {
+        let yaml = pkgbuild_to_yaml("x", "pkgver=1.0\n");
+        assert!(!yaml.contains("build_depends"), "{yaml}");
+    }
 }

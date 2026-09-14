@@ -135,6 +135,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
 | `lx scan-deps [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
+| `lx shlibdeps <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
 | `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery |
 | `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org |
 | `lx update [package]` | Check installed packages against their latest release, no install |
@@ -251,6 +252,15 @@ out:
 - **`--sandbox`** (`build`, source mode only): run compile steps under
   `unshare -n` (no network, private mounts) when the kernel permits, else
   warn and run unsandboxed. Binary repacks ignore it — they execute nothing.
+- **`--install-build-deps`** (`build` source mode, and `index install` when
+  building from a recipe): install the missing host build dependencies —
+  `build_depends:` (host-distro names), an AUR package's `makedepends`, and
+  the selected build system's toolchain (`cmake`, `ninja`, `cargo`, `go`,
+  `meson`, … mapped per host) — with the host package manager
+  (apt/dnf/zypper/pacman/apk/xbps) before compiling. Uses `sudo` unless
+  already root; `--dry-run --install-build-deps` prints the install command
+  instead of running it. Without the flag, `lx` only reports what's missing
+  and never installs anything.
 - Version/architecture/distribution resolution, checksum verification, and
   reproducible-build hygiene (below) are all shared machinery — see
   `--dry-run` to preview a build matrix without downloading or building
@@ -390,7 +400,10 @@ build_system: cmake           # cmake (default) | cargo | go | custom (omit = au
 musl: false                    # musl-static binary: no glibc dep, runs on any Linux
 upstream_url: ""              # tarball root; default: github <repo>/archive
 upstream_ref: ""              # tag to fetch; default: resolved version
-build_depends: []             # host packages the compile needs (CI preinstalls; lx never apt-gets)
+build_depends: []             # host packages the compile needs (host-distro names).
+                              # Default: caller/CI preinstalls; `lx build --install-build-deps`
+                              # installs the missing ones (plus the build system's toolchain)
+                              # via the host package manager.
 cmake_flags: []               # extra cmake configure flags
 prebuild_steps: []            # sh steps in the source dir after unpack, before configure
 build_commands: []            # custom build steps (build_system: custom)
@@ -602,9 +615,10 @@ known mappings and three-way Debian/RPM/Arch name conversion.
 **`lx init --from-aur <pkg>`** — convert an AUR PKGBUILD into a starter
 `package.yaml` (makedeb-orphan migration path). Guesses are commented for
 review: the `github_repo` guess (loud `FIXME` when the AUR URL isn't
-GitHub), Arch dependency names kept verbatim for Debian mapping, and
-`build()` presence mapped to `build_mode: source` hints. Recipes are never
-executed — PKGBUILD shell becomes comments, not code.
+GitHub), Arch dependency names kept verbatim for Debian mapping, AUR
+`makedepends` emitted as `build_depends:` (so `--install-build-deps` can
+install them), and `build()` presence mapped to `build_mode: source` hints.
+Recipes are never executed — PKGBUILD shell becomes comments, not code.
 
 **`lx repo <dir>`** — turn built `.deb`s into an apt-servable repository:
 `Packages` + `Packages.gz` (control fields read natively), `Release`

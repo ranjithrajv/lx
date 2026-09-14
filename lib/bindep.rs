@@ -3,15 +3,16 @@
 //! Binary dependency detection via ELF analysis and distro package lookup.
 //!
 //! After staging the install tree, scans for ELF binaries, reads their
-//! DT_NEEDED shared-library dependencies, and maps those sonames to system
-//! packages using the host distribution's package manager.
+//! DT_NEEDED shared-library dependencies, and maps those sonames to
+//! versioned system packages via the dpkg `symbols`/`shlibs` databases
+//! (dpkg-shlibdeps parity), falling back to the host distribution's
+//! package manager when no dpkg dependency information exists.
 //!
 //! This catches ACTUAL dependencies (what the binary links against) rather
 //! than guessing from registry metadata. It's the difference between
 //! "pillow probably needs libjpeg" and "this binary actually links libjpeg.so.8".
 
 use anyhow::{Context, Result};
-use std::collections::BTreeSet;
 use std::path::Path;
 
 /// Detect system dependencies for all ELF binaries in a staged install tree.
@@ -19,38 +20,36 @@ use std::path::Path;
 /// Returns a sorted, deduplicated list of system package names that the
 /// binaries in `root` link against.
 pub fn detect_binary_deps(root: &Path) -> Result<Vec<String>> {
+    detect_binary_deps_excluding(root, None)
+}
+
+/// Like [`detect_binary_deps`], but drops any relation on `exclude_pkg` — a
+/// package must never depend on itself.
+///
+/// Prefers versioned resolution via the host's dpkg `symbols`/`shlibs`
+/// databases (dpkg-shlibdeps parity). Sonames with no dpkg dependency
+/// information fall back to the package-manager lookup below, so rpm/pacman
+/// hosts and libraries without dpkg metadata behave exactly as before.
+pub fn detect_binary_deps_excluding(root: &Path, exclude_pkg: Option<&str>) -> Result<Vec<String>> {
     let elfs = find_elf_binaries(root)?;
-    let mut all_sonames = BTreeSet::new();
-
-    // Collect all sonames from all ELF binaries.
-    for elf_path in &elfs {
-        let bytes = match std::fs::read(elf_path) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let needed = lx_lib::elfdeps::needed_libraries(&bytes).unwrap_or_default();
-        for soname in needed {
-            // Skip essential libc sonames (always present).
-            if lx_lib::elfdeps::is_essential_libc_soname(&soname) {
-                continue;
-            }
-            all_sonames.insert(soname);
-        }
-    }
-
-    if all_sonames.is_empty() {
+    let scan = lx_lib::shlibdeps::scan_elfs(&elfs);
+    if scan.needs.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Map sonames to system packages.
-    let mut packages = BTreeSet::new();
-    for soname in &all_sonames {
+    let db = lx_lib::shlibdeps::ShlibsDb::host();
+    let res = lx_lib::shlibdeps::resolve(&scan.needs, db, exclude_pkg, &scan.provided);
+    let mut names = res.resolved_names;
+    let mut packages = res.relations;
+    for soname in &res.unresolved {
         if let Some(pkg) = lookup_soname_package(soname) {
-            packages.insert(pkg);
+            if names.insert(pkg.to_ascii_lowercase()) {
+                packages.push(pkg);
+            }
         }
     }
-
-    Ok(packages.into_iter().collect())
+    packages.sort();
+    Ok(packages)
 }
 
 /// Find all ELF binaries under `dir`.

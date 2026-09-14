@@ -234,6 +234,14 @@ pub struct BuildArgs {
     #[arg(long)]
     pub sandbox: bool,
 
+    /// build_mode: source only — install the missing host build
+    /// dependencies (`build_depends:` plus the build system's toolchain)
+    /// with the host package manager before compiling, instead of only
+    /// reporting them. Uses `sudo` unless already root; combine with
+    /// `--dry-run` to print the install command without running it.
+    #[arg(long)]
+    pub install_build_deps: bool,
+
     /// Emit supply-chain attestations into the output dir:
     /// `<pkg>_<ver>.spdx.json` (SPDX 2.3 SBOM) and `<pkg>_<ver>.slsa.json`
     /// (SLSA v1-style provenance over built artifacts + upstream materials).
@@ -1931,7 +1939,11 @@ fn build_one(
     // Detect binary dependencies from the binaries being packaged.
     // Done before staging so the format plugin can include them in metadata.
     let detected_deps = if args.bindep {
-        let deps = crate::bindep::detect_binary_deps(&binary_dir).unwrap_or_default();
+        let deps = crate::bindep::detect_binary_deps_excluding(
+            &binary_dir,
+            Some(&effective_cfg.package_name),
+        )
+        .unwrap_or_default();
         if !deps.is_empty() {
             println!("  detected binary deps: {}", deps.join(", "));
         }
