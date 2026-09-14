@@ -88,7 +88,10 @@ migrated (always confirms).
 Convert a built package from one format to another — not byte conversion
 (which loses metadata), but a native rebuild: reads control fields from the
 source, extracts the install tree, and rebuilds via the target format
-plugin. Maintainer scripts (pre/post-install) are carried over.
+plugin. Maintainer scripts (pre/post-install) are carried over, symlinks in
+the payload are preserved, and system-library dependency names are
+translated across distros (deb ↔ rpm ↔ arch) where the cross-distro table
+knows the name.
 
 ```sh
 lx convert foo_1.0_amd64.deb --to rpm        # deb → rpm
@@ -106,6 +109,12 @@ Overrides: `--package-name`, `--version`, `--arch`, `--distribution`,
 (auto-detected, see `lx info`). So `lx convert foo.rpm` on a Debian box
 produces a `.deb`, and `lx convert foo.deb` on an Arch box produces a
 `.pkg.tar.zst`.
+
+Verify gate: `--lint` runs the target format's checker on the converted
+artifact and fails on errors — `lintian` for deb, `rpm -K` for rpm,
+`namcap` for arch. The checker binary must be on `PATH` (run the gate on a
+host with the target format's tooling installed); pass
+`--lint-fail-on-warnings` to also fail on warnings.
 
 ### `lx info`
 

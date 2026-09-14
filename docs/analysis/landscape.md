@@ -266,6 +266,7 @@ are deliberately rated lower than the core:
 | Dimension | TRL | Rationale |
 |---|---|---|
 | deb/rpm/arch packagers | 6 | Verified against the reference tools and `lintian`; pre-release |
+| `lx convert` | 5 | Native rebuild across deb↔rpm↔arch; scripts/symlinks carried, system-library names translated via a curated cross-distro table, and an optional `--lint` gate (lintian / `rpm -K` / `namcap`) on the output; no field use yet |
 | apk/ipk packagers | 5 | Implemented and indexable; less reference-tool verification |
 | Consumer, Debian | 6 | The original path; exercised in tests and CI |
 | Consumer, rpm/arch | 5 | Format-aware client added recently; no field use yet |

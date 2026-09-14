@@ -52,6 +52,16 @@ pub struct ConvertArgs {
     /// Print what would be done without converting.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Run the target format's lint/verify gate on the converted package and
+    /// fail on errors: `lintian` for deb, `rpm -K` for rpm, `namcap` for arch.
+    /// The checker must be on PATH (a missing tool is an error).
+    #[arg(long)]
+    pub lint: bool,
+
+    /// Fail the --lint gate on warnings too.
+    #[arg(long, requires = "lint")]
+    pub lint_fail_on_warnings: bool,
 }
 
 /// Metadata extracted from a source package — enough to rebuild in any format.
@@ -194,7 +204,7 @@ pub fn run(args: ConvertArgs) -> Result<()> {
 
     // Map dependency syntax from source format to target format.
     let mut meta = convert_deps_syntax(meta, source_format, &target);
-    meta = convert_dep_names(meta, &ecosystem, &target);
+    meta = convert_dep_names(meta, &ecosystem, source_format, &target);
 
     // Apply overrides. Bind resolved values first so we don't partially
     // move `args` (which is borrowed later by `build_target`).
@@ -254,6 +264,38 @@ pub fn run(args: ConvertArgs) -> Result<()> {
         .with_context(|| format!("copying {} to {}", built.display(), final_path.display()))?;
 
     println!("✓ converted: {}", final_path.display());
+
+    // Optional target-format lint/verify gate: catch an artifact that is
+    // structurally wrong for the format it now claims to be.
+    if args.lint {
+        run_lint_gate(&target, &final_path, args.lint_fail_on_warnings)?;
+    }
+    Ok(())
+}
+
+/// Run the target format's checker and fail on errors (or warnings, when
+/// requested). Split out so the gating/printing stays beside the rest of the
+/// conversion output.
+fn run_lint_gate(format: &str, pkg: &Path, fail_on_warnings: bool) -> Result<()> {
+    let checker = crate::pkgverify::checker_for(format)
+        .ok_or_else(|| anyhow::anyhow!("no lint/verify gate for format '{format}'"))?;
+    println!("  ⚙ {checker} gate on {}", pkg.display());
+    let report = crate::pkgverify::run(format, pkg)?;
+    for line in &report.lines {
+        println!("    {line}");
+    }
+    println!(
+        "  {}: {} error(s), {} warning(s)",
+        report.checker, report.errors, report.warnings
+    );
+    if crate::pkgverify::should_fail(&report, fail_on_warnings) {
+        bail!(
+            "{checker} gate failed for {} ({} error(s), {} warning(s))",
+            pkg.display(),
+            report.errors,
+            report.warnings
+        );
+    }
     Ok(())
 }
 
@@ -1260,7 +1302,12 @@ fn scan_and_fill_deps(mut meta: SourceMeta, install_tree: &Path) -> Result<Sourc
 /// (rpm/arch) vs `nodejs`/`node-*` (deb) and `python3-*` vs `python-*`
 /// need mapping via `pkgname::conventional_name` heuristics + the
 /// `depmap` deb→rpm/arch tables. Unknown names pass through untouched.
-fn convert_dep_names(mut meta: SourceMeta, ecosystem: &str, target: &str) -> SourceMeta {
+fn convert_dep_names(
+    mut meta: SourceMeta,
+    ecosystem: &str,
+    source: &str,
+    target: &str,
+) -> SourceMeta {
     let eco = if ecosystem.is_empty() {
         infer_ecosystem_from_dep(&meta.depends)
     } else {
@@ -1271,7 +1318,7 @@ fn convert_dep_names(mut meta: SourceMeta, ecosystem: &str, target: &str) -> Sou
             .split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(|dep| map_dep_name(dep, &eco, target))
+            .map(|dep| map_dep_name(dep, &eco, source, target))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -1310,13 +1357,13 @@ fn infer_ecosystem_from_dep(depends: &str) -> String {
     }
 }
 
-fn map_dep_name(dep: &str, ecosystem: &str, target: &str) -> String {
+fn map_dep_name(dep: &str, ecosystem: &str, source: &str, target: &str) -> String {
     // Split `name (constraint)` / `name op ver` / bare name.
     let (name, constraint) = split_dep(dep);
     if name.is_empty() {
         return dep.to_string();
     }
-    let mapped = translate_name(&name, ecosystem, target);
+    let mapped = translate_name(&name, ecosystem, source, target);
     match constraint {
         Some(c) => match target {
             "deb" => format!("{mapped} ({c})"),
@@ -1357,8 +1404,10 @@ fn split_dep(dep: &str) -> (String, Option<String>) {
     }
 }
 
-/// Translate one bare package name into `target` conventions.
-fn translate_name(name: &str, ecosystem: &str, target: &str) -> String {
+/// Translate one bare package name into `target` conventions, knowing which
+/// format it came from (`source`) so system-library names can be translated in
+/// either direction.
+fn translate_name(name: &str, ecosystem: &str, source: &str, target: &str) -> String {
     let l = name.to_ascii_lowercase();
     // Interpreter runtimes.
     if l == "nodejs" || l == "node" || l == "node-js" {
@@ -1401,11 +1450,11 @@ fn translate_name(name: &str, ecosystem: &str, target: &str) -> String {
             }
         }
     }
-    // System-library names via depmap tables (deb→rpm/arch).
-    if target == "rpm" || target == "arch" {
-        if let Some(mapped) = depmap_lookup(name, target) {
-            return mapped;
-        }
+    // System-library names: translate across distro naming conventions in
+    // either direction via the shared cross-distro table. Unknown names pass
+    // through unchanged so we never invent a package name.
+    if let Some(mapped) = crate::distmap::translate(&l, source, target) {
+        return mapped;
     }
     name.to_string()
 }
@@ -1427,74 +1476,6 @@ fn strip_eco_prefix<'a>(name: &'a str, ecosystem: &str) -> &'a str {
         }
     }
     name
-}
-
-/// Look up deb→rpm/arch system-library translation via depmap's tables.
-fn depmap_lookup(name: &str, target: &str) -> Option<String> {
-    // depmap::map_dependency maps registry→system; here we need
-    // system→system. Reuse its deb→rpm/arch tables indirectly: probe each
-    // known deb name — small table, cheap.
-    const KNOWN_DEB: &[&str] = &[
-        "libssl3",
-        "libsqlite3-0",
-        "libpq5",
-        "libmariadb3",
-        "libcurl4",
-        "libgd3",
-        "libxml2",
-        "libvips",
-        "libcairo2",
-        "zlib1g",
-        "libffi8",
-        "libgit2-1.7",
-        "libicu74",
-        "libnss3",
-        "libsodium23",
-        "libgrpc++1",
-        "libonig5",
-        "libzip4",
-        "libopenblas0",
-        "libargon2-1",
-        "libmagickwand-6.q16-6",
-        "libsass",
-        "libyaml-0-2",
-    ];
-    // Reverse direction: if `name` is already an rpm/arch name, keep it.
-    // Only translate exact deb-name hits.
-    for deb in KNOWN_DEB {
-        if name.eq_ignore_ascii_case(deb) {
-            // Reuse depmap by mapping a sentinel registry dep is awkward;
-            // duplicate the small table via map_dependency on known probes.
-            return Some(system_name_for(deb, target));
-        }
-    }
-    None
-}
-
-fn system_name_for(deb: &str, target: &str) -> String {
-    match (deb, target) {
-        ("libssl3", "rpm") => "openssl-libs".into(),
-        ("libssl3", _) => "openssl".into(),
-        ("libsqlite3-0", _) => "sqlite".into(),
-        ("libpq5", "rpm") => "postgresql-libs".into(),
-        ("libpq5", _) => "postgresql-libs".into(),
-        ("libmariadb3", "rpm") => "mariadb-connector-c".into(),
-        ("libmariadb3", _) => "mariadb-libs".into(),
-        ("libcurl4", "rpm") => "libcurl".into(),
-        ("libcurl4", _) => "curl".into(),
-        ("zlib1g", _) => "zlib".into(),
-        ("libffi8", _) => "libffi".into(),
-        ("libnss3", _) => "nss".into(),
-        ("libsodium23", _) => "libsodium".into(),
-        ("libicu74", "rpm") => "libicu".into(),
-        ("libicu74", _) => "icu".into(),
-        ("libzip4", _) => "libzip".into(),
-        ("libyaml-0-2", _) => "libyaml".into(),
-        ("libxml2", _) => "libxml2".into(),
-        ("libcairo2", _) => "cairo".into(),
-        ("libvips", _) => "vips".into(),
-        _ => deb.to_string(),
-    }
 }
 
 /// Convert dependency syntax from source format to target format.

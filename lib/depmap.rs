@@ -405,64 +405,16 @@ fn to_format(deb_name: &str, format: &str) -> String {
     }
 }
 
+/// Debian → RPM package name, via the shared cross-distro table
+/// ([`crate::distmap`]); unknown names pass through unchanged.
 fn deb_to_rpm_name(deb: &str) -> String {
-    match deb {
-        "libssl3" => "openssl-libs".to_string(),
-        "libsqlite3-0" => "sqlite".to_string(),
-        "libpq5" => "postgresql-libs".to_string(),
-        "libmariadb3" => "mariadb-connector-c".to_string(),
-        "libcurl4" => "libcurl".to_string(),
-        "libgd3" => "gd".to_string(),
-        "libxml2" => "libxml2".to_string(),
-        "libvips" => "vips".to_string(),
-        "libcairo2" => "cairo".to_string(),
-        "zlib1g" => "zlib".to_string(),
-        "libffi8" => "libffi".to_string(),
-        "libgit2-1.7" => "libgit2".to_string(),
-        "libicu74" => "libicu".to_string(),
-        "libnss3" => "nss".to_string(),
-        "libsodium23" => "libsodium".to_string(),
-        "libgrpc++1" => "grpc-cpp".to_string(),
-        "libonig5" => "oniguruma".to_string(),
-        "libzip4" => "libzip".to_string(),
-        "libopenblas0" => "openblas".to_string(),
-        "libargon2-1" => "libargon2".to_string(),
-        "libmagickwand-6.q16-6" => "ImageMagick-libs".to_string(),
-        "libsass" => "libsass".to_string(),
-        "libyaml-0-2" => "libyaml".to_string(),
-        "libbcrypt" => "libbcrypt".to_string(),
-        _ => deb.to_string(),
-    }
+    crate::distmap::translate(deb, "deb", "rpm").unwrap_or_else(|| deb.to_string())
 }
 
+/// Debian → Arch package name, via the shared cross-distro table
+/// ([`crate::distmap`]); unknown names pass through unchanged.
 fn deb_to_arch_name(deb: &str) -> String {
-    match deb {
-        "libssl3" => "openssl".to_string(),
-        "libsqlite3-0" => "sqlite".to_string(),
-        "libpq5" => "postgresql-libs".to_string(),
-        "libmariadb3" => "mariadb-libs".to_string(),
-        "libcurl4" => "curl".to_string(),
-        "libgd3" => "gd".to_string(),
-        "libxml2" => "libxml2".to_string(),
-        "libvips" => "vips".to_string(),
-        "libcairo2" => "cairo".to_string(),
-        "zlib1g" => "zlib".to_string(),
-        "libffi8" => "libffi".to_string(),
-        "libgit2-1.7" => "libgit2".to_string(),
-        "libicu74" => "icu".to_string(),
-        "libnss3" => "nss".to_string(),
-        "libsodium23" => "libsodium".to_string(),
-        "libgrpc++1" => "grpc".to_string(),
-        "libonig5" => "oniguruma".to_string(),
-        "libzip4" => "libzip".to_string(),
-        "libopenblas0" => "openblas".to_string(),
-        "libargon2-1" => "argon2".to_string(),
-        "libmagickwand-6.q16-6" => "imagemagick".to_string(),
-        "libsass" => "libsass".to_string(),
-        "libyaml-0-2" => "libyaml".to_string(),
-        "libbcrypt" => "bcrypt".to_string(),
-        _ => deb.to_string(),
-    }
+    crate::distmap::translate(deb, "deb", "arch").unwrap_or_else(|| deb.to_string())
 }
 
 // --- Dependency file readers ---

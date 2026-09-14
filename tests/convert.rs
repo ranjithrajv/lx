@@ -27,6 +27,8 @@ fn convert_deb_to_deb_is_noop_rejected() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     });
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -49,6 +51,8 @@ fn convert_deb_dry_run_reports_metadata() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: true,
+        lint: false,
+        lint_fail_on_warnings: false,
     })
     .unwrap_err(); // deb→deb is rejected even in dry-run
 }
@@ -66,6 +70,8 @@ fn convert_rejects_nonexistent_input() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     });
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("does not exist"));
@@ -86,6 +92,8 @@ fn convert_rejects_unknown_target_format() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     });
     assert!(result.is_err());
     assert!(result
@@ -151,6 +159,8 @@ fn convert_rpm_to_deb_in_process_carries_metadata() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     })
     .unwrap();
 
@@ -169,10 +179,11 @@ fn convert_rpm_to_deb_in_process_carries_metadata() {
         "epoch carried: {:?}",
         ctrl.get("Version")
     );
-    // Relation syntax rewritten RPM→deb, and non-Depends relations carried.
+    // Relation syntax rewritten RPM→deb, and the system library translated
+    // back to its Debian name (`glibc` → `libc6`).
     assert!(
-        ctrl.get("Depends").unwrap().contains("glibc (>= 2.17)"),
-        "dep syntax converted: {:?}",
+        ctrl.get("Depends").unwrap().contains("libc6 (>= 2.17)"),
+        "dep syntax + distro name converted: {:?}",
         ctrl.get("Depends")
     );
     assert!(ctrl.get("Recommends").unwrap().contains("bash"));
@@ -220,6 +231,8 @@ fn convert_deb_to_rpm_carries_trigger_conditions() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     })
     .unwrap();
 
@@ -260,6 +273,8 @@ fn convert_deb_to_rpm_carries_conffiles() {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     })
     .unwrap();
 
@@ -298,6 +313,8 @@ fn convert_to(input: &std::path::Path, to: &str, out: &std::path::Path) {
         distribution: None,
         build_version: "1".to_string(),
         dry_run: false,
+        lint: false,
+        lint_fail_on_warnings: false,
     })
     .unwrap_or_else(|e| panic!("convert {} -> {to} failed: {e:#}", input.display()));
 }
@@ -515,8 +532,8 @@ fn rpm_scripts_reach_deb_and_soname_requires_are_filtered() {
     let ctrl = lx_lib::repo::read_control(&deb).unwrap();
     let depends = ctrl.get("Depends").map(String::as_str).unwrap_or("");
     assert!(
-        depends.contains("glibc (>= 2.17)"),
-        "versioned require converted: {depends:?}"
+        depends.contains("libc6 (>= 2.17)"),
+        "versioned require converted + translated: {depends:?}"
     );
     assert!(
         !depends.contains(".so"),
@@ -665,5 +682,102 @@ fn convert_preserves_symlinks_in_both_directions() {
     assert_eq!(
         std::fs::read_link(&link2).unwrap().to_string_lossy(),
         "../bin/demo"
+    );
+}
+
+/// End-to-end: system-library names translate across distros through
+/// `lx convert`, not just Debian→rpm/arch but the reverse too.
+#[test]
+fn convert_translates_system_library_names_across_distros() {
+    use lx_lib::archarchive::{self, PackageRelations};
+    let dir = tempfile::tempdir().unwrap();
+
+    // rpm source depending on `glibc` + `openssl-libs`.
+    let rpmroot = dir.path().join("rpmroot");
+    std::fs::create_dir_all(rpmroot.join("usr/bin")).unwrap();
+    std::fs::write(rpmroot.join("usr/bin/dm"), b"payload").unwrap();
+    let rpm = dir.path().join("dm-1.0-1.el9.x86_64.rpm");
+    lx_lib::rpmarchive::build_with_options(
+        &rpmroot,
+        &lx_lib::rpmarchive::PackageMeta {
+            name: "dm",
+            version: "1.0",
+            release: "1",
+            summary: "hi",
+            description: "hi",
+            license: "MIT",
+            vendor: None,
+            packager: None,
+        },
+        "amd64",
+        0,
+        &rpm,
+        &lx_lib::rpmarchive::BuildOptions {
+            relations: lx_lib::rpmarchive::RpmRelations {
+                requires: vec![
+                    rpm::Dependency::any("glibc"),
+                    rpm::Dependency::any("openssl-libs"),
+                ],
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        &lx_lib::filemeta::FileMetaMap::new(),
+    )
+    .unwrap();
+
+    convert_to(&rpm, "deb", &dir.path().join("out"));
+    let deb = find_one(&dir.path().join("out"), "deb");
+    let ctrl = lx_lib::repo::read_control(&deb).unwrap();
+    let depends = ctrl.get("Depends").map(String::as_str).unwrap_or("");
+    assert!(
+        depends.contains("libc6") && depends.contains("libssl3"),
+        "rpm glibc/openssl-libs -> deb libc6/libssl3: {depends:?}"
+    );
+
+    convert_to(&rpm, "arch", &dir.path().join("out2"));
+    let arch = find_one(&dir.path().join("out2"), "zst");
+    let pkginfo = arch_pkginfo(&arch);
+    assert!(
+        pkginfo.contains("depend = glibc") && pkginfo.contains("depend = openssl"),
+        "rpm glibc/openssl-libs -> arch glibc/openssl: {pkginfo}"
+    );
+
+    // And the reverse: arch source -> deb.
+    let archroot = dir.path().join("archroot");
+    std::fs::create_dir_all(archroot.join("usr/bin")).unwrap();
+    std::fs::write(archroot.join("usr/bin/dm"), b"payload").unwrap();
+    let arch_src = dir.path().join("dm-1.0-1-x86_64.pkg.tar.zst");
+    archarchive::build_with_relations(
+        &archroot,
+        &lx_lib::archarchive::PackageMeta {
+            name: "dm",
+            version: "1.0",
+            release: "1",
+            description: "hi",
+            url: "https://example.com/dm",
+            license: "MIT",
+        },
+        &PackageRelations {
+            depends: &["glibc".to_string(), "openssl".to_string()],
+            ..Default::default()
+        },
+        None,
+        None,
+        "x86_64",
+        0,
+        &arch_src,
+        None,
+        &lx_lib::filemeta::FileMetaMap::new(),
+    )
+    .unwrap();
+
+    convert_to(&arch_src, "deb", &dir.path().join("out3"));
+    let deb2 = find_one(&dir.path().join("out3"), "deb");
+    let ctrl2 = lx_lib::repo::read_control(&deb2).unwrap();
+    let depends2 = ctrl2.get("Depends").map(String::as_str).unwrap_or("");
+    assert!(
+        depends2.contains("libc6") && depends2.contains("libssl3"),
+        "arch glibc/openssl -> deb libc6/libssl3: {depends2:?}"
     );
 }
