@@ -14,7 +14,6 @@ use clap::Args;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 #[derive(Debug, Clone, Args)]
 pub struct ConvertArgs {
