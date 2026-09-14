@@ -167,11 +167,8 @@ pub fn resolve_forge_token(source: &dyn ForgeSource, cli_token: Option<&str>) ->
                 return Some(t);
             }
         }
-        return cli_token.map(|s| s.to_string());
     }
-    cli_token
-        .map(|s| s.to_string())
-        .or_else(|| std::env::var("GITHUB_TOKEN").ok())
+    cli_token.map(str::to_string)
 }
 
 /// Parse any supported provider URL into `owner/repo`. Tries each plugin's
