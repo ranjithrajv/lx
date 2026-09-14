@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::{anyhow, Context, Result};
-use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::release::{Asset, Release, ReleaseMeta};
+use crate::gitea::GiteaReleaseRaw;
+use crate::release::{Release, ReleaseMeta};
 
 /// Forgejo API client – API compatible with Gitea.
 /// Uses `FORGEJO_*` env vars, falls back to `GITEA_*` for compat.
@@ -87,7 +87,7 @@ impl ForgejoClient {
                 crate::http::urlencode(tag)
             );
             let raw: GiteaReleaseRaw = self.get_json(&url)?;
-            Ok(Self::map_release(raw, &full))
+            Ok(crate::gitea::GiteaClient::map_release(raw, &full))
         })
     }
 
@@ -103,7 +103,7 @@ impl ForgejoClient {
                 .drain(..)
                 .next()
                 .ok_or_else(|| anyhow!("no releases found for {full} on Forgejo"))?;
-            Ok(Self::map_release(raw, &full))
+            Ok(crate::gitea::GiteaClient::map_release(raw, &full))
         })
     }
 
@@ -129,75 +129,12 @@ impl ForgejoClient {
             .collect())
     }
 
-    fn map_release(raw: GiteaReleaseRaw, repo: &str) -> Release {
-        let assets = raw
-            .assets
-            .into_iter()
-            .map(|a| Asset {
-                checksums: crate::github::digest_checksums(a.digest.as_deref()),
-                name: a.name,
-                size: a.size,
-                browser_download_url: a.browser_download_url,
-            })
-            .collect();
-
-        Release {
-            tag_name: raw.tag_name.clone(),
-            prerelease: raw.prerelease,
-            draft: raw.draft,
-            html_url: raw
-                .html_url
-                .unwrap_or_else(|| format!("{}/{}", repo, raw.tag_name)),
-            assets,
-            published_at: raw
-                .created_at
-                .as_deref()
-                .or(raw.published_at.as_deref())
-                .and_then(crate::release::parse_timestamp),
-            body: raw.body,
-        }
-    }
-
     fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>
     where
         T: serde::Serialize + serde::de::DeserializeOwned + Clone,
     {
         crate::cache::ApiCache::new(self.api_cache_dir.clone()).get_or_fetch(key, fetch)
     }
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct GiteaReleaseRaw {
-    tag_name: String,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    prerelease: bool,
-    #[serde(default)]
-    draft: bool,
-    #[serde(default)]
-    html_url: Option<String>,
-    #[serde(default)]
-    created_at: Option<String>,
-    #[serde(default)]
-    published_at: Option<String>,
-    #[serde(default)]
-    assets: Vec<GiteaAssetRaw>,
-    #[serde(default)]
-    body: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-struct GiteaAssetRaw {
-    #[serde(default)]
-    name: String,
-    #[serde(default)]
-    browser_download_url: String,
-    #[serde(default)]
-    size: Option<u64>,
-    /// Forgejo inline asset digest (`"sha256:<hex>"`), when present.
-    #[serde(default)]
-    digest: Option<String>,
 }
 
 /// Uniform construction for the `ForgeSource` glue (`ClientNew`).
