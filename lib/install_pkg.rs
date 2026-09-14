@@ -67,6 +67,7 @@ pub fn install_prebuilt(
         InstallFormat::Deb => install_deb(path)?,
         InstallFormat::Rpm => install_rpm(path)?,
         InstallFormat::Arch => install_arch(path)?,
+        InstallFormat::Apk => install_apk(path)?,
     }
     Ok(true)
 }
@@ -77,6 +78,7 @@ fn install_cmd(format: InstallFormat) -> &'static str {
         InstallFormat::Deb => "dpkg -i",
         InstallFormat::Rpm => "rpm -U",
         InstallFormat::Arch => "pacman -U",
+        InstallFormat::Apk => "apk add",
     }
 }
 
@@ -126,6 +128,21 @@ fn install_arch(path: &Path) -> Result<()> {
     Ok(())
 }
 
+fn install_apk(path: &Path) -> Result<()> {
+    // `--allow-untrusted`: a locally built .apk is not in a signed repository,
+    // the same way `dpkg -i`/`rpm -U` bypass repo signature checks.
+    let status = Command::new("sudo")
+        .args(["apk", "add", "--allow-untrusted"])
+        .arg(path)
+        .status()
+        .context("failed to run `sudo apk add`")?;
+    if !status.success() {
+        bail!("failed to install {}", path.display());
+    }
+    println!("✓ installed {}", path.display());
+    Ok(())
+}
+
 /// Detect the host's package architecture in a format-agnostic way.
 pub fn detect_arch(format: InstallFormat) -> Result<String> {
     match format {
@@ -152,6 +169,18 @@ pub fn detect_arch(format: InstallFormat) -> Result<String> {
         }
         InstallFormat::Arch => {
             // pacman has no direct arch query; use uname mapping below.
+        }
+        InstallFormat::Apk => {
+            let out = Command::new("apk")
+                .arg("--print-arch")
+                .output()
+                .context("failed to run `apk --print-arch`")?;
+            if out.status.success() {
+                let arch = String::from_utf8(out.stdout)?.trim().to_string();
+                if !arch.is_empty() {
+                    return Ok(arch);
+                }
+            }
         }
     }
     // Fallback: uname -m mapped to the format's arch naming.
@@ -191,6 +220,17 @@ fn map_arch(machine: &str, format: InstallFormat) -> String {
         InstallFormat::Arch => match machine {
             "x86_64" | "amd64" => "x86_64".to_string(),
             "aarch64" | "arm64" => "aarch64".to_string(),
+            other => other.to_string(),
+        },
+        InstallFormat::Apk => match machine {
+            "x86_64" | "amd64" => "x86_64".to_string(),
+            "aarch64" | "arm64" => "aarch64".to_string(),
+            "armv7l" | "armv7" => "armv7".to_string(),
+            "armv6l" => "armhf".to_string(),
+            "i686" | "i386" | "i586" => "x86".to_string(),
+            "ppc64le" | "ppc64el" => "ppc64le".to_string(),
+            "s390x" => "s390x".to_string(),
+            "riscv64" => "riscv64".to_string(),
             other => other.to_string(),
         },
     }

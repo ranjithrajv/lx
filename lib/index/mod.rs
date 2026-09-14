@@ -99,6 +99,7 @@ pub enum InstallFormat {
     Deb,
     Rpm,
     Arch,
+    Apk,
 }
 
 impl InstallFormat {
@@ -108,6 +109,7 @@ impl InstallFormat {
             InstallFormat::Deb => "deb",
             InstallFormat::Rpm => "rpm",
             InstallFormat::Arch => "arch",
+            InstallFormat::Apk => "apk",
         }
     }
 
@@ -117,26 +119,22 @@ impl InstallFormat {
             InstallFormat::Deb => "deb",
             InstallFormat::Rpm => "rpm",
             InstallFormat::Arch => "pkg.tar.zst",
+            InstallFormat::Apk => "apk",
         }
     }
 }
 
-/// Detect the host's native package format by probing for dpkg/rpm/pacman.
+/// Detect the host's native package format from its package manager, using the
+/// single [`HostPm`](crate::builddeps::HostPm) probe (so every caller agrees on
+/// what "the host's manager" is). Hosts with no recognized manager — and Void's
+/// `xbps`, which lx has no format for — fall back to `deb`.
 pub fn detect_host_format() -> InstallFormat {
-    if std::process::Command::new("dpkg")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        InstallFormat::Deb
-    } else if std::process::Command::new("rpm")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        InstallFormat::Rpm
-    } else {
-        InstallFormat::Arch
+    use crate::builddeps::HostPm;
+    match HostPm::detect() {
+        Some(HostPm::Dnf | HostPm::Zypper) => InstallFormat::Rpm,
+        Some(HostPm::Pacman) => InstallFormat::Arch,
+        Some(HostPm::Apk) => InstallFormat::Apk,
+        Some(HostPm::Apt) | Some(HostPm::Xbps) | None => InstallFormat::Deb,
     }
 }
 

@@ -59,6 +59,7 @@ pub fn host_dist(format: InstallFormat) -> Option<String> {
         InstallFormat::Deb => debs::detect_dist(),
         InstallFormat::Arch => Some("arch".to_string()),
         InstallFormat::Rpm => rpm_host_dist(),
+        InstallFormat::Apk => Some("alpine".to_string()),
     }
 }
 
@@ -104,7 +105,8 @@ pub fn parse_format(value: &str) -> Result<InstallFormat> {
         "deb" | "debian" | "dpkg" | "apt" => Ok(InstallFormat::Deb),
         "rpm" | "dnf" | "yum" | "zypper" => Ok(InstallFormat::Rpm),
         "arch" | "pacman" | "alpm" => Ok(InstallFormat::Arch),
-        other => bail!("unsupported --format '{other}' (expected deb, rpm, or arch)"),
+        "apk" | "apk-tools" | "alpine" => Ok(InstallFormat::Apk),
+        other => bail!("unsupported --format '{other}' (expected deb, rpm, arch, or apk)"),
     }
 }
 
@@ -167,6 +169,8 @@ pub fn resolve_asset<'a>(
             format!("{package}-"),
             format!("-{}.pkg.tar.zst", lx_lib::constants::to_pacman_arch(arch)),
         ),
+        // Alpine filenames are `{name}-{version}-r{rel}.apk` — no arch segment.
+        InstallFormat::Apk => (format!("{package}-"), ".apk".to_string()),
         InstallFormat::Deb => unreachable!("deb handled above"),
     };
 
@@ -214,6 +218,13 @@ pub fn installed_version(package: &str, format: InstallFormat) -> Option<String>
             let out = query_trim(Command::new("pacman").args(["-Q", package]))?;
             out.split_whitespace().nth(1).map(str::to_string)
         }
+        InstallFormat::Apk => {
+            // `apk info -v <pkg>` prints "<name>-<version>" for installed pkgs.
+            let out = query_trim(Command::new("apk").args(["info", "-v", package]))?;
+            let line = out.lines().next()?.trim();
+            let prefix = format!("{package}-");
+            Some(line.strip_prefix(&prefix).unwrap_or(line).to_string())
+        }
     }
 }
 
@@ -222,7 +233,9 @@ pub fn installed_version(package: &str, format: InstallFormat) -> Option<String>
 pub fn is_newer(installed: &str, candidate: &str, format: InstallFormat) -> Result<bool> {
     match format {
         InstallFormat::Deb => debs::is_newer(installed, candidate),
-        InstallFormat::Rpm | InstallFormat::Arch => {
+        // apk versions (`1.2.3-r4`) are EVR-shaped like RPM's, so the same
+        // comparator is a close-enough approximation.
+        InstallFormat::Rpm | InstallFormat::Arch | InstallFormat::Apk => {
             Ok(crate::versioncmp::rpm_evr_cmp(candidate, installed) == Ordering::Greater)
         }
     }
@@ -303,6 +316,15 @@ pub fn remove(package: &str, purge: bool, yes: bool, format: InstallFormat) -> R
             println!("✓ removed {package}");
             Ok(())
         }
+        InstallFormat::Apk => {
+            if !yes && !debs::confirm(&format!("Run `sudo apk del {package}`?"), false)? {
+                println!("Aborted; '{package}' left installed.");
+                return Ok(());
+            }
+            run_sudo(&["apk", "del", package])?;
+            println!("✓ removed {package}");
+            Ok(())
+        }
     }
 }
 
@@ -369,7 +391,19 @@ mod tests {
             parse_format("pacman").unwrap(),
             InstallFormat::Arch
         ));
+        assert!(matches!(parse_format("APK").unwrap(), InstallFormat::Apk));
+        assert!(matches!(
+            parse_format("alpine").unwrap(),
+            InstallFormat::Apk
+        ));
         assert!(parse_format("nonsense").is_err());
+    }
+
+    #[test]
+    fn install_format_names_and_extensions_cover_apk() {
+        assert_eq!(InstallFormat::Apk.name(), "apk");
+        assert_eq!(InstallFormat::Apk.extension(), "apk");
+        assert_eq!(host_dist(InstallFormat::Apk).as_deref(), Some("alpine"));
     }
 
     #[test]
