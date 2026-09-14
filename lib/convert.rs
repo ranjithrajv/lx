@@ -306,23 +306,7 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
     let maintainer = pkg.metadata.get_vendor().unwrap_or_default().to_string();
     let description = pkg.metadata.get_summary().unwrap_or_default().to_string();
 
-    let depends = pkg
-        .metadata
-        .get_requires()
-        .map(|deps| {
-            deps.iter()
-                .map(|d| d.name.as_str())
-                .filter(|n| {
-                    !n.is_empty()
-                        && !n.starts_with('/')
-                        && !n.starts_with("rpmlib(")
-                        && !n.starts_with("config(")
-                        && !n.starts_with("interpreter(")
-                })
-                .collect::<Vec<_>>()
-                .join(", ")
-        })
-        .unwrap_or_default();
+    let depends = format_rpm_requires(&pkg.metadata.get_requires().unwrap_or_default());
 
     let scripts = extract_rpm_scripts(&pkg);
 
@@ -336,6 +320,36 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         distribution: "el9".to_string(),
         scripts,
     })
+}
+
+/// Format RPM `Requires` the way the old `rpm -qp --queryformat '%{REQUIRES}'`
+/// call did — name plus any version constraint — skipping file/rpmlib/
+/// config/interpreter capabilities that have no cross-format meaning.
+fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
+    deps.iter()
+        .filter(|d| {
+            let n = d.name.as_str();
+            !n.is_empty()
+                && !n.starts_with('/')
+                && !n.starts_with("rpmlib(")
+                && !n.starts_with("config(")
+                && !n.starts_with("interpreter(")
+        })
+        .map(|d| {
+            if d.version.is_empty() {
+                return d.name.clone();
+            }
+            let op = match d.flags {
+                f if f.contains(rpm::DependencyFlags::GE) => ">=",
+                f if f.contains(rpm::DependencyFlags::LE) => "<=",
+                f if f.contains(rpm::DependencyFlags::GREATER) => ">",
+                f if f.contains(rpm::DependencyFlags::LESS) => "<",
+                _ => "=",
+            };
+            format!("{} {} {}", d.name, op, d.version)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Extract scriptlets from an RPM in-process via the `rpm` crate.
@@ -1279,6 +1293,18 @@ fn apply_scripts_to_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formats_rpm_requires_with_constraints() {
+        let deps = vec![
+            rpm::Dependency::any("bash"),
+            rpm::Dependency::greater_eq("glibc", "2.17"),
+            rpm::Dependency::less("zlib", "1.3"),
+            rpm::Dependency::any("/bin/sh"),
+            rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4"),
+        ];
+        assert_eq!(format_rpm_requires(&deps), "bash, glibc >= 2.17, zlib < 1.3");
+    }
 
     #[test]
     fn parse_arch_dep_bare_name() {
