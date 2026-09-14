@@ -26,6 +26,22 @@ pub struct InitArgs {
     /// PKGBUILD build() steps become prebuild_steps hints, not code).
     #[arg(long, value_name = "AUR_PKG")]
     pub from_aur: Option<String>,
+
+    /// Scaffold from a forge repo: auto-discover the release assets for
+    /// "owner/repo" and write a starter package.yaml (non-interactive; the
+    /// former `lx discover --full`, written to --output). Conflicts with
+    /// --template / --from-aur.
+    #[arg(long, value_name = "REPO", conflicts_with_all = ["template", "from_aur"])]
+    pub from: Option<String>,
+
+    /// With --from: version/tag to inspect (default: latest release).
+    #[arg(long, requires = "from")]
+    pub version: Option<String>,
+
+    /// With --from: source provider (github, gitlab, gitea, forgejo,
+    /// bitbucket, gerrit; default github).
+    #[arg(long, requires = "from")]
+    pub source: Option<String>,
 }
 
 /// Bundled starter configs, ported verbatim from
@@ -92,6 +108,16 @@ fn prompt_yes(question: &str, default: bool) -> bool {
 }
 
 pub fn run(args: InitArgs) -> Result<()> {
+    // --from: non-interactive scaffold by auto-discovering a repo's assets
+    // (the former `lx discover --full`, written to --output).
+    if let Some(repo) = &args.from {
+        return scaffold_from_discovery(
+            repo,
+            args.version.as_deref(),
+            args.source.as_deref(),
+            args.output,
+        );
+    }
     // --from-aur: convert an AUR PKGBUILD into a starter package.yaml.
     if let Some(name) = &args.from_aur {
         return import_from_aur(name, args.output);
@@ -301,6 +327,67 @@ pub fn run(args: InitArgs) -> Result<()> {
     println!(
         "\nWrote {} — run `lx validate {}` to check it.",
         output.display(),
+        output.display()
+    );
+    Ok(())
+}
+
+/// `lx init --from <owner/repo>` — write a starter package.yaml from a forge
+/// repo's latest (or pinned) release assets. The write half of the former
+/// `lx discover --full`; nothing is downloaded or built, only release
+/// metadata is read.
+fn scaffold_from_discovery(
+    repo: &str,
+    version: Option<&str>,
+    source: Option<&str>,
+    output: Option<PathBuf>,
+) -> Result<()> {
+    let source_name = source.unwrap_or("github").to_ascii_lowercase();
+    let forge = crate::plugins::forge::get_forge_source(&source_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unsupported source '{}' (expected one of: {})",
+            source_name,
+            crate::plugins::forge::forge_source_names().join(", ")
+        )
+    })?;
+
+    let release = match version {
+        Some(v) => forge.release_by_tag(repo, v, None, None)?,
+        None => forge.latest_release(repo, None, None)?,
+    };
+    let matched = crate::discovery::match_assets(&release);
+    if matched.is_empty() {
+        bail!(
+            "no assets matched any supported architecture. Available:\n  {}",
+            release
+                .assets
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+    }
+
+    let body = crate::discovery::render_config(repo, &source_name, &release, &matched);
+    let output =
+        output.unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME));
+    if output.exists() {
+        bail!(
+            "'{}' already exists; remove it or pass --output",
+            output.display()
+        );
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(&output, body)?;
+    println!(
+        "Wrote {} ({} architectures from {}) — run `lx validate {}` to check it.",
+        output.display(),
+        matched.len(),
+        release.tag_name,
         output.display()
     );
     Ok(())

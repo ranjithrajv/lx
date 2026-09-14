@@ -209,24 +209,36 @@ pub fn run(args: DiscoverArgs, token: Option<&str>) -> Result<()> {
 }
 
 fn print_config(repo: &str, source: &str, release: &Release, matched: &[ArchAsset]) {
-    println!("# Auto-discovered by lx discover from {}", release.html_url);
-    println!(
-        "package_name: {}",
+    print!("{}", render_config(repo, source, release, matched));
+}
+
+/// The starter `package.yaml` body for a discovered release, with a comment
+/// header. Shared by `lx discover` (prints it) and `lx init --from` (writes
+/// it to a file).
+pub fn render_config(repo: &str, source: &str, release: &Release, matched: &[ArchAsset]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "# Auto-discovered by lx from {}\n",
+        release.html_url
+    ));
+    out.push_str(&format!(
+        "package_name: {}\n",
         repo.split('/').next_back().unwrap_or(repo)
-    );
+    ));
     if source != "github" {
-        println!("source: {source}");
+        out.push_str(&format!("source: {source}\n"));
     }
-    println!("github_repo: {repo}");
-    println!(
-        "artifact_format: {}",
-        guess_format(&matched.first().unwrap().asset)
-    );
-    println!("architectures:");
+    out.push_str(&format!("github_repo: {repo}\n"));
+    out.push_str(&format!(
+        "artifact_format: {}\n",
+        guess_format(matched.first().map(|m| m.asset.as_str()).unwrap_or(""))
+    ));
+    out.push_str("architectures:\n");
     for m in matched {
-        println!("  {}:", m.arch);
-        println!("    release_pattern: \"{}\"", m.asset);
+        out.push_str(&format!("  {}:\n", m.arch));
+        out.push_str(&format!("    release_pattern: \"{}\"\n", m.asset));
     }
+    out
 }
 
 pub fn split_repo(repo: &str) -> Result<(&str, &str)> {

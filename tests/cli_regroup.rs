@@ -44,9 +44,24 @@ fn get_includes_rollback() {
 
 #[test]
 fn moved_names_still_work_as_hidden_shims() {
-    for name in ["scan-deps", "shlibdeps", "go-native", "reinstall"] {
+    for name in [
+        "scan-deps",
+        "shlibdeps",
+        "go-native",
+        "reinstall",
+        "discover",
+    ] {
         lx().args([name, "--help"]).assert().success();
     }
+}
+
+#[test]
+fn init_exposes_from_scaffold() {
+    lx().args(["init", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--from <REPO>"))
+        .stdout(predicate::str::contains("--from-aur"));
 }
 
 #[test]
@@ -61,5 +76,6 @@ fn top_level_help_does_not_advertise_moved_names() {
         // descriptions (e.g. "dpkg-shlibdeps parity") don't false-positive.
         .stdout(predicate::str::contains("  go-native").not())
         .stdout(predicate::str::contains("  scan-deps").not())
-        .stdout(predicate::str::contains("  shlibdeps").not());
+        .stdout(predicate::str::contains("  shlibdeps").not())
+        .stdout(predicate::str::contains("  discover").not());
 }

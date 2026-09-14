@@ -170,10 +170,12 @@ patterns:
 lx init
 ```
 
-Or start from one of the bundled debian-multiarch-builder templates:
+Or scaffold one non-interactively from a forge repo (auto-discovers the
+release assets) or a bundled debian-multiarch-builder template:
 
 ```sh
-lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
+lx init --from eza-community/eza    # discover + write a starter package.yaml
+lx init --template rust/eza         # or go/hugo, c/neovim, python/generic, …
 ```
 
 (An unknown name lists all of them; see [`templates/README.md`](templates/README.md).)
@@ -185,10 +187,9 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 | `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk), `--format all` builds every format, and `--format deb,rpm` builds each listed |
 | `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format. `--to` defaults to the host's native format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
-| `lx discover <owner/repo> [version]` | Auto-discover release-asset patterns and print a starter config |
 | `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
-| `lx init` | Interactively generate a `package.yaml`, with optional auto-discovery (`package_format` pre-filled from the host) |
+| `lx init` | Interactively generate a `package.yaml`; `--from <owner/repo>` scaffolds one non-interactively by auto-discovering release assets (`package_format` pre-filled from the host) |
 | `lx install <package>` | Fetch and install a pre-built `.deb` from the `latest-debs` GitHub org. `--reinstall` re-installs (an lx-managed package's recorded version) |
 | `lx update [package]` | Check installed packages against their latest release, no install |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
@@ -208,7 +209,7 @@ lx init --template rust/eza    # or go/hugo, c/neovim, python/generic, …
 Moved names keep working as hidden aliases so existing scripts don't break:
 `lx scan-deps` → `lx deps scan`, `lx shlibdeps` → `lx deps resolve`,
 `lx go-native` → `lx migrate native`, `lx reinstall` →
-`lx install --reinstall`.
+`lx install --reinstall`, `lx discover` → `lx init --from`.
 
 `lx get` is the consumer subcommand group —
 `install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`rollback`/`list`/`search`,

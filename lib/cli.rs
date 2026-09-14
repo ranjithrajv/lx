@@ -41,9 +41,8 @@ pub enum Commands {
     Convert(crate::convert::ConvertArgs),
     /// Validate a package.yaml config and check release availability (no build)
     Validate(crate::validate::ValidateArgs),
-    /// Auto-discover release patterns from a GitHub repo and print a config
-    Discover(crate::discovery::DiscoverArgs),
-    /// Interactively generate a package.yaml config
+    /// Interactively generate a package.yaml config (or scaffold from a
+    /// forge repo with `--from`, a template, or an AUR PKGBUILD)
     Init(crate::wizard::InitArgs),
     /// Fetch and install a pre-built native package (deb/rpm/arch).
     /// `--reinstall` re-installs (the recorded version for lx-managed packages)
@@ -99,6 +98,9 @@ pub enum Commands {
     /// (moved) use `lx install --reinstall`
     #[command(hide = true)]
     Reinstall(crate::reinstall::ReinstallArgs),
+    /// (moved) use `lx init --from`
+    #[command(hide = true)]
+    Discover(crate::discovery::DiscoverArgs),
 }
 
 /// `lx deps` — shared-library dependency tooling.
@@ -171,7 +173,6 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Publish(args) => crate::publish::run(args, cli.token.as_deref()),
         Commands::Convert(args) => crate::convert::run(args),
         Commands::Validate(args) => crate::validate::run(args, cli.token.as_deref()),
-        Commands::Discover(args) => crate::discovery::run(args, cli.token.as_deref()),
         Commands::Init(args) => crate::wizard::run(args),
         Commands::Install(args) => crate::install::run(args, cli.token.as_deref()),
         Commands::Update(args) => crate::update::run(args, cli.token.as_deref()),
@@ -210,6 +211,7 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::Shlibdeps(args) => crate::shlibdeps::run(args),
         Commands::GoNative(args) => crate::go_native::run(args, cli.token.as_deref()),
         Commands::Reinstall(args) => crate::reinstall::run(args, cli.token.as_deref()),
+        Commands::Discover(args) => crate::discovery::run(args, cli.token.as_deref()),
     }
 }
 

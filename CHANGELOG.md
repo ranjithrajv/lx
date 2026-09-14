@@ -14,6 +14,9 @@
   otherwise it forces a reinstall of the resolved version.
 - `lx json-schema` is renamed `lx schema` (aliases `json-schema`,
   `jsonschema`).
+- `lx discover <owner/repo>` is folded into `lx init --from <owner/repo>`,
+  which writes the discovered starter `package.yaml` (the old print-only
+  behavior is unchanged under the `lx discover` alias).
 - `lx get` gains `rollback`, matching the top-level consumer commands.
 - The old names keep working as hidden aliases, so existing scripts and
   `action.yml` are unaffected.
