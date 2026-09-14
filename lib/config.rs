@@ -5,6 +5,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Overlay each `Some` field of a format's overrides onto the resolved
+/// relations. One declaration per relation field, so adding a field cannot be
+/// forgotten in one of eight hand-written `if let`s.
+macro_rules! apply_relation_overrides {
+    ($r:ident, $o:ident, $($field:ident),+ $(,)?) => {
+        $(
+            if let Some(v) = &$o.$field {
+                $r.$field = v.clone();
+            }
+        )+
+    };
+}
+
 /// One entry of `contents:` — an extra file/dir/symlink layered into the
 /// staged install tree, mirroring nfpm's `contents: [{src, dst, type}]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -1637,30 +1650,10 @@ impl PackageConfig {
             predepends: self.predepends.clone(),
         };
         if let Some(o) = self.overrides.get(&format.trim().to_ascii_lowercase()) {
-            if let Some(v) = &o.depends {
-                r.depends = v.clone();
-            }
-            if let Some(v) = &o.recommends {
-                r.recommends = v.clone();
-            }
-            if let Some(v) = &o.suggests {
-                r.suggests = v.clone();
-            }
-            if let Some(v) = &o.conflicts {
-                r.conflicts = v.clone();
-            }
-            if let Some(v) = &o.replaces {
-                r.replaces = v.clone();
-            }
-            if let Some(v) = &o.provides {
-                r.provides = v.clone();
-            }
-            if let Some(v) = &o.breaks {
-                r.breaks = v.clone();
-            }
-            if let Some(v) = &o.predepends {
-                r.predepends = v.clone();
-            }
+            apply_relation_overrides!(
+                r, o, depends, recommends, suggests, conflicts, replaces, provides, breaks,
+                predepends
+            );
         }
         r
     }
