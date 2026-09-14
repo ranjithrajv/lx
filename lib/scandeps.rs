@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
+use crate::builddeps::HostPm;
 use crate::config::PackageConfig;
 use lx_lib::github::Asset;
 
@@ -615,29 +616,25 @@ pub enum PkgMgr {
 }
 
 /// Detect the host's package manager, if any.
+///
+/// Delegates to [`crate::builddeps::HostPm::detect`], which probes the
+/// *install* tools on `PATH` in priority order. Probing a query binary alone
+/// (the old behaviour here) mis-detected Arch hosts that happen to have the
+/// `dpkg` binary installed but no dpkg packages: `dpkg --version` succeeds
+/// anywhere the binary exists, so every query then went to empty dpkg.
 pub fn detect_pkg_mgr() -> Option<PkgMgr> {
-    if std::process::Command::new("dpkg")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        return Some(PkgMgr::Dpkg);
-    }
-    if std::process::Command::new("rpm")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        return Some(PkgMgr::Rpm);
-    }
-    if std::process::Command::new("pacman")
-        .arg("--version")
-        .output()
-        .is_ok()
-    {
-        return Some(PkgMgr::Pacman);
-    }
-    None
+    pkg_mgr_for(HostPm::detect())
+}
+
+/// Pure mapping from the host's install manager to a query backend. `None`
+/// for managers `scandeps` has no query path for (`apk`, `xbps`).
+fn pkg_mgr_for(pm: Option<HostPm>) -> Option<PkgMgr> {
+    Some(match pm? {
+        HostPm::Apt => PkgMgr::Dpkg,
+        HostPm::Dnf | HostPm::Zypper => PkgMgr::Rpm,
+        HostPm::Pacman => PkgMgr::Pacman,
+        HostPm::Apk | HostPm::Xbps => return None,
+    })
 }
 
 /// Cross-platform: installed version of a package, or None.
@@ -851,5 +848,22 @@ pub fn pkg_files(package: &str) -> Vec<String> {
                 .collect()
         }
         None => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pkg_mgr_for_maps_each_host_manager() {
+        assert_eq!(pkg_mgr_for(Some(HostPm::Apt)), Some(PkgMgr::Dpkg));
+        assert_eq!(pkg_mgr_for(Some(HostPm::Dnf)), Some(PkgMgr::Rpm));
+        assert_eq!(pkg_mgr_for(Some(HostPm::Zypper)), Some(PkgMgr::Rpm));
+        assert_eq!(pkg_mgr_for(Some(HostPm::Pacman)), Some(PkgMgr::Pacman));
+        // No query backend for these; must not fall back to a wrong one.
+        assert_eq!(pkg_mgr_for(Some(HostPm::Apk)), None);
+        assert_eq!(pkg_mgr_for(Some(HostPm::Xbps)), None);
+        assert_eq!(pkg_mgr_for(None), None);
     }
 }

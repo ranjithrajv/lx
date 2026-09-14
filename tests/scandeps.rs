@@ -66,12 +66,25 @@ fn pkg_owner_returns_none_for_nonsense_soname() {
 }
 
 #[test]
-fn detect_pkg_mgr_returns_a_known_variant() {
-    // This test host must have at least one of dpkg/rpm/pacman.
-    let mgr = detect_pkg_mgr();
+fn detect_pkg_mgr_agrees_with_hostpm_detection() {
+    // Regression: `detect_pkg_mgr` used to probe the `dpkg` binary alone, so
+    // an Arch host with a stray `dpkg` installed (but no dpkg packages) was
+    // mis-detected as dpkg, and every query returned nothing. It must now
+    // agree with `lx info`'s `HostPm::detect` (the install tool on PATH).
+    use lx_lib::builddeps::HostPm;
+
+    let expected = match HostPm::detect() {
+        Some(HostPm::Apt) => Some(PkgMgr::Dpkg),
+        Some(HostPm::Dnf) | Some(HostPm::Zypper) => Some(PkgMgr::Rpm),
+        Some(HostPm::Pacman) => Some(PkgMgr::Pacman),
+        Some(HostPm::Apk) | Some(HostPm::Xbps) | None => None,
+    };
+    assert_eq!(detect_pkg_mgr(), expected);
+
+    // This test host must have at least one queryable manager.
     assert!(
-        mgr.is_some(),
-        "expected at least one of dpkg, rpm, or pacman on PATH"
+        detect_pkg_mgr().is_some(),
+        "expected dpkg, rpm, or pacman to be the detected host manager"
     );
 }
 
