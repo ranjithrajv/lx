@@ -209,6 +209,44 @@ fn predepends_fold_into_requires_with_prereq_flag() {
     assert!(dep.flags.contains(rpm::DependencyFlags::PREREQ));
 }
 
+/// `depends:`/`conflicts:` in package.yaml use Debian relation syntax; the rpm
+/// builder must translate the constraints, not store the whole clause as the
+/// dependency name.
+#[test]
+fn deb_style_relation_strings_parse_with_constraints() {
+    let rel = parse_rpm_relations(
+        "libc6 (>= 2.36), libssl3 | libssl1.1, bash",
+        "bash-completion",
+        "docs",
+        "old-pkg (<< 2.0)",
+        "legacy-pkg",
+        "virtual-pkg",
+        "",
+        "dpkg (>= 1.19)",
+    );
+
+    let libc = rel.requires.iter().find(|d| d.name == "libc6").unwrap();
+    assert!(libc.flags.contains(rpm::DependencyFlags::GREATER));
+    assert!(libc.flags.contains(rpm::DependencyFlags::EQUAL));
+    assert_eq!(libc.version, "2.36");
+
+    // Debian alternatives keep the first clause only.
+    assert!(rel.requires.iter().any(|d| d.name == "libssl3"));
+    assert!(!rel.requires.iter().any(|d| d.name == "libssl1.1"));
+
+    // Pre-Depends parse AND fold in the PREREQ flag.
+    let dpkg = rel.requires.iter().find(|d| d.name == "dpkg").unwrap();
+    assert!(dpkg.flags.contains(rpm::DependencyFlags::PREREQ));
+    assert_eq!(dpkg.version, "1.19");
+
+    let conflict = rel.conflicts.iter().find(|d| d.name == "old-pkg").unwrap();
+    assert!(conflict.flags.contains(rpm::DependencyFlags::LESS));
+    assert_eq!(conflict.version, "2.0");
+
+    assert!(rel.provides.iter().any(|d| d.name == "virtual-pkg"));
+    assert!(rel.obsoletes.iter().any(|d| d.name == "legacy-pkg"));
+}
+
 #[test]
 fn config_files_get_config_flags() {
     let root = tempfile::tempdir().unwrap();

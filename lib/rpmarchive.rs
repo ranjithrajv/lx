@@ -104,7 +104,7 @@ pub fn parse_rpm_relations(
         s.split(',')
             .map(str::trim)
             .filter(|s| !s.is_empty())
-            .map(rpm::Dependency::any)
+            .map(parse_rpm_relation)
             .collect()
     }
 
@@ -114,16 +114,17 @@ pub fn parse_rpm_relations(
 
     let mut requires = parse_list(depends);
     // Pre-Depends → Requires with the legacy PREREQ flag.
-    for name in predepends
+    for clause in predepends
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        if !requires.iter().any(|d| d.name == name) {
+        let dep = parse_rpm_relation(clause);
+        if !requires.iter().any(|d| d.name == dep.name) {
             requires.push(rpm::Dependency {
-                name: name.to_string(),
-                flags: rpm::DependencyFlags::PREREQ,
-                version: String::new(),
+                name: dep.name,
+                flags: dep.flags | rpm::DependencyFlags::PREREQ,
+                version: dep.version,
             });
         }
     }
@@ -135,6 +136,62 @@ pub fn parse_rpm_relations(
         conflicts,
         obsoletes: parse_list(replaces),
         provides: parse_list(provides),
+    }
+}
+
+/// Parse one relation clause into an [`rpm::Dependency`], accepting Debian
+/// (`name (>= 1.2)`), RPM (`name >= 1.2`) and pacman (`name>=1.2`) spellings.
+///
+/// Previously every clause was passed to `rpm::Dependency::any`, so a
+/// deb-style `depends: libc6 (>= 2.36)` became a requirement literally named
+/// `libc6 (>= 2.36)` — with no version and no flags.
+fn parse_rpm_relation(clause: &str) -> rpm::Dependency {
+    // Debian alternatives (`a | b`) have no RPM equivalent; keep the first.
+    let clause = clause.split('|').next().unwrap_or(clause).trim();
+    if let Some(idx) = clause.find('(') {
+        let name = clause[..idx].trim();
+        let inner = clause[idx..]
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim();
+        if let Some((op, version)) = split_relation_op(inner) {
+            return relation_dependency(name, op, version);
+        }
+        return rpm::Dependency::any(name);
+    }
+    // RPM / pacman form: `name op version`, spaces optional. Debian's strict
+    // operators `<<`/`>>` are accepted too.
+    for op in [">=", "<=", ">>", "<<", ">", "<", "="] {
+        if let Some(idx) = clause.find(op) {
+            let name = clause[..idx].trim();
+            let version = clause[idx + op.len()..].trim();
+            return relation_dependency(name, op, version);
+        }
+    }
+    rpm::Dependency::any(clause)
+}
+
+/// Split a constraint body (`>= 1.2`, `<< 2.0`) into its operator and version.
+fn split_relation_op(s: &str) -> Option<(&'static str, &str)> {
+    for op in [">=", "<=", ">>", "<<", ">", "<", "="] {
+        if let Some(rest) = s.strip_prefix(op) {
+            return Some((op, rest.trim()));
+        }
+    }
+    None
+}
+
+fn relation_dependency(name: &str, op: &str, version: &str) -> rpm::Dependency {
+    if name.is_empty() {
+        return rpm::Dependency::any(name);
+    }
+    match op {
+        ">=" => rpm::Dependency::greater_eq(name, version),
+        "<=" => rpm::Dependency::less_eq(name, version),
+        ">" | ">>" => rpm::Dependency::greater(name, version),
+        "<" | "<<" => rpm::Dependency::less(name, version),
+        "=" => rpm::Dependency::eq(name, version),
+        _ => rpm::Dependency::any(name),
     }
 }
 

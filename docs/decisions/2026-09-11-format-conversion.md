@@ -17,10 +17,12 @@ lx convert ./foo-1.0-arch-x86_64.pkg.tar.zst --to deb
 ```
 
 How it works (not byte conversion — native rebuild):
-1. **Extract metadata** from the source package (control fields for `.deb`,
-   `rpm -qp --queryformat` for `.rpm`, `.PKGINFO` for `.pkg.tar.zst`).
-2. **Extract the install tree** (data.tar for `.deb`, rpm2cpio+cpio for
-   `.rpm`, zstd+tar for `.pkg.tar.zst`).
+1. **Extract metadata** from the source package (control fields + the
+   `conffiles`/`triggers` control members for `.deb`, the in-process `rpm`
+   crate for `.rpm`, `.PKGINFO` + `.INSTALL` for `.pkg.tar.zst`).
+2. **Extract the install tree** (data.tar for `.deb`, in-process rpm payload
+   extraction for `.rpm`, zstd+tar for `.pkg.tar.zst`), skipping each format's
+   control members (rpm headers, arch `.PKGINFO`/`.MTREE`/`.INSTALL`).
 3. **Rebuild natively** via the target format plugin (`deb`/`rpm`/`arch`),
    reusing the same `BuildContext` pipeline as `lx build`.
 
@@ -35,14 +37,21 @@ All metadata fields can be overridden via CLI flags:
 
 ## Known limitations
 
-- **rpm source** requires `rpm` and `rpm2cpio` binaries on PATH (no native
-  Rust RPM reader for arbitrary packages).
+- **rpm source/target** is read and written entirely in-process via the `rpm`
+  crate — no `rpm`/`rpm2cpio` binaries required.
 - **arch source** requires `zstd` crate (already a dependency).
-- Scriptlets (pre/post-install) from the source are **not** carried over —
-  the converted package has no maintainer scripts. This matches fpm's
-  behavior for cross-format conversion.
-- Dependencies are carried over verbatim; distro-specific naming differences
-  (e.g. `libatomic1` vs `libatomic`) are not auto-translated.
+- Symlinks in the payload are recreated as symlinks (previously they aborted
+  conversion when dangling/absolute, or were flattened into full copies).
+- Maintainer scripts **are** carried over (deb `preinst`/`postinst`/`prerm`/
+  `postrm`, rpm `%pre`/`%post`/`%preun`/`%postun`/`%pretrans`/`%posttrans`/
+  `%verify`, arch `.INSTALL` hooks), mapped onto the target's own names. Arch
+  can only express pre/post-upgrade hooks, so install/remove hooks are
+  best-effort there.
+- Dependencies are carried over and their syntax is rewritten per target;
+  distro-specific naming differences (e.g. `libatomic1` vs `libatomic`, or
+  `libc6` vs `glibc`) are not fully auto-translated. Auto-generated rpm
+  soname/capability requires are dropped rather than emitted as invalid
+  target names.
 
 ## Files changed
 

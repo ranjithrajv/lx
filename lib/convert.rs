@@ -131,17 +131,26 @@ pub fn run(args: ConvertArgs) -> Result<()> {
         );
     }
 
-    // Detect source format from extension.
+    // Detect source format from the file name. Requiring the full
+    // `.pkg.tar.zst`/`.zstd` suffix avoids misclassifying e.g. a
+    // `.pkg.tar.xz` as a zstd arch package.
+    let input_name = args
+        .input
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let input_ext = args
         .input
         .extension()
         .and_then(|e| e.to_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_ascii_lowercase();
     let source_format = if input_ext == "deb" {
         "deb"
     } else if input_ext == "rpm" {
         "rpm"
-    } else if input_ext == "zst" || args.input.to_string_lossy().contains(".pkg.tar") {
+    } else if input_name.ends_with(".pkg.tar.zst") || input_name.ends_with(".pkg.tar.zstd") {
         "arch"
     } else {
         bail!(
@@ -270,8 +279,16 @@ fn extract_meta(format: &str, input: &Path, tmp: &Path) -> Result<SourceMeta> {
 fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
     let ctrl = crate::repo::read_control(input)?;
     let get = |k: &str| ctrl.get(k).cloned().unwrap_or_default();
-    let scripts = extract_deb_scripts(input, tmp)?;
+    let mut scripts = extract_deb_scripts(input, tmp)?;
     let triggers = parse_deb_triggers(scripts.get("triggers").map(String::as_str).unwrap_or(""));
+    // Standard debs carry conffiles in the `DEBIAN/conffiles` control member,
+    // not the control field; prefer the member, fall back to the field.
+    let member_conffiles = scripts.remove("conffiles").unwrap_or_default();
+    let conffiles = if member_conffiles.trim().is_empty() {
+        parse_deb_conffiles(&get("Conffiles"))
+    } else {
+        parse_deb_conffiles(&member_conffiles)
+    };
     let (epoch, version) = split_deb_epoch(&get("Version"));
     Ok(SourceMeta {
         package: get("Package"),
@@ -292,7 +309,7 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
         epoch,
         distribution: infer_dist_from_version(&version),
         scripts,
-        conffiles: parse_deb_conffiles(&get("Conffiles")),
+        conffiles,
         triggers,
     })
 }
@@ -377,7 +394,7 @@ fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, Str
                 .to_string();
             match fname.as_str() {
                 "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates"
-                | "triggers" => {
+                | "triggers" | "conffiles" => {
                     let mut s = String::new();
                     std::io::Read::read_to_string(&mut member, &mut s)?;
                     scripts.insert(fname, s);
@@ -470,6 +487,12 @@ fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
                 && !n.starts_with("config(")
                 && !n.starts_with("interpreter(")
                 && rpm_trigger_kind(d.flags).is_none()
+                // Auto-generated soname / capability requires
+                // (`libc.so.6()(64bit)`, `rtld(GNU_HASH)`, ...) are not valid
+                // target package names — mirror the Provides filter.
+                && !n.contains('(')
+                && !n.contains(')')
+                && !n.contains(".so")
         })
         .map(format_rpm_dependency)
         .collect::<Vec<_>>()
@@ -567,6 +590,7 @@ fn parse_deb_triggers(text: &str) -> Vec<Trigger> {
 /// scriptlet), so the mapping is best-effort by design.
 fn apply_triggers_to_config(
     config: &mut crate::config::PackageConfig,
+    script_bodies: &mut BTreeMap<&'static str, String>,
     triggers: &[Trigger],
     target: &str,
 ) {
@@ -585,7 +609,8 @@ fn apply_triggers_to_config(
                         t.name
                     );
                 } else {
-                    append_triggered_handler(&mut config.scripts.postinstall, &t.name, &t.script);
+                    let postinst = script_bodies.entry("postinstall").or_default();
+                    append_triggered_handler(postinst, &t.name, &t.script);
                 }
             }
             "deb" if kind.starts_with("trigger") => {
@@ -761,21 +786,32 @@ fn extract_rpm_scripts(pkg: &rpm::Package) -> BTreeMap<String, String> {
 }
 
 fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
-    // Extract .PKGINFO from the zstd-compressed tar.
+    // Extract `.PKGINFO` and `.INSTALL` from the zstd-compressed tar.
     let data = fs::read(input)?;
     let decompressed = zstd::bulk::decompress(&data, 64 * 1024 * 1024)
         .context("zstd decompress failed for .pkg.tar.zst")?;
     let mut archive = tar::Archive::new(decompressed.as_slice());
     let mut pkginfo = String::new();
+    let mut install = String::new();
     for entry in archive.entries().context("reading arch archive")? {
         let mut entry = entry?;
-        let path = entry.path()?;
-        if path.file_name().and_then(|n| n.to_str()) == Some(".PKGINFO") {
-            std::io::Read::read_to_string(&mut entry, &mut pkginfo)?;
-            break;
+        let name = entry
+            .path()?
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        match name.as_str() {
+            ".PKGINFO" => {
+                std::io::Read::read_to_string(&mut entry, &mut pkginfo)?;
+            }
+            ".INSTALL" => {
+                std::io::Read::read_to_string(&mut entry, &mut install)?;
+            }
+            _ => {}
         }
     }
-    // `.PKGINFO` keys can repeat (`depend`, `provides`, `conflicts`, ...), so
+    // `.PKGINFO` keys can repeat (`depend`, `provides`, `conflict`, ...), so
     // collect every value per key instead of last-wins.
     let mut fields: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for line in pkginfo.lines() {
@@ -806,23 +842,110 @@ fn extract_arch_meta(input: &Path, _tmp: &Path) -> Result<SourceMeta> {
                 .join(", ")
         })
         .unwrap_or_default();
+    // pacman folds an epoch into `pkgver` (`2:1.0-3`); split it back out so
+    // the target format's own epoch field/prefix is used (and the epoch stays
+    // out of artifact filenames).
+    let (epoch, version) = split_arch_epoch(&get("pkgver"));
     Ok(SourceMeta {
         package: get("pkgname"),
-        version: get("pkgver"),
+        version,
         arch: get("arch"),
         maintainer: get("packager"),
         description: get("pkgdesc"),
         depends: join("depend"),
         recommends,
-        conflicts: join("conflicts"),
+        // pacman's PKGINFO key is the singular `conflict`.
+        conflicts: join("conflict"),
         replaces: join("replaces"),
         provides: join("provides"),
-        epoch: get("epoch"),
+        epoch,
         distribution: "arch".to_string(),
-        scripts: BTreeMap::new(),
+        scripts: parse_arch_install(&install),
         conffiles: arch_conffiles(&fields),
         ..Default::default()
     })
+}
+
+/// Split a pacman `pkgver` (`[epoch:]version-release`) into its epoch and the
+/// epoch-free remainder. A non-numeric prefix (not an epoch) is left intact.
+fn split_arch_epoch(pkgver: &str) -> (String, String) {
+    match pkgver.split_once(':') {
+        Some((epoch, rest)) if !epoch.is_empty() && epoch.chars().all(|c| c.is_ascii_digit()) => {
+            (epoch.to_string(), rest.to_string())
+        }
+        _ => (String::new(), pkgver.to_string()),
+    }
+}
+
+/// Parse pacman `.INSTALL` shell functions into [`SourceMeta::scripts`] keys,
+/// using the canonical names `map_scripts_to_bodies` maps from.
+fn parse_arch_install(text: &str) -> BTreeMap<String, String> {
+    const HOOKS: [(&str, &str); 6] = [
+        ("pre_install", "preinst"),
+        ("post_install", "postinst"),
+        ("pre_remove", "prerm"),
+        ("post_remove", "postrm"),
+        ("pre_upgrade", "preupgrade"),
+        ("post_upgrade", "postupgrade"),
+    ];
+    let mut scripts = BTreeMap::new();
+    for (func, key) in HOOKS {
+        if let Some(body) = extract_shell_function(text, func) {
+            if !body.trim().is_empty() {
+                scripts.insert(key.to_string(), body);
+            }
+        }
+    }
+    scripts
+}
+
+/// Extract the body of a shell function `name() { ... }` by brace matching.
+fn extract_shell_function(text: &str, name: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let needle = name.as_bytes();
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        let rel = bytes[i..].windows(needle.len()).position(|w| w == needle)?;
+        let start = i + rel;
+        // Must be a standalone token (not `foo_pre_install`).
+        let before_ok = start == 0 || !is_ident_byte(bytes[start - 1]);
+        if before_ok {
+            let mut j = start + needle.len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if bytes[j..].starts_with(b"()") {
+                j += 2;
+                while j < bytes.len() && bytes[j] != b'{' {
+                    j += 1;
+                }
+                if j < bytes.len() {
+                    let open = j;
+                    let mut depth = 0i32;
+                    for k in open..bytes.len() {
+                        match bytes[k] {
+                            b'{' => depth += 1,
+                            b'}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    return Some(
+                                        String::from_utf8_lossy(&bytes[open + 1..k]).to_string(),
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        i = start + needle.len();
+    }
+    None
+}
+
+fn is_ident_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// Detect the interpreter ecosystem from install-tree layout + package name.
@@ -1433,8 +1556,9 @@ fn map_dep_syntax(dep: &str, source: &str, target: &str) -> String {
             Some(c) => format!("{name} {c}"),
             None => name,
         },
+        // pacman syntax has no spaces around the operator: `name>=1.0`.
         "arch" => match constraint {
-            Some(c) => format!("{name}{c}"),
+            Some(c) => format!("{name}{}", c.replace(' ', "")),
             None => name,
         },
         _ => dep.to_string(),
@@ -1443,12 +1567,19 @@ fn map_dep_syntax(dep: &str, source: &str, target: &str) -> String {
 
 /// Parse an Arch-style dep: `name>=1.0`, `name>1.0`, `name=1.0`, or bare `name`.
 fn parse_arch_dep(dep: &str) -> (String, Option<String>) {
-    // Split on the first comparison operator.
+    // Split on the first comparison operator (longest first) and normalize
+    // the constraint to `op version`, matching `parse_deb_dep`/`parse_rpm_dep`
+    // so every target formats it correctly.
     for op in &[">=", "<=", ">", "<", "="] {
         if let Some(idx) = dep.find(op) {
             let name = dep[..idx].trim().to_string();
-            let ver = dep[idx..].trim().to_string();
-            return (name, Some(ver));
+            let ver = dep[idx + op.len()..].trim();
+            let constraint = if ver.is_empty() {
+                (*op).to_string()
+            } else {
+                format!("{op} {ver}")
+            };
+            return (name, Some(constraint));
         }
     }
     (dep.trim().to_string(), None)
@@ -1530,11 +1661,9 @@ fn extract_install_tree(format: &str, input: &Path, dest: &Path) -> Result<()> {
             crate::rpmarchive::extract(input, dest)?;
         }
         "arch" => {
-            let data = fs::read(input)?;
-            let decompressed = zstd::bulk::decompress(&data, 64 * 1024 * 1024)
-                .context("zstd decompress failed")?;
-            let mut archive = tar::Archive::new(decompressed.as_slice());
-            archive.unpack(dest).context("extracting .pkg.tar.zst")?;
+            // Reuse the packager's extractor so the control members
+            // (`.PKGINFO`/`.MTREE`/`.INSTALL`) are skipped, not shipped.
+            crate::archarchive::extract(input, dest)?;
         }
         _ => bail!("unknown source format '{format}'"),
     }
@@ -1580,7 +1709,17 @@ fn build_target(
         package_format: target_format.to_string(),
         ..Default::default()
     };
-    apply_scripts_to_config(&mut config, &meta.scripts, target_format);
+    // Map source scripts to target config fields as bodies first (triggers may
+    // append to the postinstall body), then materialize each body to a real
+    // file: the packagers treat `config.scripts.*` as paths in the build env.
+    let mut script_bodies = map_scripts_to_bodies(&meta.scripts, target_format);
+    apply_triggers_to_config(
+        &mut config,
+        &mut script_bodies,
+        &meta.triggers,
+        target_format,
+    );
+    stage_script_bodies(&mut config, &script_bodies, work_dir);
 
     // Carry config-file semantics: stage each source conffile as a target
     // `contents` entry of kind `config`, which every packager turns into its
@@ -1601,8 +1740,6 @@ fn build_target(
             ..Default::default()
         });
     }
-
-    apply_triggers_to_config(&mut config, &meta.triggers, target_format);
 
     let job = crate::build::ResolvedJob {
         dist: if meta.distribution.is_empty() {
@@ -1644,14 +1781,26 @@ fn build_target(
     plugin.build(&ctx)
 }
 
-/// Recursively copy a directory tree.
+/// Recursively copy a directory tree, recreating symlinks as symlinks.
+///
+/// `fs::copy` follows links: an absolute or dangling link fails (its target
+/// isn't installed yet), and a relative link resolving inside the tree is
+/// silently flattened into a full copy of its target. Neither is correct for
+/// package payloads, so `symlink_metadata` is used and links are recreated.
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     for entry in fs::read_dir(src)? {
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
         let target = dest.join(name);
-        if path.is_dir() {
+        let meta = fs::symlink_metadata(&path)?;
+        if meta.file_type().is_symlink() {
+            let link = fs::read_link(&path)
+                .with_context(|| format!("reading symlink {}", path.display()))?;
+            replace_symlink(&link, &target).with_context(|| {
+                format!("symlinking {} -> {}", target.display(), link.display())
+            })?;
+        } else if meta.is_dir() {
             fs::create_dir_all(&target)?;
             copy_dir_recursive(&path, &target)?;
         } else {
@@ -1659,6 +1808,29 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
                 .with_context(|| format!("copying {} to {}", path.display(), target.display()))?;
         }
     }
+    Ok(())
+}
+
+/// Create (or replace) a symlink at `target` pointing to `link`.
+#[cfg(unix)]
+fn replace_symlink(link: &Path, target: &Path) -> Result<()> {
+    match std::os::unix::fs::symlink(link, target) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            fs::remove_file(target)
+                .with_context(|| format!("replacing stale symlink {}", target.display()))?;
+            std::os::unix::fs::symlink(link, target)
+                .with_context(|| format!("symlinking {} -> {}", target.display(), link.display()))
+        }
+        Err(e) => {
+            Err(e).with_context(|| format!("symlinking {} -> {}", target.display(), link.display()))
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn replace_symlink(link: &Path, target: &Path) -> Result<()> {
+    fs::copy(link, target)?;
     Ok(())
 }
 
@@ -1670,96 +1842,155 @@ fn infer_dist_from_version(version: &str) -> String {
         .unwrap_or_else(|| "bookworm".to_string())
 }
 
-/// Apply extracted source-package scripts to the target config, mapping
-/// source-format script names to the target format's expected names.
+/// Map extracted source-package scripts to target config field names,
+/// returning the script *bodies* keyed by target field name.
 ///
 /// Source deb: preinst, postinst, prerm, postrm
 /// Source rpm: pre, post, preun, postun, pretrans, posttrans, verify
-/// Target deb: preinstall, postinstall, preremove, postremove
-/// Target rpm: preinstall (=pre), postinstall (=post), preremove (=preun),
-///             postremove (=postun), pretrans, posttrans, verify
-fn apply_scripts_to_config(
-    config: &mut crate::config::PackageConfig,
+/// Source arch: preinst/postinst/prerm/postrm/preupgrade/postupgrade
+///              (parsed from `.INSTALL`)
+///
+/// Target names are the canonical `config.scripts.*` fields the packagers
+/// consume.
+fn map_scripts_to_bodies(
     scripts: &BTreeMap<String, String>,
     target_format: &str,
-) {
-    if scripts.is_empty() {
-        return;
+) -> BTreeMap<&'static str, String> {
+    fn pick(scripts: &BTreeMap<String, String>, keys: &[&str]) -> Option<String> {
+        keys.iter()
+            .find_map(|k| scripts.get(*k))
+            .filter(|s| !s.trim().is_empty())
+            .cloned()
     }
 
+    let mut bodies: BTreeMap<&'static str, String> = BTreeMap::new();
     match target_format {
         "deb" => {
-            // Map source script names to deb config field names.
             // deb source → deb target: preinst→preinstall, etc.
             // rpm source → deb target: pre→preinstall, preun→preremove, etc.
-            if let Some(s) = scripts.get("preinst").or_else(|| scripts.get("pre")) {
-                config.scripts.preinstall = s.clone();
+            if let Some(s) = pick(scripts, &["preinst", "pre"]) {
+                bodies.insert("preinstall", s);
             }
-            if let Some(s) = scripts.get("postinst").or_else(|| scripts.get("post")) {
-                config.scripts.postinstall = s.clone();
+            if let Some(s) = pick(scripts, &["postinst", "post"]) {
+                bodies.insert("postinstall", s);
             }
-            if let Some(s) = scripts.get("prerm").or_else(|| scripts.get("preun")) {
-                config.scripts.preremove = s.clone();
+            if let Some(s) = pick(scripts, &["prerm", "preun"]) {
+                bodies.insert("preremove", s);
             }
-            if let Some(s) = scripts.get("postrm").or_else(|| scripts.get("postun")) {
-                config.scripts.postremove = s.clone();
+            if let Some(s) = pick(scripts, &["postrm", "postun"]) {
+                bodies.insert("postremove", s);
             }
-            if let Some(s) = scripts.get("pretrans") {
-                config.scripts.pretrans = s.clone();
+            if let Some(s) = pick(scripts, &["pretrans"]) {
+                bodies.insert("pretrans", s);
             }
-            if let Some(s) = scripts.get("posttrans") {
-                config.scripts.posttrans = s.clone();
+            if let Some(s) = pick(scripts, &["posttrans"]) {
+                bodies.insert("posttrans", s);
             }
-            if let Some(s) = scripts.get("verify") {
-                config.scripts.verify = s.clone();
+            if let Some(s) = pick(scripts, &["verify"]) {
+                bodies.insert("verify", s);
+            }
+            if let Some(s) = pick(scripts, &["preupgrade"]) {
+                bodies.insert("preupgrade", s);
+            }
+            if let Some(s) = pick(scripts, &["postupgrade"]) {
+                bodies.insert("postupgrade", s);
             }
         }
         "rpm" => {
-            // Map source script names to rpm config field names.
             // rpm source → rpm target: pre→preinstall, etc.
             // deb source → rpm target: preinst→preinstall, etc.
-            if let Some(s) = scripts.get("pre").or_else(|| scripts.get("preinst")) {
-                config.scripts.preinstall = s.clone();
+            if let Some(s) = pick(scripts, &["pre", "preinst"]) {
+                bodies.insert("preinstall", s);
             }
-            if let Some(s) = scripts.get("post").or_else(|| scripts.get("postinst")) {
-                config.scripts.postinstall = s.clone();
+            if let Some(s) = pick(scripts, &["post", "postinst"]) {
+                bodies.insert("postinstall", s);
             }
-            if let Some(s) = scripts.get("preun").or_else(|| scripts.get("prerm")) {
-                config.scripts.preremove = s.clone();
+            if let Some(s) = pick(scripts, &["preun", "prerm"]) {
+                bodies.insert("preremove", s);
             }
-            if let Some(s) = scripts.get("postun").or_else(|| scripts.get("postrm")) {
-                config.scripts.postremove = s.clone();
+            if let Some(s) = pick(scripts, &["postun", "postrm"]) {
+                bodies.insert("postremove", s);
             }
-            if let Some(s) = scripts.get("pretrans") {
-                config.scripts.pretrans = s.clone();
+            if let Some(s) = pick(scripts, &["pretrans"]) {
+                bodies.insert("pretrans", s);
             }
-            if let Some(s) = scripts.get("posttrans") {
-                config.scripts.posttrans = s.clone();
+            if let Some(s) = pick(scripts, &["posttrans"]) {
+                bodies.insert("posttrans", s);
             }
-            if let Some(s) = scripts.get("verify") {
-                config.scripts.verify = s.clone();
+            if let Some(s) = pick(scripts, &["verify"]) {
+                bodies.insert("verify", s);
             }
         }
         _ => {
-            // arch: carry scripts into .INSTALL pre/post hooks instead of dropping.
-            if let Some(s) = scripts.get("pre").or_else(|| scripts.get("preinst")) {
-                config.scripts.preupgrade_script = s.clone();
+            // Arch `.INSTALL` only carries pre/post-upgrade hooks; map the
+            // install/remove hooks onto them (best effort, as before).
+            if let Some(s) = pick(scripts, &["pre", "preinst", "preupgrade"]) {
+                bodies.insert("preupgrade", s);
             }
-            if let Some(s) = scripts.get("post").or_else(|| scripts.get("postinst")) {
-                config.scripts.postupgrade_script = s.clone();
+            if let Some(s) = pick(scripts, &["post", "postinst", "postupgrade"]) {
+                bodies.insert("postupgrade", s);
             }
-            if let Some(s) = scripts.get("preun").or_else(|| scripts.get("prerm")) {
-                if config.scripts.preupgrade_script.is_empty() {
-                    config.scripts.preupgrade_script = s.clone();
+            if !bodies.contains_key("preupgrade") {
+                if let Some(s) = pick(scripts, &["preun", "prerm"]) {
+                    bodies.insert("preupgrade", s);
                 }
             }
-            if let Some(s) = scripts.get("postun").or_else(|| scripts.get("postrm")) {
-                if config.scripts.postupgrade_script.is_empty() {
-                    config.scripts.postupgrade_script = s.clone();
+            if !bodies.contains_key("postupgrade") {
+                if let Some(s) = pick(scripts, &["postun", "postrm"]) {
+                    bodies.insert("postupgrade", s);
                 }
             }
         }
     }
+    bodies
+}
+
+/// Write each mapped script body to a real file under `work_dir` and point the
+/// matching config field at it. The packagers read `config.scripts.*` with
+/// `fs::read`, so these fields must be paths in the build environment, not the
+/// script text itself (the bug that made every script-bearing conversion fail).
+fn stage_script_bodies(
+    config: &mut crate::config::PackageConfig,
+    bodies: &BTreeMap<&'static str, String>,
+    work_dir: &Path,
+) {
+    for (field, body) in bodies {
+        let path = stage_script(work_dir, field, body);
+        match *field {
+            "preinstall" => config.scripts.preinstall = path,
+            "postinstall" => config.scripts.postinstall = path,
+            "preremove" => config.scripts.preremove = path,
+            "postremove" => config.scripts.postremove = path,
+            "pretrans" => config.scripts.pretrans = path,
+            "posttrans" => config.scripts.posttrans = path,
+            "verify" => config.scripts.verify = path,
+            "preupgrade" => config.scripts.preupgrade_script = path,
+            "postupgrade" => config.scripts.postupgrade_script = path,
+            _ => {}
+        }
+    }
+}
+
+/// Materialize one script body under `<work_dir>/scripts/<field>` and return
+/// its path. Returns an empty string (which the packagers treat as "unset")
+/// if the file cannot be written.
+fn stage_script(work_dir: &Path, field: &str, body: &str) -> String {
+    let dir = work_dir.join("scripts");
+    if let Err(e) = fs::create_dir_all(&dir) {
+        eprintln!("  ⚠ failed to stage {field} script: {e}");
+        return String::new();
+    }
+    let path = dir.join(field);
+    if let Err(e) = fs::write(&path, body) {
+        eprintln!("  ⚠ failed to stage {field} script: {e}");
+        return String::new();
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o755));
+    }
+    path.to_string_lossy().to_string()
 }
 
 #[cfg(test)]
@@ -1869,8 +2100,10 @@ mod tests {
     #[test]
     fn trigger_mapping_carries_both_directions() {
         let mut cfg = crate::config::PackageConfig::default();
+        let mut bodies: BTreeMap<&'static str, String> = BTreeMap::new();
         apply_triggers_to_config(
             &mut cfg,
+            &mut bodies,
             &[Trigger {
                 kind: "triggerin".into(),
                 name: "bar".into(),
@@ -1879,11 +2112,17 @@ mod tests {
             "deb",
         );
         assert!(cfg.deb.triggers_interest.contains(&"bar".to_string()));
-        assert!(cfg.scripts.postinstall.contains("echo hi"));
+        assert!(bodies
+            .get("postinstall")
+            .map(String::as_str)
+            .unwrap_or("")
+            .contains("echo hi"));
 
         let mut cfg = crate::config::PackageConfig::default();
+        let mut bodies: BTreeMap<&'static str, String> = BTreeMap::new();
         apply_triggers_to_config(
             &mut cfg,
+            &mut bodies,
             &[Trigger {
                 kind: "interest".into(),
                 name: "foo".into(),
@@ -1931,7 +2170,24 @@ mod tests {
     fn parse_arch_dep_with_version() {
         let (name, ver) = parse_arch_dep("glibc>=2.17");
         assert_eq!(name, "glibc");
-        assert_eq!(ver.as_deref(), Some(">=2.17"));
+        // Normalized to `op version` so every target formats it correctly.
+        assert_eq!(ver.as_deref(), Some(">= 2.17"));
+    }
+
+    #[test]
+    fn arch_dep_syntax_normalizes_to_every_target() {
+        // arch source -> deb (parenthesized), rpm (spaces), arch (compact).
+        let deb = map_dep_syntax("libcurl>=7.0", "arch", "deb");
+        assert_eq!(deb, "libcurl (>= 7.0)");
+        let rpm = map_dep_syntax("libcurl>=7.0", "arch", "rpm");
+        assert_eq!(rpm, "libcurl >= 7.0");
+        let arch = map_dep_syntax("libcurl>=7.0", "arch", "arch");
+        assert_eq!(arch, "libcurl>=7.0");
+        // deb source -> arch must not leave a space after the operator.
+        assert_eq!(
+            map_dep_syntax("libc6 (>= 2.36)", "deb", "arch"),
+            "libc6>=2.36"
+        );
     }
 
     #[test]
@@ -1973,7 +2229,7 @@ mod tests {
     fn map_dep_arch_to_deb() {
         assert_eq!(
             map_dep_syntax("glibc>=2.17", "arch", "deb"),
-            "glibc (>=2.17)"
+            "glibc (>= 2.17)"
         );
     }
 
@@ -1995,7 +2251,10 @@ mod tests {
 
     #[test]
     fn map_dep_arch_to_rpm() {
-        assert_eq!(map_dep_syntax("glibc>=2.17", "arch", "rpm"), "glibc >=2.17");
+        assert_eq!(
+            map_dep_syntax("glibc>=2.17", "arch", "rpm"),
+            "glibc >= 2.17"
+        );
     }
 
     #[test]

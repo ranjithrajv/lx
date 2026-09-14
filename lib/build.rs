@@ -455,8 +455,15 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
                 cfg
             } else if args.from_dir.is_some() || args.from_file.is_some() {
                 // "You supply files" mode: package.yaml is optional. Load it
-                // as a base if it exists, else start from defaults.
-                PackageConfig::load(&args.config).unwrap_or_default()
+                // as a base if it exists, else start from defaults. A config
+                // that exists but fails to parse is surfaced, not silently
+                // replaced by defaults (which used to surface later as a
+                // misleading "requires version" error).
+                if args.config.exists() {
+                    PackageConfig::load_for_local(&args.config)?
+                } else {
+                    PackageConfig::default()
+                }
             } else {
                 PackageConfig::load(&args.config)?
             }

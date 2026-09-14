@@ -512,6 +512,11 @@ pub struct PackageConfig {
     pub package_name: String,
     /// Source repo in "owner/repo" form (GitHub or GitLab, per `source`).
     /// Kept as `github_repo` for backward compat; `repo` is alias.
+    ///
+    /// Optional at deserialize time so "you supply files"
+    /// (`--from-dir`/`--from-file`) configs can omit it; [`validate`] still
+    /// requires it for every forge-fetching build.
+    #[serde(default)]
     #[serde(alias = "repo")]
     #[serde(alias = "gitlab_repo")]
     pub github_repo: String,
@@ -993,6 +998,21 @@ impl PackageConfig {
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config file '{}'", path.display()))?;
         Self::parse_str(&text).with_context(|| "failed to parse package.yaml")
+    }
+
+    /// Load a package.yaml for a "you supply files" build (`--from-dir`/
+    /// `--from-file`): identical to [`load`] except `github_repo` is not
+    /// required, since there is no forge to fetch from. A config that exists
+    /// but is malformed is still an error — it must not be silently ignored.
+    pub fn load_for_local(path: &Path) -> Result<Self> {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("failed to read config file '{}'", path.display()))?;
+        let expanded = expand_env_vars(&text)?;
+        let mut config: PackageConfig =
+            serde_yaml::from_str(&expanded).with_context(|| "failed to parse package.yaml")?;
+        config.apply_legacy_compat();
+        config.validate_for_local()?;
+        Ok(config)
     }
 
     /// Parse from a string, applying env-var expansion, legacy

@@ -239,7 +239,7 @@ pub fn build_with_relations(
 }
 
 /// Extract a `.pkg.tar.zst`'s payload into `dest`, skipping the `.PKGINFO`
-/// / `.MTREE` metadata members (the inverse of [`build`]).
+/// / `.MTREE` / `.INSTALL` metadata members (the inverse of [`build`]).
 pub fn extract(arch_path: &Path, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(arch_path)
         .with_context(|| format!("failed to open '{}'", arch_path.display()))?;
@@ -254,7 +254,7 @@ pub fn extract(arch_path: &Path, dest: &Path) -> Result<()> {
         let mut entry = entry?;
         let path = entry.path()?.to_path_buf();
         let name = path.to_string_lossy();
-        if name == ".PKGINFO" || name == ".MTREE" {
+        if name == ".PKGINFO" || name == ".MTREE" || name == ".INSTALL" {
             continue;
         }
         entry
