@@ -125,7 +125,8 @@ pub struct IndexOptions<'a> {
 ///
 /// Every role method has a default so a backend only writes the half it
 /// supports; the defaults fail with an actionable message instead of
-/// panicking. `id`, `description` and `capabilities` are required.
+/// panicking. `name`/`description` (from [`Plugin`]) and `capabilities` are
+/// required; `id` defaults to `name`.
 pub trait PackageIndex: Plugin {
     /// Canonical id (`apt`, `opkg`, `pacman`, `apk`, `rpm`, `lx-community`,
     /// `aur`, `repology`). See [`BACKEND_IDS`]. Defaults to the plugin's
@@ -213,8 +214,6 @@ pub trait PackageIndex: Plugin {
 pub struct IndexBackend {
     /// Canonical id, see [`BACKEND_IDS`].
     pub id: &'static str,
-    /// Human-readable description.
-    pub description: &'static str,
     /// Roles this backend implements.
     pub capabilities: Capabilities,
     make: fn(name: &str) -> Box<dyn PackageIndex>,
@@ -224,6 +223,12 @@ impl IndexBackend {
     /// Instantiate this backend, labelling the instance with `name`.
     pub fn make(&self, name: &str) -> Box<dyn PackageIndex> {
         (self.make)(name)
+    }
+
+    /// Human-readable description, taken from the backend instance so the
+    /// registry does not duplicate it.
+    pub fn description(&self) -> &'static str {
+        self.make(self.id).description()
     }
 }
 
@@ -266,49 +271,41 @@ pub fn all_index_backends() -> Vec<IndexBackend> {
     vec![
         IndexBackend {
             id: "apt",
-            description: "apt repository (Packages, Packages.gz, Release, InRelease)",
             capabilities: Capabilities::WRITE,
             make: make_apt,
         },
         IndexBackend {
             id: "opkg",
-            description: "opkg repository (Packages, Packages.gz)",
             capabilities: Capabilities::WRITE,
             make: make_opkg,
         },
         IndexBackend {
             id: "pacman",
-            description: "pacman repository (<repo>.db.tar.gz from .PKGINFO)",
             capabilities: Capabilities::WRITE,
             make: make_pacman,
         },
         IndexBackend {
             id: "apk",
-            description: "Alpine repository (APKINDEX.tar.gz from .PKGINFO)",
             capabilities: Capabilities::WRITE,
             make: make_apk,
         },
         IndexBackend {
             id: "rpm",
-            description: "RPM repository (repodata/repomd.xml + primary.xml.gz)",
             capabilities: Capabilities::WRITE,
             make: make_rpm,
         },
         IndexBackend {
             id: "lx-community",
-            description: "LX community index (recipes + per-release prebuilts)",
             capabilities: Capabilities::READ,
             make: make_lx_community,
         },
         IndexBackend {
             id: "aur",
-            description: "Arch User Repository (PKGBUILD → native build)",
             capabilities: Capabilities::READ,
             make: make_aur,
         },
         IndexBackend {
             id: "repology",
-            description: "Repology cross-distro metadata (read-only)",
             capabilities: Capabilities::READ,
             make: make_repology,
         },
