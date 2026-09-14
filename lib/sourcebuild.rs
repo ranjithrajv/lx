@@ -197,69 +197,23 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
     let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
     let sign_passphrase = crate::build::resolve_sign_passphrase();
-    let mut built: Vec<PathBuf> = Vec::new();
-    for dist in &suites {
-        let staging = tempfile::tempdir().context("failed to create staging dir")?;
-        crate::plugins::copy_dir_recursive(&stage, staging.path())?;
-        let job = crate::build::ResolvedJob {
-            dist: dist.clone(),
-            arch: host.clone(),
-            asset: lx_lib::github::Asset {
-                name: String::new(),
-                browser_download_url: String::new(),
-                size: None,
-                checksums: Default::default(),
-            },
-            tag: version.clone(),
-            published_at: None,
-        };
-        let ctx = crate::plugins::BuildContext {
-            cfg: &wrap_cfg,
-            job: &job,
-            binary_dir: staging.path(),
-            staging_root: staging.path(),
-            license: None,
-            debian_version: &debian_version,
-            build_version: &args.build_version,
-            mtime,
-            sign_key: sign_key.as_deref(),
-            sign_key_id: &sign_key_id,
-            sign_passphrase: sign_passphrase.as_deref(),
-            sign_method: &sign_method,
-            detected_deps: Vec::new(),
-        };
-        let pkg_tmp = packager
-            .archive_staged_tree(&ctx)
-            .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
-        let dest = args.output.join(
-            pkg_tmp
-                .file_name()
-                .ok_or_else(|| anyhow::anyhow!("built package has no filename"))?,
-        );
-        std::fs::copy(&pkg_tmp, &dest)?;
-        // Post-build signing goes through the `Signer` plugin for
-        // `(format, method)`: embedded backends (`rpm-pgp`, `deb-debsign`)
-        // already signed while the tree was archived, detached backends
-        // (`gpg-detach`) write a sibling signature now.
-        if let Some(key) = &sign_key {
-            let sign_type = cfg.effective_sign_type();
-            let sign_ctx = crate::plugins::signer::SignContext {
-                key_file: key,
-                key_id: &sign_key_id,
-                passphrase: sign_passphrase.as_deref(),
-                sign_type: &sign_type,
-                cert_file: &cfg.signature.cert_file,
-            };
-            if let crate::plugins::signer::PostBuild::Detached { path, .. } =
-                crate::plugins::signer::apply_post_build(&format, &sign_method, &dest, &sign_ctx)?
-            {
-                println!("  ✓ signed {} -> {}", dest.display(), path.display());
-            }
-        }
-        println!("  ✓ built {} ({dist})", dest.display());
-        built.push(dest);
-    }
-
+    let built = wrap_suites(WrapInputs {
+        args: &args,
+        cfg,
+        wrap_cfg: &wrap_cfg,
+        packager: packager.as_ref(),
+        suites: &suites,
+        host: host.as_str(),
+        format: format.as_str(),
+        version: version.as_str(),
+        debian_version: debian_version.as_str(),
+        mtime,
+        sign_key: sign_key.as_deref(),
+        sign_key_id: &sign_key_id,
+        sign_passphrase: sign_passphrase.as_deref(),
+        sign_method: &sign_method,
+        stage: &stage,
+    })?;
     telemetry.record_stage_complete("build_completion", "success")?;
     telemetry.finalize(build_start.elapsed().as_secs())?;
 
@@ -292,7 +246,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             built.len(),
             &crate::summary::SummaryInputs {
                 package: cfg.package_name.clone(),
-                version: version.clone(),
+                version: version.to_string(),
                 build_version: args.build_version.clone(),
                 github_repo: cfg.github_repo.clone(),
                 architectures: vec![host.clone()],
@@ -307,15 +261,38 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         )?;
     }
 
-    // Emit source packages from the built binaries, best-effort: Debian
-    // `.dsc` + tarballs, an RPM `.src.rpm`, or an Arch `PKGBUILD`.
-    let rel = wrap_cfg.effective_relations(&format);
+    emit_source_package(
+        &args,
+        cfg,
+        &wrap_cfg,
+        packager.as_ref(),
+        depends,
+        &version,
+        &format,
+    );
+
+    println!("\n✓ built {} package(s) from source", built.len());
+    Ok(())
+}
+
+/// Emit the source package from the compiled tree, best-effort: Debian
+/// `.dsc` + tarballs, an RPM `.src.rpm`, or an Arch `PKGBUILD`.
+fn emit_source_package(
+    args: &BuildArgs,
+    cfg: &PackageConfig,
+    wrap_cfg: &PackageConfig,
+    packager: &dyn crate::plugins::SourcePackager,
+    depends: String,
+    version: &str,
+    format: &str,
+) {
+    let rel = wrap_cfg.effective_relations(format);
     let pkg = crate::source::Pkg {
         name: cfg.package_name.clone(),
         github_repo: cfg.github_repo.clone(),
         description: cfg.effective_description(),
         maintainer: cfg.effective_maintainer(),
-        version: version.clone(),
+        version: version.to_string(),
         build_version: args.build_version.clone(),
         epoch: cfg.epoch.clone(),
         license_spdx: cfg.license_spdx.clone(),
@@ -337,9 +314,110 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     if let Err(e) = source_result {
         eprintln!("⚠ source package generation failed (binaries stand on their own): {e:#}");
     }
+}
 
-    println!("\n✓ built {} package(s) from source", built.len());
-    Ok(())
+/// Inputs for the per-suite wrap/sign loop.
+struct WrapInputs<'a> {
+    args: &'a BuildArgs,
+    cfg: &'a PackageConfig,
+    wrap_cfg: &'a PackageConfig,
+    packager: &'a dyn crate::plugins::SourcePackager,
+    suites: &'a [String],
+    host: &'a str,
+    format: &'a str,
+    version: &'a str,
+    debian_version: &'a str,
+    mtime: i64,
+    sign_key: Option<&'a Path>,
+    sign_key_id: &'a str,
+    sign_passphrase: Option<&'a str>,
+    sign_method: &'a str,
+    stage: &'a Path,
+}
+
+/// Wrap the compiled tree into one package per suite (and detached-sign
+/// each), returning the written artifact paths.
+fn wrap_suites(input: WrapInputs<'_>) -> Result<Vec<PathBuf>> {
+    let WrapInputs {
+        args,
+        cfg,
+        wrap_cfg,
+        packager,
+        suites,
+        host,
+        format,
+        version,
+        debian_version,
+        mtime,
+        sign_key,
+        sign_key_id,
+        sign_passphrase,
+        sign_method,
+        stage,
+    } = input;
+    let mut built: Vec<PathBuf> = Vec::new();
+    for dist in suites {
+        let staging = tempfile::tempdir().context("failed to create staging dir")?;
+        crate::plugins::copy_dir_recursive(stage, staging.path())?;
+        let job = crate::build::ResolvedJob {
+            dist: dist.clone(),
+            arch: host.to_string(),
+            asset: lx_lib::github::Asset {
+                name: String::new(),
+                browser_download_url: String::new(),
+                size: None,
+                checksums: Default::default(),
+            },
+            tag: version.to_string(),
+            published_at: None,
+        };
+        let ctx = crate::plugins::BuildContext {
+            cfg: wrap_cfg,
+            job: &job,
+            binary_dir: staging.path(),
+            staging_root: staging.path(),
+            license: None,
+            debian_version,
+            build_version: &args.build_version,
+            mtime,
+            sign_key,
+            sign_key_id,
+            sign_passphrase,
+            sign_method,
+            detected_deps: Vec::new(),
+        };
+        let pkg_tmp = packager
+            .archive_staged_tree(&ctx)
+            .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
+        let dest = args.output.join(
+            pkg_tmp
+                .file_name()
+                .ok_or_else(|| anyhow::anyhow!("built package has no filename"))?,
+        );
+        std::fs::copy(&pkg_tmp, &dest)?;
+        // Post-build signing goes through the `Signer` plugin for
+        // `(format, method)`: embedded backends (`rpm-pgp`, `deb-debsign`)
+        // already signed while the tree was archived, detached backends
+        // (`gpg-detach`) write a sibling signature now.
+        if let Some(key) = &sign_key {
+            let sign_type = cfg.effective_sign_type();
+            let sign_ctx = crate::plugins::signer::SignContext {
+                key_file: key,
+                key_id: sign_key_id,
+                passphrase: sign_passphrase,
+                sign_type: &sign_type,
+                cert_file: &cfg.signature.cert_file,
+            };
+            if let crate::plugins::signer::PostBuild::Detached { path, .. } =
+                crate::plugins::signer::apply_post_build(format, sign_method, &dest, &sign_ctx)?
+            {
+                println!("  ✓ signed {} -> {}", dest.display(), path.display());
+            }
+        }
+        println!("  ✓ built {} ({dist})", dest.display());
+        built.push(dest);
+    }
+    Ok(built)
 }
 
 /// CLI version > config version > latest upstream tag.
