@@ -1299,36 +1299,27 @@ impl PackageConfig {
             "" | "auto" | "all" | "any" => {}
             other => bail!("unsupported architecture '{other}' (expected auto, all, or any)"),
         }
-        // Deb triggers must not contain empty entries.
-        for t in &self.deb.triggers_interest {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_interest must not contain empty entries");
-            }
-        }
-        for t in &self.deb.triggers_activate {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_activate must not contain empty entries");
-            }
-        }
-        // Deb trigger await/noawait variants must not contain empty entries.
-        for t in &self.deb.triggers_interest_await {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_interest_await must not contain empty entries");
-            }
-        }
-        for t in &self.deb.triggers_interest_noawait {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_interest_noawait must not contain empty entries");
-            }
-        }
-        for t in &self.deb.triggers_activate_await {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_activate_await must not contain empty entries");
-            }
-        }
-        for t in &self.deb.triggers_activate_noawait {
-            if t.trim().is_empty() {
-                bail!("deb.triggers_activate_noawait must not contain empty entries");
+        // No deb trigger list may contain an empty entry. The list is laid out
+        // as `(field, values)` pairs so the rule (and its message) exists once.
+        let deb_trigger_lists: [(&str, &Vec<String>); 6] = [
+            ("triggers_interest", &self.deb.triggers_interest),
+            ("triggers_activate", &self.deb.triggers_activate),
+            ("triggers_interest_await", &self.deb.triggers_interest_await),
+            (
+                "triggers_interest_noawait",
+                &self.deb.triggers_interest_noawait,
+            ),
+            ("triggers_activate_await", &self.deb.triggers_activate_await),
+            (
+                "triggers_activate_noawait",
+                &self.deb.triggers_activate_noawait,
+            ),
+        ];
+        for (field, values) in deb_trigger_lists {
+            for t in values {
+                if t.trim().is_empty() {
+                    bail!("deb.{field} must not contain empty entries");
+                }
             }
         }
         // Version schema must be "semver" or "none".
