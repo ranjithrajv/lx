@@ -512,7 +512,11 @@ fn rpm_conffiles(pkg: &rpm::Package) -> Vec<(String, bool)> {
         .filter(|e| e.flags.contains(rpm::FileFlags::CONFIG))
         .map(|e| {
             let p = e.path.to_string_lossy().to_string();
-            let path = if p.starts_with('/') { p } else { format!("/{p}") };
+            let path = if p.starts_with('/') {
+                p
+            } else {
+                format!("/{p}")
+            };
             (path, e.flags.contains(rpm::FileFlags::NOREPLACE))
         })
         .collect()
