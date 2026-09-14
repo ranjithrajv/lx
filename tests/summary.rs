@@ -3,6 +3,18 @@
 use lx_lib::summary::*;
 use std::time::Instant;
 
+/// A minimal provenance record for the summary tests.
+fn entry(asset: &str, method: &str, sha256: &str) -> ProvenanceEntry {
+    ProvenanceEntry {
+        asset: asset.into(),
+        url: String::new(),
+        tag: String::new(),
+        arch: String::new(),
+        method: method.into(),
+        sha256: sha256.into(),
+    }
+}
+
 #[test]
 fn badge_encode_percent_encodes_spaces_and_pipes() {
     assert_eq!(
@@ -74,13 +86,9 @@ fn provenance_is_embedded_and_unverified_assets_are_counted() {
         start: Instant::now(),
         telemetry: serde_json::json!({}),
         provenance: vec![
-            serde_json::json!({"asset": "a", "method": "pinned", "sha256": "aa"}),
-            serde_json::json!({"asset": "b", "method": "sidecar", "sha256": "bb"}),
-            serde_json::json!({
-                "asset": "c",
-                "method": "unverified (--allow-unverified)",
-                "sha256": "cc"
-            }),
+            entry("a", "pinned", "aa"),
+            entry("b", "sidecar", "bb"),
+            entry("c", "unverified (--allow-unverified)", "cc"),
         ],
         package_format: "deb".into(),
         source: "github".into(),

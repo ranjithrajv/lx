@@ -897,16 +897,12 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         let materials: Vec<lx_lib::sbom::Material> = provenance
             .iter()
             .filter_map(|p| {
-                let url = p["url"].as_str().unwrap_or_default();
-                if url.is_empty() || !seen.insert(url.to_string()) {
+                if p.url.is_empty() || !seen.insert(p.url.clone()) {
                     return None;
                 }
-                let digest = p["sha256"]
-                    .as_str()
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string);
+                let digest = (!p.sha256.is_empty()).then(|| p.sha256.clone());
                 Some(lx_lib::sbom::Material {
-                    uri: url.to_string(),
+                    uri: p.url.clone(),
                     digest,
                 })
             })
@@ -988,25 +984,24 @@ fn write_lock_file(
     config: &Path,
     source_name: &str,
     jobs: &[ResolvedJob],
-    provenance: &[serde_json::Value],
+    provenance: &[crate::summary::ProvenanceEntry],
 ) -> Result<()> {
     let mut lock = lx_lib::lock::LockFile::default();
     for p in provenance {
-        let arch = p["arch"].as_str().unwrap_or_default().to_string();
-        if arch.is_empty() {
+        if p.arch.is_empty() {
             continue;
         }
         let published_at = jobs
             .iter()
-            .find(|j| j.arch == arch)
+            .find(|j| j.arch == p.arch)
             .and_then(|j| j.published_at);
         lock.packages.insert(
-            arch,
+            p.arch.clone(),
             lx_lib::lock::LockEntry {
-                tag: p["tag"].as_str().unwrap_or_default().to_string(),
-                asset: p["asset"].as_str().unwrap_or_default().to_string(),
-                url: p["url"].as_str().unwrap_or_default().to_string(),
-                sha256: p["sha256"].as_str().unwrap_or_default().to_string(),
+                tag: p.tag.clone(),
+                asset: p.asset.clone(),
+                url: p.url.clone(),
+                sha256: p.sha256.clone(),
                 source: source_name.to_string(),
                 published_at,
             },
@@ -1466,7 +1461,7 @@ fn build_jobs(
     source: SourceInputs,
     progress: Option<&lx_lib::progress::Progress>,
     telemetry: &lx_lib::telemetry::Telemetry,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<crate::summary::ProvenanceEntry>> {
     let SourceInputs {
         license,
         source_name,
@@ -1634,7 +1629,7 @@ fn build_one(
     job: &ResolvedJob,
     tmp: &Path,
     downloaded: &mut std::collections::HashMap<String, PathBuf>,
-    provenance: &std::sync::Mutex<Vec<serde_json::Value>>,
+    provenance: &std::sync::Mutex<Vec<crate::summary::ProvenanceEntry>>,
 ) -> Result<PathBuf> {
     let BuildInputs {
         source,
@@ -1761,14 +1756,17 @@ fn build_one(
                 // outcome, so build-summary.json's `provenance` array records
                 // exactly how (or whether) every asset was verified.
                 let sha256 = lx_lib::checksum::sha256_file(&path).unwrap_or_default();
-                provenance.lock().unwrap().push(serde_json::json!({
-                    "asset": job.asset.name,
-                    "url": job.asset.browser_download_url,
-                    "tag": job.tag,
-                    "arch": job.arch,
-                    "method": method.as_str(),
-                    "sha256": sha256,
-                }));
+                provenance
+                    .lock()
+                    .unwrap()
+                    .push(crate::summary::ProvenanceEntry {
+                        asset: job.asset.name.clone(),
+                        url: job.asset.browser_download_url.clone(),
+                        tag: job.tag.clone(),
+                        arch: job.arch.clone(),
+                        method: method.as_str().to_string(),
+                        sha256,
+                    });
 
                 downloaded.insert(job.asset.name.clone(), path.clone());
                 path

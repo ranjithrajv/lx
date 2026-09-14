@@ -4,6 +4,21 @@ use anyhow::Result;
 use std::path::Path;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+/// One asset-download provenance record, embedded in `build-summary.json`
+/// (and read back for the lock file / SBOM) as a typed value rather than a
+/// stringly-keyed `serde_json::Value`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProvenanceEntry {
+    pub asset: String,
+    pub url: String,
+    pub tag: String,
+    pub arch: String,
+    /// How integrity was established (see `build::VerifyMethod::as_str`).
+    pub method: String,
+    #[serde(default)]
+    pub sha256: String,
+}
+
 /// Runtime inputs mirrored from the action's `generate_build_summary`
 /// (src/lib/summary.sh).
 pub struct SummaryInputs {
@@ -22,7 +37,7 @@ pub struct SummaryInputs {
     /// was verified, so a build can be audited after the fact instead of
     /// just trusting a console log that's already scrolled away. See
     /// `build::VerifyMethod`.
-    pub provenance: Vec<serde_json::Value>,
+    pub provenance: Vec<ProvenanceEntry>,
     /// Package format plugin used for this build ("deb", "rpm", or "arch").
     /// Defaults to "deb" for backward compatibility with older callers/tests.
     #[allow(dead_code)]
@@ -110,7 +125,7 @@ pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result
     let unverified_assets = inputs
         .provenance
         .iter()
-        .filter(|p| p["method"] != "pinned" && p["method"] != "sidecar" && p["method"] != "locked")
+        .filter(|p| p.method != "pinned" && p.method != "sidecar" && p.method != "locked")
         .count();
 
     let duration = inputs.start.elapsed().as_secs();
