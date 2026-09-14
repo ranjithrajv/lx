@@ -5,7 +5,7 @@ use lx_lib::plugins::signer::{get_signer, signer_for, signer_names};
 #[test]
 fn registry_lists_all_signers() {
     let names = signer_names();
-    for expected in ["gpg-detach", "rpm-pgp", "deb-debsign"] {
+    for expected in ["gpg-detach", "rpm-pgp", "deb-debsign", "apk-rsa"] {
         assert!(names.contains(&expected), "missing signer {expected}");
         assert!(get_signer(expected).is_some());
     }
@@ -26,7 +26,7 @@ fn selection_prefers_embedded_backends() {
 
 #[test]
 fn detached_signing_is_available_for_every_other_format() {
-    for format in ["deb", "arch", "apk", "ipk"] {
+    for format in ["deb", "arch", "ipk"] {
         let signer = signer_for(format, "detach").unwrap();
         assert_eq!(signer.name(), "gpg-detach", "format {format}");
         assert!(!signer.embedded());
@@ -34,6 +34,16 @@ fn detached_signing_is_available_for_every_other_format() {
 }
 
 #[test]
+fn apk_uses_the_rsa_signer() {
+    let signer = signer_for("apk", "detach").unwrap();
+    assert_eq!(signer.name(), "apk-rsa");
+    assert!(
+        signer.embedded(),
+        "apk signature is written by the packager"
+    );
+}
+
+#[test]
 fn debsign_is_not_offered_for_non_deb() {
-    assert!(signer_for("apk", "debsign").is_none());
+    assert!(signer_for("arch", "debsign").is_none());
 }

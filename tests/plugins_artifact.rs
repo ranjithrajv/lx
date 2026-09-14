@@ -104,16 +104,24 @@ fn raw_copies_the_asset_under_its_own_name() {
 }
 
 #[test]
-fn zip_is_recognized_but_reports_an_actionable_error() {
+fn extracts_zip() {
+    use std::io::Write;
     let tmp = tempfile::tempdir().unwrap();
-    let zip = tmp.path().join("x.zip");
-    std::fs::write(&zip, b"PK\x03\x04").unwrap();
-    let err = extract(&zip, &tmp.path().join("out"), "zip").unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("zip extraction is not implemented"),
-        "{err}"
-    );
+    let zpath = tmp.path().join("x.zip");
+    {
+        let f = std::fs::File::create(&zpath).unwrap();
+        let mut w = zip::ZipWriter::new(f);
+        let opts = zip::write::SimpleFileOptions::default();
+        w.start_file("bin/hello", opts).unwrap();
+        w.write_all(b"hi").unwrap();
+        w.start_file("README", opts).unwrap();
+        w.write_all(b"readme").unwrap();
+        w.finish().unwrap();
+    }
+    let dest = tmp.path().join("out");
+    extract(&zpath, &dest, "zip").unwrap();
+    assert_eq!(std::fs::read(dest.join("bin/hello")).unwrap(), b"hi");
+    assert_eq!(std::fs::read(dest.join("README")).unwrap(), b"readme");
 }
 
 #[test]

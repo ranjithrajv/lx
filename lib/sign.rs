@@ -109,6 +109,57 @@ fn gpg_filter(payload: &[u8], req: &SignRequest, mode: &[&str]) -> Result<Vec<u8
     Ok(out.stdout)
 }
 
+/// DER-encoded PKCS#1 v1.5 RSA signature over the SHA-1 hash of `payload`,
+/// via `openssl dgst -sha1 -sign`.
+///
+/// This is the signature primitive Alpine's apk v2 uses: `abuild` signs the
+/// package *control* segment — and, for a repository, the whole
+/// `APKINDEX.tar.gz` — with the repository's RSA key.
+pub fn rsa_sha1_sign(payload: &[u8], key_file: &Path, passphrase: Option<&str>) -> Result<Vec<u8>> {
+    let mut cmd = Command::new("openssl");
+    cmd.args(["dgst", "-sha1", "-sign"]).arg(key_file);
+    if let Some(p) = passphrase.filter(|p| !p.is_empty()) {
+        cmd.arg("-passin").arg(format!("pass:{p}"));
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd
+        .spawn()
+        .context("failed to run `openssl` (install openssl to sign apk packages)")?;
+    {
+        let stdin = child.stdin.as_mut().expect("piped stdin");
+        stdin
+            .write_all(payload)
+            .context("failed to write payload to openssl stdin")?;
+    }
+    let out = child.wait_with_output().context("openssl signing failed")?;
+    if !out.status.success() {
+        bail!(
+            "openssl signing failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    if out.stdout.is_empty() {
+        bail!("openssl produced empty signature");
+    }
+    Ok(out.stdout)
+}
+
+/// The apk `<keyname>` used in a `.SIGN.RSA.<keyname>` member: `key_id` when
+/// set, otherwise the key file's name plus `.pub` (abuild's `foo.rsa` →
+/// `foo.rsa.pub` convention).
+pub fn apk_key_name(key_file: &Path, key_id: &str) -> String {
+    if !key_id.trim().is_empty() {
+        return key_id.trim().to_string();
+    }
+    let name = key_file
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("apk-key.rsa");
+    format!("{name}.pub")
+}
+
 /// `<file>.deb` -> sibling `<file>.sig` (replacing any stale signature).
 pub fn sig_path_for(artifact: &Path) -> PathBuf {
     let mut p = artifact.as_os_str().to_os_string();

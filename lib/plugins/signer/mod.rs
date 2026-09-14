@@ -24,6 +24,7 @@
 //! Selection: [`signer_for(format, method)`] → first registered backend
 //! whose [`Signer::supports`] returns true.
 
+pub mod apk_rsa;
 pub mod deb_debsign;
 pub mod gpg_detach;
 pub mod rpm_pgp;
@@ -74,6 +75,7 @@ pub trait Signer: Send + Sync {
 /// first, generic detached last).
 pub fn all_signers() -> Vec<Box<dyn Signer>> {
     vec![
+        Box::new(apk_rsa::ApkRsa),
         Box::new(rpm_pgp::RpmPgp),
         Box::new(deb_debsign::DebDebsign),
         Box::new(gpg_detach::GpgDetach),

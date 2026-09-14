@@ -32,6 +32,21 @@
   backends with the expected capabilities. No behaviour change to `lx repo`
   or `lx index`.
 
+### zip extraction and Alpine apk signing
+
+- **zip ArtifactFormat** now extracts (pure-Rust `zip` crate, deflate):
+  `.zip` assets work via `artifact_format: zip` or filename auto-detection,
+  preserving unix modes and rejecting traversal entries.
+- **Alpine apk signing** (`Signer` backend `apk-rsa`): with `--sign-key`
+  pointing at an RSA private key, the apk packager signs the compressed
+  control segment (`openssl dgst -sha1 -sign`) and prepends a
+  `.SIGN.RSA.<keyname>` segment. `sign_key_id` overrides the key name
+  (default: `<key file>.pub`).
+- **Alpine index signing**: `lx repo --format apk --sign-key` RSA-signs the
+  whole `APKINDEX.tar.gz` and prepends the signature segment.
+- apk control/signature tar segments now omit end-of-archive records, as
+  the format requires (the data segment remains the terminator).
+
 ### Repository index signing for every format
 
 - `lx repo --sign-key` now signs the index for **opkg** (`Packages.sig`),

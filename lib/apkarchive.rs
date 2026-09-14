@@ -52,23 +52,73 @@ pub fn build(
     mtime: i64,
     apk_path: &Path,
 ) -> Result<()> {
+    build_with_signature(root, meta, arch, mtime, apk_path, None)
+}
+
+/// A control-segment signer for apk v2. `member_name` is the full
+/// `.SIGN.RSA.<keyname>` tar member; `sign` receives the gzipped control
+/// segment and returns its DER PKCS#1 v1.5 RSA signature.
+pub struct ApkSigner<'a> {
+    pub member_name: &'a str,
+    pub sign: &'a dyn Fn(&[u8]) -> Result<Vec<u8>>,
+}
+
+/// Build an apk, optionally signed. A signed apk v2 is
+/// `[signature.tar.gz][control.tar.gz][data.tar.gz]`; the signature covers
+/// the compressed control segment.
+pub fn build_with_signature(
+    root: &Path,
+    meta: &PackageMeta,
+    arch: &str,
+    mtime: i64,
+    apk_path: &Path,
+    signer: Option<ApkSigner<'_>>,
+) -> Result<()> {
     // 1. Data member first: its compressed bytes are hashed into .PKGINFO.
     let data_gz = build_data_tar_gz(root, mtime)?;
     let datahash = sha256_hex(&data_gz);
 
-    // 2. Control member: a tar holding .PKGINFO.
+    // 2. Control member: a tar holding .PKGINFO (no end-of-archive records,
+    //    so it concatenates with the data segment).
     let installed_size = calc_installed_size(root)?;
     let pkginfo = render_pkginfo(meta, arch, mtime, installed_size, &datahash);
     let control_tar = build_control_tar(&pkginfo, mtime)?;
     let control_gz = deterministic_gzip(&control_tar, mtime, 9)?;
 
-    // 3. Concatenate control + data gzip streams.
-    let mut out = Vec::with_capacity(control_gz.len() + data_gz.len());
+    // 3. Optional signature segment, prepended over the control segment.
+    let signature_gz = match signer {
+        Some(s) => {
+            let sig = (s.sign)(&control_gz)?;
+            Some(signature_segment(s.member_name, &sig, mtime)?)
+        }
+        None => None,
+    };
+
+    // 4. Concatenate signature? + control + data gzip streams.
+    let mut out = Vec::with_capacity(
+        signature_gz.as_ref().map(|s| s.len()).unwrap_or(0) + control_gz.len() + data_gz.len(),
+    );
+    if let Some(sig) = &signature_gz {
+        out.extend_from_slice(sig);
+    }
     out.extend_from_slice(&control_gz);
     out.extend_from_slice(&data_gz);
     std::fs::write(apk_path, &out)
         .with_context(|| format!("failed to write '{}'", apk_path.display()))?;
     Ok(())
+}
+
+/// Build a gzipped signature tar segment (`.SIGN.RSA.<keyname>`), without
+/// end-of-archive records so it concatenates with the following segments.
+pub fn signature_segment(member_name: &str, signature: &[u8], mtime: i64) -> Result<Vec<u8>> {
+    let mut tar_bytes = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_bytes);
+        append_file_bytes(&mut builder, member_name, signature, 0o644, mtime)?;
+        // Deliberately no `finish()`: apk segments (except the last) carry no
+        // end-of-archive records.
+    }
+    deterministic_gzip(&tar_bytes, mtime, 9)
 }
 
 /// Render the `.PKGINFO` body.
@@ -129,12 +179,14 @@ pub fn render_pkginfo(
     out
 }
 
+/// The control tar segment. No end-of-archive records: the data segment
+/// (which keeps them) is the only terminator of the concatenated apk tar.
 fn build_control_tar(pkginfo: &str, mtime: i64) -> Result<Vec<u8>> {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
         append_file_bytes(&mut builder, ".PKGINFO", pkginfo.as_bytes(), 0o644, mtime)?;
-        builder.finish()?;
+        // No `finish()` on purpose (see doc comment).
     }
     Ok(tar_bytes)
 }

@@ -81,8 +81,40 @@ impl Packager for ApkPackager {
             provides: &provides,
             replaces: &replaces,
         };
-        lx_lib::apkarchive::build(ctx.staging_root, &meta, arch, ctx.mtime, &dest)
-            .with_context(|| format!("failed to build {}", dest.display()))?;
+        // apk v2 signing: sign the compressed control segment and prepend a
+        // `.SIGN.RSA.<keyname>` segment. `sign_key` must be an RSA private
+        // key (PEM); `sign_key_id`, when set, is the key name in the member.
+        let signed = if let Some(key) = ctx.sign_key {
+            let member = format!(
+                ".SIGN.RSA.{}",
+                lx_lib::sign::apk_key_name(key, ctx.sign_key_id)
+            );
+            let sign = |control_gz: &[u8]| {
+                lx_lib::sign::rsa_sha1_sign(control_gz, key, ctx.sign_passphrase)
+            };
+            let signer = lx_lib::apkarchive::ApkSigner {
+                member_name: &member,
+                sign: &sign,
+            };
+            lx_lib::apkarchive::build_with_signature(
+                ctx.staging_root,
+                &meta,
+                arch,
+                ctx.mtime,
+                &dest,
+                Some(signer),
+            )
+        } else {
+            lx_lib::apkarchive::build_with_signature(
+                ctx.staging_root,
+                &meta,
+                arch,
+                ctx.mtime,
+                &dest,
+                None,
+            )
+        };
+        signed.with_context(|| format!("failed to build {}", dest.display()))?;
 
         Ok(dest)
     }

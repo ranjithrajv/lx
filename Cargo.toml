@@ -54,6 +54,9 @@ object = { version = "0.40.0", default-features = false, features = [
 ] }
 rpm = "0.16"
 zstd = "0.13"
+# Zip extraction for the ArtifactFormat plugin (the one archive format lx
+# previously only recognized). deflate only: no bzip2/aes/zstd-in-zip deps.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 percent-encoding = "2.3"
 cpio = "0.4"

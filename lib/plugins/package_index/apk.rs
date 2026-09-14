@@ -15,7 +15,7 @@ impl PackageIndex for ApkIndexer {
     }
 
     fn description(&self) -> &'static str {
-        "Alpine repository (APKINDEX.tar.gz from .PKGINFO)"
+        "Alpine repository (APKINDEX.tar.gz from .PKGINFO; RSA-signed index)"
     }
 
     fn capabilities(&self) -> Capabilities {
@@ -75,6 +75,29 @@ impl PackageIndex for ApkIndexer {
         let gz = lx_lib::debarchive::deterministic_gzip_bytes(&tar_bytes, 0, 9)?;
         std::fs::write(&out, &gz)?;
         println!("wrote {} ({} packages)", out.display(), artifacts.len());
+        Ok(())
+    }
+
+    fn sign_index(&self, dir: &Path, opts: &IndexOptions) -> Result<()> {
+        let Some(key) = opts.sign_key else {
+            return Ok(());
+        };
+        // Alpine signs the whole `APKINDEX.tar.gz` (unlike a package, where
+        // the control segment is signed) and prepends a
+        // `.SIGN.RSA.<keyname>` segment.
+        let index_path = dir.join("APKINDEX.tar.gz");
+        let index = std::fs::read(&index_path)?;
+        let sig = lx_lib::sign::rsa_sha1_sign(&index, key, None)?;
+        let member = format!(
+            ".SIGN.RSA.{}",
+            lx_lib::sign::apk_key_name(key, opts.sign_key_id)
+        );
+        let segment = lx_lib::apkarchive::signature_segment(&member, &sig, 0)?;
+        let mut out = Vec::with_capacity(segment.len() + index.len());
+        out.extend_from_slice(&segment);
+        out.extend_from_slice(&index);
+        std::fs::write(&index_path, out)?;
+        println!("wrote APKINDEX.tar.gz (signed, {member})");
         Ok(())
     }
 }

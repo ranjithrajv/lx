@@ -7,7 +7,7 @@
 * **7× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `autotools` + `make` + `custom`
 * **11× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `go` + `hex` + `dart` + `nuget` + `maven` + `composer` + `cpan`
 * **6× ArtifactFormat:** `tar.gz` + `tar.xz` + `tar.zst` + `tar` + `zip` + `raw`
-* **3× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign`
+* **4× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign` + `apk-rsa`
 * **5× DependencyMapper:** `debian` + `rpm` + `pacman` + `alpine` + `openwrt`
 * **8× PackageIndex:** 5 write (`apt` + `opkg` + `pacman` + `apk` + `rpm`) + 3 read (`lx-community` + `aur` + `repology`)
 
@@ -502,7 +502,7 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 |---|---|
 | Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `PackageIndex` traits — 5 + 8 + 7 + 11 + 6 + 3 + 5 + 8 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
-| Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`; `check_sidecar` provider-agnostic via `RawGetter` |
+| Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`/`apk-rsa`; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |
 
 See `docs/decisions/2026-08-20-nfpm-adoptions.md` and `README.md` for the `nfpm`-inspired `relations`/`ancillaries`/`epoch` already shared.
@@ -516,17 +516,19 @@ what does it become."* Four more cover cross-cutting lifecycles and the
 | Dimension | Trait / registry | Impls | Selected by | Replaces |
 |---|---|---|---|---|
 | **ArtifactFormat** | `lib/plugins/artifact/mod.rs` | `tar.gz` `tar.xz` `tar.zst` `tar` `zip` `raw` | `artifact_format:` / auto-detect | `build.rs::extract` + `discovery::guess_format` match |
-| **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
+| **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` `apk-rsa` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
 | **DependencyMapper** | `lib/plugins/depmap/mod.rs` | `debian` `rpm` `pacman` `alpine` `openwrt` | target `package_format` | per-format `match` inside `depmap.rs` |
 | **PackageIndex** | `lib/plugins/package_index/mod.rs` | 5 write (`apt` `opkg` `pacman` `apk` `rpm`) + 3 read (`lx-community` `aur` `repology`) | `lx repo --format` / `indexes.yaml` | apt-only `lib/repo.rs` + `SourceKind` match in `index/registry.rs` |
 
 * **ArtifactFormat** — `artifact_format:` (or filename auto-detection)
-  selects how an upstream archive is unpacked. `tar.xz`/`tar.zst` are new;
-  `zip` is registered and recognized but extraction is not yet implemented.
+  selects how an upstream archive is unpacked. `tar.gz`/`tar.xz`/`tar.zst`/
+  `tar`/`zip`/`raw` are all implemented (zip via the pure-Rust `zip` crate).
 * **Signer** — the first backend whose `supports(format, method)` matches
-  wins (`signer_for`). Detached backends write a sibling signature now;
-  embedded backends declare `embedded()` and the packager writes the
-  signature while building the artifact.
+  wins (`signer_for`). Detached backends write a sibling signature now
+  (`gpg-detach`); embedded backends declare `embedded()` and the packager
+  writes the signature while building the artifact (`rpm-pgp`,
+  `deb-debsign`, and `apk-rsa` — Alpine's `.SIGN.RSA.<keyname>` over the
+  control segment, signed through `openssl`).
 * **DependencyMapper** — each target format owns its package-name translation
   and version-operator syntax. Deb/RPM/Arch delegate to the shared
   ecosystem→Debian tables in `depmap.rs`; Alpine renders `name>=ver` and
@@ -542,8 +544,8 @@ what does it become."* Four more cover cross-cutting lifecycles and the
   Index **signing** is per-format too (`sign_index`, run after
   `build_index`): apt `InRelease` (inline-clearsigned) + `Release.gpg`, opkg
   `Packages.sig`, pacman `<repo>.db.tar.gz.sig`, rpm
-  `repodata/repomd.xml.asc`; Alpine's RSA-key scheme has no OpenPGP
-  equivalent, so `apk` reports unsupported. **Read** (`lx index
+  `repodata/repomd.xml.asc`, and apk a prepended `.SIGN.RSA.<keyname>`
+  segment (RSA/SHA-1 via `openssl`). **Read** (`lx index
   search/info/install/update`): fans out over every enabled source, looked
   up by canonical id in the registry (`get_index_backend`) rather than a
   hardcoded `match`; the LX community index and the AUR build/install,

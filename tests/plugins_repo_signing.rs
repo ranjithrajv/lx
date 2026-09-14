@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Index signing for the non-apt repository formats (and a corrected apt
-//! `InRelease`). Each test generates a throwaway gpg key and skips cleanly
-//! when gpg (or, for rpm, the `rpm` CLI) isn't available.
+//! Index signing for every repository format (and a corrected apt
+//! `InRelease`), plus Alpine apk package signing. Tests generate throwaway
+//! gpg / openssl keys and skip cleanly when those tools are unavailable.
 
-use lx_lib::plugins::package_index::{get_index_backend, IndexOptions};
+use lx_lib::plugins::package_index::{artifacts_with_ext, get_index_backend, IndexOptions};
 use lx_lib::repo::{run, RepoArgs};
 use std::path::{Path, PathBuf};
 
@@ -178,12 +178,100 @@ fn rpm_writes_repomd_asc() {
 }
 
 #[test]
-fn apk_index_signing_is_reported_unsupported() {
+fn apk_index_is_rsa_signed() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("root");
     stage(&root);
+    lx_lib::apkarchive::build(
+        &root,
+        &apk_meta(),
+        "x86_64",
+        1_735_689_600,
+        &tmp.path().join("hello-1.0.0-r1.apk"),
+    )
+    .unwrap();
+
+    let arts = artifacts_with_ext(tmp.path(), "apk").unwrap();
+    let indexer = get_index_backend("apk").unwrap().make("apk");
+    let base = IndexOptions {
+        suite: "alpine",
+        origin: "test",
+        components: "main",
+        sign_key: None,
+        sign_key_id: "",
+    };
+    indexer.build_index(tmp.path(), &arts, &base).unwrap();
+    let unsigned = std::fs::read(tmp.path().join("APKINDEX.tar.gz")).unwrap();
+
+    let Some((priv_key, pub_key)) = openssl_keypair(tmp.path()) else {
+        eprintln!("skipping: openssl unavailable");
+        return;
+    };
+    assert_eq!(lx_lib::sign::apk_key_name(&priv_key, ""), "key.rsa.pub");
+
+    let with_key = IndexOptions {
+        suite: "alpine",
+        origin: "test",
+        components: "main",
+        sign_key: Some(&priv_key),
+        sign_key_id: "",
+    };
+    indexer.sign_index(tmp.path(), &with_key).unwrap();
+    let signed = std::fs::read(tmp.path().join("APKINDEX.tar.gz")).unwrap();
+    assert!(
+        signed.len() > unsigned.len(),
+        "signature segment not prepended"
+    );
+
+    let sig = extract_sign_member(&signed).expect("no .SIGN member in signed index");
+    assert!(openssl_verify(&pub_key, &sig, &unsigned, tmp.path()));
+}
+
+#[test]
+fn apk_package_is_rsa_signed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    stage(&root);
+    let Some((priv_key, pub_key)) = openssl_keypair(tmp.path()) else {
+        eprintln!("skipping: openssl unavailable");
+        return;
+    };
+
+    let member = format!(".SIGN.RSA.{}", lx_lib::sign::apk_key_name(&priv_key, ""));
+    let captured = std::sync::Mutex::new(Vec::new());
+    let sign = |control_gz: &[u8]| {
+        *captured.lock().unwrap() = control_gz.to_vec();
+        lx_lib::sign::rsa_sha1_sign(control_gz, &priv_key, None)
+    };
     let apk = tmp.path().join("hello-1.0.0-r1.apk");
-    let meta = lx_lib::apkarchive::PackageMeta {
+    let signer = lx_lib::apkarchive::ApkSigner {
+        member_name: &member,
+        sign: &sign,
+    };
+    lx_lib::apkarchive::build_with_signature(
+        &root,
+        &apk_meta(),
+        "x86_64",
+        1_735_689_600,
+        &apk,
+        Some(signer),
+    )
+    .unwrap();
+
+    let signed = std::fs::read(&apk).unwrap();
+    let sig = extract_sign_member(&signed).expect("no .SIGN member in signed apk");
+    let control = captured.lock().unwrap().clone();
+    assert!(!control.is_empty());
+    assert!(openssl_verify(&pub_key, &sig, &control, tmp.path()));
+
+    // An unsigned package carries no signature member.
+    let plain = tmp.path().join("plain.apk");
+    lx_lib::apkarchive::build(&root, &apk_meta(), "x86_64", 1_735_689_600, &plain).unwrap();
+    assert!(extract_sign_member(&std::fs::read(&plain).unwrap()).is_none());
+}
+
+fn apk_meta() -> lx_lib::apkarchive::PackageMeta<'static> {
+    lx_lib::apkarchive::PackageMeta {
         name: "hello",
         version: "1.0.0-r1",
         description: "test",
@@ -192,16 +280,74 @@ fn apk_index_signing_is_reported_unsupported() {
         depends: &[],
         provides: &[],
         replaces: &[],
-    };
-    lx_lib::apkarchive::build(&root, &meta, "x86_64", 1_735_689_600, &apk).unwrap();
-    let Some(key) = make_key(tmp.path()) else {
-        eprintln!("skipping: gpg unavailable");
-        return;
-    };
-    // Succeeds, but produces no signature (Alpine needs an RSA key).
-    run(args(tmp.path(), "apk", Some(key))).unwrap();
-    assert!(tmp.path().join("APKINDEX.tar.gz").exists());
-    assert!(!tmp.path().join("APKINDEX.tar.gz.sig").exists());
+    }
+}
+
+/// Generate a 2048-bit RSA keypair with openssl; `(private, public)`.
+fn openssl_keypair(dir: &Path) -> Option<(PathBuf, PathBuf)> {
+    if std::process::Command::new("openssl")
+        .arg("version")
+        .output()
+        .is_err()
+    {
+        return None;
+    }
+    let priv_key = dir.join("key.rsa");
+    let pub_key = dir.join("key.rsa.pub");
+    let g = std::process::Command::new("openssl")
+        .args(["genrsa", "-out"])
+        .arg(&priv_key)
+        .arg("2048")
+        .output()
+        .ok()?;
+    if !g.status.success() {
+        return None;
+    }
+    let p = std::process::Command::new("openssl")
+        .args(["rsa", "-in"])
+        .arg(&priv_key)
+        .args(["-pubout", "-out"])
+        .arg(&pub_key)
+        .output()
+        .ok()?;
+    if !p.status.success() {
+        return None;
+    }
+    Some((priv_key, pub_key))
+}
+
+fn openssl_verify(pub_key: &Path, sig: &[u8], data: &[u8], dir: &Path) -> bool {
+    let sigf = dir.join("verify.sig");
+    let dataf = dir.join("verify.data");
+    if std::fs::write(&sigf, sig).is_err() || std::fs::write(&dataf, data).is_err() {
+        return false;
+    }
+    std::process::Command::new("openssl")
+        .args(["dgst", "-sha1", "-verify"])
+        .arg(pub_key)
+        .arg("-signature")
+        .arg(&sigf)
+        .arg(&dataf)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Read the first `.SIGN.*` member out of a concatenated apk gzip stream.
+fn extract_sign_member(bytes: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let gz = flate2::read::MultiGzDecoder::new(bytes);
+    let mut tar = tar::Archive::new(gz);
+    for entry in tar.entries().ok()? {
+        let mut entry = entry.ok()?;
+        let name = entry.path().ok()?.to_string_lossy().to_string();
+        if name.starts_with(".SIGN.") {
+            let mut v = Vec::new();
+            entry.read_to_end(&mut v).ok()?;
+            return Some(v);
+        }
+    }
+    None
 }
 
 #[test]
