@@ -120,3 +120,25 @@ pub(crate) fn available_parallelism() -> usize {
         .map(|n| n.get())
         .unwrap_or(1)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_accepts_a_zero_exit() {
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exit 0"]);
+        run(cmd, "test command").unwrap();
+    }
+
+    #[test]
+    fn run_reports_a_nonzero_exit() {
+        // Regression: build/install steps must fail the build, not be ignored.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "exit 3"]);
+        let err = run(cmd, "test command").unwrap_err().to_string();
+        assert!(err.contains("test command failed"), "{err}");
+        assert!(err.contains('3'), "{err}");
+    }
+}
