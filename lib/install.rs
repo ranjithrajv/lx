@@ -8,7 +8,7 @@ use crate::consumer;
 use crate::debs;
 use crate::index::detect_host_format;
 use crate::install_pkg;
-use crate::manifest::{Manifest, PackageEntry};
+use crate::manifest::Manifest;
 use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
@@ -235,22 +235,17 @@ fn install_from_org(args: &InstallArgs, token: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    consumer::install(&dest, &asset.name, format, args.yes)?;
-
-    let mut manifest = Manifest::load()?;
-    manifest.record(
+    consumer::install_and_record(
+        &dest,
+        &asset.name,
         &args.package,
-        PackageEntry {
-            version: control_version,
-            arch,
-            distribution: dist,
-            asset: asset.name.clone(),
-            tag: release.tag_name.clone(),
-            installed_at: debs::now_rfc3339(),
-            format: format.name().to_string(),
-        },
-    );
-    manifest.save()?;
+        format,
+        control_version,
+        arch,
+        dist,
+        release.tag_name.clone(),
+        args.yes,
+    )?;
 
     Ok(())
 }
@@ -258,6 +253,7 @@ fn install_from_org(args: &InstallArgs, token: Option<&str>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::manifest::PackageEntry;
 
     fn recorded() -> PackageEntry {
         PackageEntry {

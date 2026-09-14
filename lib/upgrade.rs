@@ -268,22 +268,17 @@ fn upgrade_one(
     if !args.no_verify {
         debs::verify_sidecar_or_require_flag(client, asset, &dest, args.allow_unverified)?;
     }
-    consumer::install(&dest, &asset.name, format, args.yes)?;
-
-    let mut manifest = Manifest::load()?;
-    manifest.record(
+    consumer::install_and_record(
+        &dest,
+        &asset.name,
         package,
-        PackageEntry {
-            version: candidate_version,
-            arch: entry.arch.clone(),
-            distribution: entry.distribution.clone(),
-            asset: asset.name.clone(),
-            tag: release.tag_name.clone(),
-            installed_at: debs::now_rfc3339(),
-            format: format.name().to_string(),
-        },
-    );
-    manifest.save()?;
+        format,
+        candidate_version,
+        entry.arch.clone(),
+        entry.distribution.clone(),
+        release.tag_name.clone(),
+        args.yes,
+    )?;
 
     Ok(true)
 }

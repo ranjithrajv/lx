@@ -5,7 +5,7 @@ use clap::Args;
 
 use crate::consumer;
 use crate::debs;
-use crate::manifest::{Manifest, PackageEntry};
+use crate::manifest::Manifest;
 use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
@@ -79,22 +79,17 @@ pub fn run(args: RollbackArgs, token: Option<&str>) -> Result<()> {
     if !args.no_verify {
         debs::verify_sidecar_or_require_flag(&client, asset, &dest, args.allow_unverified)?;
     }
-    consumer::install(&dest, &asset.name, format, args.yes)?;
-
-    let mut manifest = Manifest::load()?;
-    manifest.record(
+    consumer::install_and_record(
+        &dest,
+        &asset.name,
         &args.package,
-        PackageEntry {
-            version: target.version.clone(),
-            arch: target.arch.clone(),
-            distribution: target.distribution.clone(),
-            asset: asset.name.clone(),
-            tag: target.tag.clone(),
-            installed_at: debs::now_rfc3339(),
-            format: format.name().to_string(),
-        },
-    );
-    manifest.save()?;
+        format,
+        target.version.clone(),
+        target.arch.clone(),
+        target.distribution.clone(),
+        target.tag.clone(),
+        args.yes,
+    )?;
 
     println!("✓ rolled back {} to {}", args.package, target.version);
     Ok(())

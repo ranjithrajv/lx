@@ -236,6 +236,39 @@ pub fn install(path: &Path, filename: &str, format: InstallFormat, yes: bool) ->
     Ok(())
 }
 
+/// Install an already-downloaded artifact and record the new generation in the
+/// lx manifest. This is the transaction `install`/`upgrade`/`rollback` share;
+/// keeping it in one place means a `PackageEntry` change is a single edit and
+/// the two steps cannot drift apart.
+#[allow(clippy::too_many_arguments)]
+pub fn install_and_record(
+    path: &Path,
+    filename: &str,
+    package: &str,
+    format: InstallFormat,
+    version: String,
+    arch: String,
+    distribution: String,
+    tag: String,
+    yes: bool,
+) -> Result<()> {
+    install(path, filename, format, yes)?;
+    let mut manifest = crate::manifest::Manifest::load()?;
+    manifest.record(
+        package,
+        crate::manifest::PackageEntry {
+            version,
+            arch,
+            distribution,
+            asset: filename.to_string(),
+            tag,
+            installed_at: debs::now_rfc3339(),
+            format: format.name().to_string(),
+        },
+    );
+    manifest.save()
+}
+
 /// Remove (or purge) an installed package with the host's native manager.
 pub fn remove(package: &str, purge: bool, yes: bool, format: InstallFormat) -> Result<()> {
     match format {
