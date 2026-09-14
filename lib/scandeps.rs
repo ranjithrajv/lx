@@ -298,6 +298,27 @@ fn scan_one_arch(
     tmp_dir: &Path,
     all_sonames: &mut std::collections::BTreeSet<String>,
 ) -> Result<bool> {
+    let Some((extract_dir, binary_dir)) = prepare_asset(source, token, cfg, arch, asset, tmp_dir)?
+    else {
+        return Ok(false);
+    };
+    scan_arch(&binary_dir, &extract_dir, all_sonames)
+}
+
+/// Download `asset` for `arch` into its own subdirectory and extract it.
+///
+/// Returns `(extract_dir, binary_dir)`, or `None` when the configured
+/// `binary_path` is absent from the archive (a clean skip, not a failure).
+/// Unverified by design: the payload is only inspected locally, never
+/// installed.
+fn prepare_asset(
+    source: &dyn crate::plugins::forge::ForgeSource,
+    token: Option<&str>,
+    cfg: &PackageConfig,
+    arch: &str,
+    asset: &Asset,
+    tmp_dir: &Path,
+) -> Result<Option<(PathBuf, PathBuf)>> {
     let mut cfg = cfg.clone();
     if cfg.artifact_format.is_empty() {
         cfg.artifact_format = crate::discovery::guess_format(&asset.name).to_string();
@@ -305,24 +326,20 @@ fn scan_one_arch(
 
     println!("\n{arch}: {}", asset.name);
     // Own subdirectory per architecture (not a filename prefix) so
-    // `raw`-format assets (e.g. AppImages) -- whose extracted name comes
-    // from the downloaded file's own on-disk name, see `build::extract`'s
-    // "raw" branch -- keep their real asset name instead of leaking an
-    // internal disambiguation prefix into it.
+    // `raw`-format assets (e.g. AppImages) -- whose extracted name comes from
+    // the downloaded file's own on-disk name -- keep their real asset name.
     let asset_dir = tmp_dir.join(format!("{arch}-download"));
     std::fs::create_dir_all(&asset_dir)?;
     let asset_path = asset_dir.join(&asset.name);
     println!("  ↓ downloading (unverified -- inspected locally only, never installed)");
-    {
-        if asset.browser_download_url.is_empty() {
-            bail!("asset '{}' has no download URL", asset.name);
-        }
-        let mut body = source
-            .raw_get(&asset.browser_download_url, token)
-            .context("asset download failed")?;
-        let mut file = std::fs::File::create(&asset_path)?;
-        std::io::copy(&mut body, &mut file)?;
+    if asset.browser_download_url.is_empty() {
+        bail!("asset '{}' has no download URL", asset.name);
     }
+    let mut body = source
+        .raw_get(&asset.browser_download_url, token)
+        .context("asset download failed")?;
+    let mut file = std::fs::File::create(&asset_path)?;
+    std::io::copy(&mut body, &mut file)?;
 
     let extract_dir = tmp_dir.join(format!("{arch}-scan-extract"));
     crate::build::extract(&asset_path, &extract_dir, &cfg.artifact_format)?;
@@ -337,10 +354,19 @@ fn scan_one_arch(
             "  ⚠️  binary_path '{}' not found in archive; skipped",
             cfg.binary_path
         );
-        return Ok(false);
+        return Ok(None);
     }
+    Ok(Some((extract_dir, binary_dir)))
+}
 
-    let elf_files = find_elf_files(&binary_dir)?;
+/// Scan every ELF under `binary_dir`, printing a per-library report and
+/// accumulating the union of sonames. Returns true when any ELF was found.
+fn scan_arch(
+    binary_dir: &Path,
+    extract_dir: &Path,
+    all_sonames: &mut std::collections::BTreeSet<String>,
+) -> Result<bool> {
+    let elf_files = find_elf_files(binary_dir)?;
     if elf_files.is_empty() {
         println!("  (no ELF binaries found)");
         return Ok(false);
@@ -349,7 +375,7 @@ fn scan_one_arch(
     let mut scanned_any = false;
     for elf_path in elf_files {
         scanned_any = true;
-        let rel = elf_path.strip_prefix(&extract_dir).unwrap_or(&elf_path);
+        let rel = elf_path.strip_prefix(extract_dir).unwrap_or(&elf_path);
         let bytes = std::fs::read(&elf_path)
             .with_context(|| format!("failed to read '{}'", elf_path.display()))?;
         let libs = lx_lib::elfdeps::needed_libraries(&bytes)
