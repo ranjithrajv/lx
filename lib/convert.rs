@@ -87,6 +87,22 @@ struct SourceMeta {
     /// `(absolute path, noreplace)`. Re-registered in the target as a deb
     /// conffile, an RPM `%config`/`%config(noreplace)`, or a pacman `backup`.
     conffiles: Vec<(String, bool)>,
+    /// Maintainer triggers found in the source (deb `triggers` lines, RPM
+    /// `%trigger*` conditions/scriptlets).
+    triggers: Vec<Trigger>,
+}
+
+/// A maintainer trigger found in a source package.
+#[derive(Debug, Clone)]
+struct Trigger {
+    /// deb: `interest` / `interest-await` / `interest-noawait` / `activate` /
+    /// `activate-await` / `activate-noawait`. rpm: `triggerin` / `triggerun` /
+    /// `triggerpostun` / `triggerprein`.
+    kind: String,
+    /// deb: the trigger name/path; rpm: the condition package.
+    name: String,
+    /// rpm trigger scriptlet body (deb triggers carry no script).
+    script: String,
 }
 
 pub fn run(args: ConvertArgs) -> Result<()> {
@@ -255,6 +271,7 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
     let ctrl = crate::repo::read_control(input)?;
     let get = |k: &str| ctrl.get(k).cloned().unwrap_or_default();
     let scripts = extract_deb_scripts(input, tmp)?;
+    let triggers = parse_deb_triggers(scripts.get("triggers").map(String::as_str).unwrap_or(""));
     let (epoch, version) = split_deb_epoch(&get("Version"));
     Ok(SourceMeta {
         package: get("Package"),
@@ -276,6 +293,7 @@ fn extract_deb_meta(input: &Path, tmp: &Path) -> Result<SourceMeta> {
         distribution: infer_dist_from_version(&version),
         scripts,
         conffiles: parse_deb_conffiles(&get("Conffiles")),
+        triggers,
     })
 }
 
@@ -358,7 +376,7 @@ fn extract_deb_scripts(input: &Path, _tmp: &Path) -> Result<BTreeMap<String, Str
                 .unwrap_or("")
                 .to_string();
             match fname.as_str() {
-                "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates" => {
+                "preinst" | "postinst" | "prerm" | "postrm" | "config" | "templates" | "triggers" => {
                     let mut s = String::new();
                     std::io::Read::read_to_string(&mut member, &mut s)?;
                     scripts.insert(fname, s);
@@ -418,6 +436,7 @@ fn extract_rpm_meta(input: &Path) -> Result<SourceMeta> {
         distribution: "el9".to_string(),
         scripts,
         conffiles: rpm_conffiles(&pkg),
+        triggers: rpm_triggers(&pkg),
         ..Default::default()
     })
 }
@@ -438,7 +457,8 @@ fn format_rpm_dependency(d: &rpm::Dependency) -> String {
 }
 
 /// Format RPM `Requires`, skipping file/rpmlib/config/interpreter
-/// capabilities that have no cross-format meaning.
+/// capabilities that have no cross-format meaning, plus trigger-flagged
+/// dependencies (lx records RPM triggers as trigger-flagged Requires).
 fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
     deps.iter()
         .filter(|d| {
@@ -448,10 +468,174 @@ fn format_rpm_requires(deps: &[rpm::Dependency]) -> String {
                 && !n.starts_with("rpmlib(")
                 && !n.starts_with("config(")
                 && !n.starts_with("interpreter(")
+                && rpm_trigger_kind(d.flags).is_none()
         })
         .map(format_rpm_dependency)
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The trigger kind an RPM dependency flag set encodes, if any.
+fn rpm_trigger_kind(flags: rpm::DependencyFlags) -> Option<&'static str> {
+    if flags.contains(rpm::DependencyFlags::TRIGGERIN) {
+        Some("triggerin")
+    } else if flags.contains(rpm::DependencyFlags::TRIGGERUN) {
+        Some("triggerun")
+    } else if flags.contains(rpm::DependencyFlags::TRIGGERPOSTUN) {
+        Some("triggerpostun")
+    } else if flags.contains(rpm::DependencyFlags::TRIGGERPREIN) {
+        Some("triggerprein")
+    } else {
+        None
+    }
+}
+
+/// Read RPM triggers. lx's own builder records them as trigger-flagged
+/// Requires; distro rpms use the dedicated trigger tags. Both are read.
+fn rpm_triggers(pkg: &rpm::Package) -> Vec<Trigger> {
+    let mut out: Vec<Trigger> = Vec::new();
+    if let Ok(requires) = pkg.metadata.get_requires() {
+        for d in &requires {
+            if let Some(kind) = rpm_trigger_kind(d.flags) {
+                push_trigger(&mut out, kind, &d.name, "");
+            }
+        }
+    }
+    let h = &pkg.metadata.header;
+    let names = h
+        .get_entry_data_as_string_array(rpm::IndexTag::RPMTAG_TRIGGERNAME)
+        .unwrap_or(&[]);
+    let flags = h
+        .get_entry_data_as_u32_array(rpm::IndexTag::RPMTAG_TRIGGERFLAGS)
+        .unwrap_or_default();
+    let indexes = h
+        .get_entry_data_as_u32_array(rpm::IndexTag::RPMTAG_TRIGGERINDEX)
+        .unwrap_or_default();
+    let scripts = h
+        .get_entry_data_as_string_array(rpm::IndexTag::RPMTAG_TRIGGERSCRIPTS)
+        .unwrap_or(&[]);
+    for (i, name) in names.iter().enumerate() {
+        let raw = flags.get(i).copied().unwrap_or(0);
+        let flags = rpm::DependencyFlags::from_bits_retain(raw);
+        let Some(kind) = rpm_trigger_kind(flags) else {
+            continue;
+        };
+        let script = indexes
+            .get(i)
+            .and_then(|idx| scripts.get(*idx as usize))
+            .map(String::as_str)
+            .unwrap_or("");
+        push_trigger(&mut out, kind, name, script);
+    }
+    out
+}
+
+fn push_trigger(out: &mut Vec<Trigger>, kind: &str, name: &str, script: &str) {
+    if name.is_empty() || out.iter().any(|t| t.kind == kind && t.name == name) {
+        return;
+    }
+    out.push(Trigger {
+        kind: kind.to_string(),
+        name: name.to_string(),
+        script: script.to_string(),
+    });
+}
+
+/// Parse deb `DEBIAN/triggers` lines (`interest <name>`, `activate-await <name>`).
+fn parse_deb_triggers(text: &str) -> Vec<Trigger> {
+    text.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .filter_map(|line| {
+            let mut it = line.split_whitespace();
+            let kind = it.next()?;
+            let name = it.next()?.to_string();
+            Some(Trigger {
+                kind: kind.to_string(),
+                name,
+                script: String::new(),
+            })
+        })
+        .collect()
+}
+
+/// Map the source's triggers onto the target's trigger model where one
+/// exists, reporting the ones it cannot represent instead of dropping them
+/// silently. deb and RPM trigger models differ (deb triggers are declarative
+/// and script-less; RPM triggers name a condition package and carry a
+/// scriptlet), so the mapping is best-effort by design.
+fn apply_triggers_to_config(
+    config: &mut crate::config::PackageConfig,
+    triggers: &[Trigger],
+    target: &str,
+) {
+    for t in triggers {
+        let kind = t.kind.as_str();
+        match target {
+            // RPM -> deb: a %triggerin condition becomes an `interest` line,
+            // and its scriptlet runs from the postinst's `triggered` branch.
+            "deb" if kind == "triggerin" => {
+                if !config.deb.triggers_interest.contains(&t.name) {
+                    config.deb.triggers_interest.push(t.name.clone());
+                }
+                if t.script.trim().is_empty() {
+                    eprintln!(
+                        "  ⚠ RPM trigger '{}' carried as a deb `interest` line only (no scriptlet body in the source)",
+                        t.name
+                    );
+                } else {
+                    append_triggered_handler(&mut config.scripts.postinstall, &t.name, &t.script);
+                }
+            }
+            "deb" if kind.starts_with("trigger") => {
+                eprintln!(
+                    "  ⚠ RPM '{} -- {}' has no deb equivalent (deb has no install/remove trigger of that shape); not carried",
+                    kind, t.name
+                );
+            }
+            // deb -> RPM: a declarative `interest` becomes a %triggerin
+            // condition (no script body exists in deb).
+            "rpm" if kind.starts_with("interest") => {
+                let entry = format!("{}:", t.name);
+                if !config.rpm.trigger_post_install.contains(&entry) {
+                    config.rpm.trigger_post_install.push(entry);
+                }
+                eprintln!(
+                    "  ⚠ deb '{} {}' carried as an RPM %triggerin condition (deb triggers carry no script body; condition-only)",
+                    kind, t.name
+                );
+            }
+            "rpm" if kind.starts_with("activate") => {
+                eprintln!(
+                    "  ⚠ deb '{} {}' has no RPM equivalent (RPM cannot activate another package's trigger); not carried",
+                    kind, t.name
+                );
+            }
+            "arch" => {
+                eprintln!(
+                    "  ⚠ Arch has no trigger mechanism; '{} {}' not carried",
+                    kind, t.name
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Append a `triggered` branch to a deb postinst that runs `script` when the
+/// named trigger fires.
+fn append_triggered_handler(postinst: &mut String, name: &str, script: &str) {
+    if !postinst.is_empty() && !postinst.ends_with('\n') {
+        postinst.push('\n');
+    }
+    postinst.push_str("if [ \"$1\" = \"triggered\" ]; then\n");
+    postinst.push_str(&format!("  case \"$2\" in\n    *{name}*)\n"));
+    for line in script.lines() {
+        postinst.push_str("      ");
+        postinst.push_str(line);
+        postinst.push('\n');
+    }
+    postinst.push_str("      ;;\n  esac\nfi\n");
 }
 
 /// Format RPM `Provides`, keeping real virtual provides and dropping the
@@ -1417,6 +1601,8 @@ fn build_target(
         });
     }
 
+    apply_triggers_to_config(&mut config, &meta.triggers, target_format);
+
     let job = crate::build::ResolvedJob {
         dist: if meta.distribution.is_empty() {
             match target_format {
@@ -1605,6 +1791,100 @@ mod tests {
             rpm::Dependency::rpmlib("CompressedFileNames", "3.0.4"),
         ];
         assert_eq!(format_rpm_provides("hello", &deps), "webserver");
+    }
+
+    #[test]
+    fn parses_deb_trigger_lines() {
+        let t = parse_deb_triggers("# comment\ninterest cups\ninterest-await bar\nactivate baz\n");
+        assert_eq!(t.len(), 3);
+        assert_eq!((t[0].kind.as_str(), t[0].name.as_str()), ("interest", "cups"));
+        assert_eq!(t[1].name, "bar");
+        assert_eq!((t[2].kind.as_str(), t[2].name.as_str()), ("activate", "baz"));
+    }
+
+    #[test]
+    fn rpm_requires_hide_trigger_dependencies() {
+        let deps = vec![
+            rpm::Dependency::greater_eq("glibc", "2.17"),
+            rpm::Dependency {
+                name: "cups".into(),
+                flags: rpm::DependencyFlags::TRIGGERIN,
+                version: String::new(),
+            },
+        ];
+        assert_eq!(format_rpm_requires(&deps), "glibc >= 2.17");
+    }
+
+    #[test]
+    fn reads_lx_style_rpm_triggers() {
+        use lx_lib::rpmarchive::{self, BuildOptions, PackageMeta, RpmTrigger};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+        std::fs::write(root.join("usr/bin/hello"), b"payload").unwrap();
+        let rpm_path = dir.path().join("hello.rpm");
+        rpmarchive::build_with_options(
+            &root,
+            &PackageMeta {
+                name: "hello",
+                version: "1.0",
+                release: "1",
+                summary: "s",
+                description: "d",
+                license: "MIT",
+                vendor: None,
+                packager: None,
+            },
+            "amd64",
+            0,
+            &rpm_path,
+            &BuildOptions {
+                triggers: vec![RpmTrigger {
+                    package: "cups".into(),
+                    script: String::new(),
+                }],
+                trigger_flags: vec![rpm::DependencyFlags::TRIGGERIN],
+                ..Default::default()
+            },
+            &lx_lib::filemeta::FileMetaMap::new(),
+        )
+        .unwrap();
+        let pkg = rpm::Package::open(&rpm_path).unwrap();
+        let triggers = rpm_triggers(&pkg);
+        assert!(
+            triggers
+                .iter()
+                .any(|t| t.kind == "triggerin" && t.name == "cups"),
+            "{triggers:?}"
+        );
+    }
+
+    #[test]
+    fn trigger_mapping_carries_both_directions() {
+        let mut cfg = crate::config::PackageConfig::default();
+        apply_triggers_to_config(
+            &mut cfg,
+            &[Trigger {
+                kind: "triggerin".into(),
+                name: "bar".into(),
+                script: "echo hi".into(),
+            }],
+            "deb",
+        );
+        assert!(cfg.deb.triggers_interest.contains(&"bar".to_string()));
+        assert!(cfg.scripts.postinstall.contains("echo hi"));
+
+        let mut cfg = crate::config::PackageConfig::default();
+        apply_triggers_to_config(
+            &mut cfg,
+            &[Trigger {
+                kind: "interest".into(),
+                name: "foo".into(),
+                script: String::new(),
+            }],
+            "rpm",
+        );
+        assert_eq!(cfg.rpm.trigger_post_install, vec!["foo:".to_string()]);
     }
 
     #[test]

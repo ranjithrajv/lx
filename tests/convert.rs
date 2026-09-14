@@ -188,6 +188,57 @@ fn convert_rpm_to_deb_in_process_carries_metadata() {
 }
 
 #[test]
+fn convert_deb_to_rpm_carries_trigger_conditions() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("debroot");
+    std::fs::create_dir_all(root.join("usr/bin")).unwrap();
+    std::fs::write(root.join("usr/bin/hello"), b"payload").unwrap();
+    let control = b"Package: hello\nVersion: 1.0-1+bookworm\nArchitecture: amd64\nMaintainer: T <t@e.c>\nDescription: hi\n";
+    let deb = dir.path().join("hello_1.0-1+bookworm_amd64.deb");
+    lx_lib::debarchive::build_full(
+        &root,
+        control,
+        0,
+        &deb,
+        "gzip",
+        &[lx_lib::debarchive::ControlMember {
+            name: "triggers".into(),
+            content: b"interest cups\n".to_vec(),
+            mode: 0o644,
+        }],
+        None,
+    )
+    .unwrap();
+
+    run(ConvertArgs {
+        input: deb,
+        to: Some("rpm".to_string()),
+        output: dir.path().join("out"),
+        package_name: None,
+        version: None,
+        arch: None,
+        distribution: None,
+        build_version: "1".to_string(),
+        dry_run: false,
+    })
+    .unwrap();
+
+    let rpm = std::fs::read_dir(dir.path().join("out"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().map(|x| x == "rpm").unwrap_or(false))
+        .expect("a .rpm was produced");
+    let pkg = rpm::Package::open(&rpm).unwrap();
+    let requires = pkg.metadata.get_requires().unwrap();
+    assert!(
+        requires
+            .iter()
+            .any(|d| d.name == "cups" && d.flags.contains(rpm::DependencyFlags::TRIGGERIN)),
+        "deb `interest cups` became an rpm %triggerin condition: {requires:?}"
+    );
+}
+
+#[test]
 fn convert_deb_to_rpm_carries_conffiles() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("debroot");
