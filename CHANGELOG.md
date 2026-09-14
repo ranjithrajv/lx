@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Real-client and live-endpoint verification
+
+- New `tests/verify_clients.rs` closes the last verification gaps:
+  a real `pacman -Sy` confirms it accepts the generated `<repo>.db.tar.gz`
+  (runs wherever `pacman` and an unprivileged user namespace are available),
+  with gated `LX_OPKG=<opkg>` / `LX_DNF=<dnf>` tests for the opkg/rpm
+  indexes where those clients exist. The live Gitee and SourceForge clients
+  are exercised against the real APIs under `LX_NETWORK_TESTS=1`. All tests
+  skip cleanly when the tool or opt-in is absent, so the suite stays
+  hermetic.
+
 ### Command regrouping
 
 - New `lx deps` group: `lx deps scan` (was `lx scan-deps`) and
