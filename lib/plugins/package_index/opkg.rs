@@ -5,20 +5,19 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::{Capabilities, IndexOptions, PackageIndex};
+use crate::plugins::plugin::plugin_identity;
 
 /// OpenWrt/opkg repository: a `Packages` index plus `Packages.gz`, built
 /// from each `.ipk`'s control file (same RFC-2822 field syntax as `.deb`).
 pub struct OpkgIndexer;
 
+plugin_identity!(
+    OpkgIndexer,
+    "opkg",
+    "opkg repository (Packages, Packages.gz)"
+);
+
 impl PackageIndex for OpkgIndexer {
-    fn id(&self) -> &'static str {
-        "opkg"
-    }
-
-    fn description(&self) -> &'static str {
-        "opkg repository (Packages, Packages.gz)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::WRITE
     }

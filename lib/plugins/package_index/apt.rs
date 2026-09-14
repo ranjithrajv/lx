@@ -4,21 +4,20 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use super::{Capabilities, IndexOptions, PackageIndex};
+use crate::plugins::plugin::plugin_identity;
 
 /// Debian/Ubuntu apt repository: `Packages`, `Packages.gz`, `Release`, and
 /// a clearsigned `InRelease` when a key is given. Delegates to the original
 /// implementation in `lib/repo.rs` so behavior is unchanged.
 pub struct AptIndexer;
 
+plugin_identity!(
+    AptIndexer,
+    "apt",
+    "apt repository (Packages, Packages.gz, Release, InRelease)"
+);
+
 impl PackageIndex for AptIndexer {
-    fn id(&self) -> &'static str {
-        "apt"
-    }
-
-    fn description(&self) -> &'static str {
-        "apt repository (Packages, Packages.gz, Release, InRelease)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::WRITE
     }

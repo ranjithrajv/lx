@@ -11,6 +11,7 @@ use super::{Capabilities, PackageIndex};
 use crate::debs::{confirm, detect_dist};
 use crate::index::{detect_host_format, IndexHit, InstallOpts};
 use crate::install_pkg::{detect_arch, install_prebuilt};
+use crate::plugins::plugin::plugin_identity;
 
 const REPO_URL: &str = "https://github.com/ranjithrajv/lx-index.git";
 const RECIPES_DIR: &str = "recipes";
@@ -153,15 +154,13 @@ pub struct RecipeEntry {
     pub readme: Option<String>,
 }
 
+plugin_identity!(
+    LxCommunitySource,
+    "lx-community",
+    "LX community index (recipes + per-release prebuilts)"
+);
+
 impl PackageIndex for LxCommunitySource {
-    fn id(&self) -> &'static str {
-        "lx-community"
-    }
-
-    fn description(&self) -> &'static str {
-        "LX community index (recipes + per-release prebuilts)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::READ
     }

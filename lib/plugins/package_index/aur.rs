@@ -9,6 +9,7 @@ use serde::Deserialize;
 
 use super::{Capabilities, PackageIndex};
 use crate::index::{IndexHit, InstallOpts};
+use crate::plugins::plugin::plugin_identity;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5";
 
@@ -71,15 +72,13 @@ struct RpcMulti {
     results: Vec<RpcResult>,
 }
 
+plugin_identity!(
+    AurSource,
+    "aur",
+    "Arch User Repository (PKGBUILD → native build)"
+);
+
 impl PackageIndex for AurSource {
-    fn id(&self) -> &'static str {
-        "aur"
-    }
-
-    fn description(&self) -> &'static str {
-        "Arch User Repository (PKGBUILD → native build)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::READ
     }

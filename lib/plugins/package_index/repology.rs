@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use super::{Capabilities, PackageIndex};
 use crate::debs::{detect_dist, detect_dpkg_arch};
 use crate::index::{IndexHit, InstallOpts};
+use crate::plugins::plugin::plugin_identity;
 
 const API_BASE: &str = "https://repology.org/api/v1";
 const PROJECTS_PAGE: &str = "projects/";
@@ -354,15 +355,13 @@ impl RepologySource {
     }
 }
 
+plugin_identity!(
+    RepologySource,
+    "repology",
+    "Repology cross-distro metadata (read-only)"
+);
+
 impl PackageIndex for RepologySource {
-    fn id(&self) -> &'static str {
-        "repology"
-    }
-
-    fn description(&self) -> &'static str {
-        "Repology cross-distro metadata (read-only)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::READ
     }

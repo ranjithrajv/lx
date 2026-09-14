@@ -4,20 +4,19 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
 use super::{parse_key_value, Capabilities, IndexOptions, PackageIndex};
+use crate::plugins::plugin::plugin_identity;
 
 /// Arch Linux pacman repository: a `<repo>.db.tar.gz` database whose members
 /// are `<pkgname>-<pkgver>/desc` files, built from each package's `.PKGINFO`.
 pub struct PacmanIndexer;
 
+plugin_identity!(
+    PacmanIndexer,
+    "pacman",
+    "pacman repository (<repo>.db.tar.gz from .PKGINFO)"
+);
+
 impl PackageIndex for PacmanIndexer {
-    fn id(&self) -> &'static str {
-        "pacman"
-    }
-
-    fn description(&self) -> &'static str {
-        "pacman repository (<repo>.db.tar.gz from .PKGINFO)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::WRITE
     }

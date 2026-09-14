@@ -5,21 +5,20 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{Capabilities, IndexOptions, PackageIndex};
+use crate::plugins::plugin::plugin_identity;
 
 /// RPM (dnf/yum/zypper) repository: a `repodata/repomd.xml` plus a gzipped
 /// `primary.xml`. Package metadata is read with `rpm -qp` (the same host-tool
 /// fallback `convert.rs` uses for RPM input).
 pub struct RpmIndexer;
 
+plugin_identity!(
+    RpmIndexer,
+    "rpm",
+    "RPM repository (repodata/repomd.xml + primary.xml.gz)"
+);
+
 impl PackageIndex for RpmIndexer {
-    fn id(&self) -> &'static str {
-        "rpm"
-    }
-
-    fn description(&self) -> &'static str {
-        "RPM repository (repodata/repomd.xml + primary.xml.gz)"
-    }
-
     fn capabilities(&self) -> Capabilities {
         Capabilities::WRITE
     }

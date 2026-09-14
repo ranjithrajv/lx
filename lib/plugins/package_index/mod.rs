@@ -51,6 +51,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::index::{IndexHit, InstallOpts};
+use crate::plugins::plugin::Plugin;
 
 /// Which roles a [`PackageIndex`] backend implements.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -125,13 +126,13 @@ pub struct IndexOptions<'a> {
 /// Every role method has a default so a backend only writes the half it
 /// supports; the defaults fail with an actionable message instead of
 /// panicking. `id`, `description` and `capabilities` are required.
-pub trait PackageIndex: Send + Sync {
+pub trait PackageIndex: Plugin {
     /// Canonical id (`apt`, `opkg`, `pacman`, `apk`, `rpm`, `lx-community`,
-    /// `aur`, `repology`). See [`BACKEND_IDS`].
-    fn id(&self) -> &'static str;
-
-    /// Human-readable description.
-    fn description(&self) -> &'static str;
+    /// `aur`, `repology`). See [`BACKEND_IDS`]. Defaults to the plugin's
+    /// [`name`](Plugin::name).
+    fn id(&self) -> &'static str {
+        self.name()
+    }
 
     /// Roles this backend implements.
     fn capabilities(&self) -> Capabilities;
