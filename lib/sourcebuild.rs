@@ -200,7 +200,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     let mut built: Vec<PathBuf> = Vec::new();
     for dist in &suites {
         let staging = tempfile::tempdir().context("failed to create staging dir")?;
-        copy_tree(&stage, staging.path())?;
+        crate::plugins::copy_dir_recursive(&stage, staging.path())?;
         let job = crate::build::ResolvedJob {
             dist: dist.clone(),
             arch: host.clone(),
@@ -516,22 +516,4 @@ fn compute_depends(stage: &Path, cfg: &PackageConfig, format: &str) -> String {
         };
     }
     pkgs.into_iter().collect::<Vec<_>>().join(", ")
-}
-
-fn copy_tree(src: &Path, dst: &Path) -> Result<()> {
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let dest = dst.join(entry.file_name());
-        let ft = entry.file_type()?;
-        if ft.is_dir() {
-            crate::plugins::copy_dir_recursive(&entry.path(), &dest)?;
-        } else if ft.is_symlink() {
-            let target = std::fs::read_link(entry.path())?;
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&target, &dest)?;
-        } else {
-            std::fs::copy(entry.path(), &dest)?;
-        }
-    }
-    Ok(())
 }
