@@ -82,7 +82,7 @@ fn read_raw_deps(ecosystem: &str, package_dir: &std::path::Path) -> Vec<(String,
 }
 
 /// Normalize a version constraint string to Debian/RPM format.
-fn normalize_version(version: &str, format: &str) -> Option<String> {
+pub(crate) fn normalize_version(version: &str, format: &str) -> Option<String> {
     let v = version.trim();
     if v.is_empty() || v == "*" || v == "latest" || v == "any" {
         return None;
@@ -132,10 +132,26 @@ fn normalize_version(version: &str, format: &str) -> Option<String> {
 
 /// Map a registry dependency name to a system package name.
 ///
-/// Resolution order:
-/// 1. Hardcoded ecosystem mappings (fast, offline, deterministic)
-/// 2. Repology online lookup (covers edge cases, always current)
+/// Routing goes through the `DependencyMapper` plugin registry (one backend
+/// per target format), so format-specific naming and syntax live in plugins.
+/// Unknown formats fall back to the shared core below.
 pub fn map_dependency(ecosystem: &str, dep_name: &str, format: &str) -> Option<String> {
+    match crate::plugins::depmap::get_dependency_mapper(format) {
+        Some(mapper) => mapper.map(ecosystem, dep_name),
+        None => hardcoded_or_repology(ecosystem, dep_name, format),
+    }
+}
+
+/// The shared mapping core: hardcoded ecosystem→Debian tables (converted to
+/// `format` via [`to_format`]) plus the Repology online fallback.
+///
+/// `pub(crate)` so plugin mappers can build on it without recursing back
+/// through [`map_dependency`].
+pub(crate) fn hardcoded_or_repology(
+    ecosystem: &str,
+    dep_name: &str,
+    format: &str,
+) -> Option<String> {
     // 1. Try hardcoded mappings first.
     let hardcoded = hardcoded_mapping(ecosystem, dep_name);
     if hardcoded.is_some() {
@@ -762,7 +778,15 @@ pub fn infer_deps_from_dir(
         Some(
             resolved
                 .iter()
-                .map(|d| d.to_control_string())
+                // Render in the target format's own syntax (Alpine uses
+                // `name>=ver`; deb/rpm/arch keep the `name (>= ver)` form).
+                .map(|d| {
+                    crate::plugins::depmap::render_for_format(
+                        &d.system_name,
+                        d.version.as_deref(),
+                        format,
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join(", "),
         )

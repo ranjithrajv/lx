@@ -27,6 +27,25 @@
   not just `deb`), including per-format distributions, signing, and
   source-package output.
 
+### Four cross-cutting plugin dimensions
+
+- **ArtifactFormat** (`lib/plugins/artifact/`) — pluggable archive
+  extraction, selected by `artifact_format:` or auto-detected from the
+  asset filename. Adds `tar.xz`/`tar.zst` extraction; `zip` is recognized
+  with an actionable error. Replaces the `build.rs::extract` match.
+- **Signer** (`lib/plugins/signer/`) — signing backends selected by
+  `(package_format, sign_method)`: detached `gpg-detach` (now available for
+  every format, not just deb) plus embedded `rpm-pgp`/`deb-debsign`.
+- **DependencyMapper** (`lib/plugins/depmap/`) — one backend per target
+  format (`debian`/`rpm`/`pacman`/`alpine`/`openwrt`). Alpine renders
+  `name>=ver` and translates libc/runtime names; OpenWrt translates names
+  but keeps opkg syntax. `depmap::map_dependency` routes through the
+  registry.
+- **RepoIndexer** (`lib/plugins/repo/`) — `lx repo --format
+  deb|ipk|arch|apk|rpm` now writes apt, opkg, pacman, Alpine, or RPM
+  repository indexes. The apt path delegates to the original `repo.rs`
+  implementation.
+
 ### Removed: duplicate GitHub source plugin and octocrab
 
 - The second GitHub source plugin (the synchronous client exposed

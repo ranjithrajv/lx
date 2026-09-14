@@ -1996,39 +1996,44 @@ fn build_one(
         }
     }
 
-    // 6. Optional post-build detach signing for deb/arch (deb is skipped when
-    // method is debsign — that embeds `_gpgorigin` inside the plugin build).
-    // pacman package signatures are detached, so arch always signs detached.
+    // 6. Post-build signing. The `Signer` plugin for (format, method)
+    // decides how: detached backends (`gpg-detach`) write a sibling
+    // signature now; embedded backends (`rpm-pgp`, `deb-debsign`) already
+    // signed the artifact while the packager built it.
     if let Some(key) = cfg.effective_sign_key(args.sign_key.as_deref()) {
-        if format == "deb" && sign_method == "detach" {
-            let req = lx_lib::sign::SignRequest {
-                key_file: &key,
-                key_id: &sign_key_id,
-                passphrase: sign_passphrase.as_deref(),
-            };
-            let sig = lx_lib::sign::gpg_detach_sign(&final_path, &req)?;
-            println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
-        } else if format == "deb" && sign_method == "debsign" {
-            println!(
-                "    ✓ signed {} (_gpg{})",
-                final_path.display(),
-                cfg.effective_sign_type()
-            );
-        } else if format == "arch" {
-            // pacman verifies a detached signature over the package file; a
-            // `debsign`-style embedded signature has no equivalent.
-            if sign_method == "debsign" {
-                eprintln!("    ⚠ --sign-method debsign has no arch equivalent; using detach");
+        let sign_type = cfg.effective_sign_type();
+        let ctx = crate::plugins::signer::SignContext {
+            key_file: &key,
+            key_id: &sign_key_id,
+            passphrase: sign_passphrase.as_deref(),
+            sign_type: &sign_type,
+        };
+        match crate::plugins::signer::signer_for(&format, &sign_method) {
+            Some(signer) if signer.embedded() => {
+                println!(
+                    "    ✓ signed {} ({}: embedded by the packager)",
+                    final_path.display(),
+                    signer.name()
+                );
             }
-            let req = lx_lib::sign::SignRequest {
-                key_file: &key,
-                key_id: &sign_key_id,
-                passphrase: sign_passphrase.as_deref(),
-            };
-            let sig = lx_lib::sign::gpg_detach_sign(&final_path, &req)?;
-            println!("    ✓ signed {} -> {}", final_path.display(), sig.display());
-        } else if format == "apk" || format == "ipk" {
-            eprintln!("    ⚠ --sign-key is not supported for {format} packages; skipping");
+            Some(signer) => match signer.sign(&final_path, &ctx)? {
+                crate::plugins::signer::SignOutcome::Detached(sig) => {
+                    println!(
+                        "    ✓ signed {} -> {} ({})",
+                        final_path.display(),
+                        sig.display(),
+                        signer.name()
+                    );
+                }
+                crate::plugins::signer::SignOutcome::Embedded => {
+                    println!("    ✓ signed {} ({})", final_path.display(), signer.name());
+                }
+            },
+            None => {
+                eprintln!(
+                    "    ⚠ no signer supports format '{format}' method '{sign_method}'; artifact left unsigned"
+                );
+            }
         }
     }
 
@@ -2193,32 +2198,7 @@ fn verify_sidecar_or_require_flag_source(
 }
 
 pub fn extract(archive: &Path, dest: &Path, format: &str) -> Result<()> {
-    std::fs::create_dir_all(dest)?;
-    match format {
-        "tar.gz" | "tgz" => {
-            let f = std::fs::File::open(archive)?;
-            let gz = flate2::read::GzDecoder::new(f);
-            let mut tar = tar::Archive::new(gz);
-            tar.unpack(dest)
-                .with_context(|| format!("failed to extract '{}'", archive.display()))?;
-        }
-        "tar" => {
-            let f = std::fs::File::open(archive)?;
-            let mut tar = tar::Archive::new(f);
-            tar.unpack(dest)
-                .with_context(|| format!("failed to extract '{}'", archive.display()))?;
-        }
-        "zip" => bail!("zip extraction not yet supported; use tar.gz or raw"),
-        "raw" => {
-            let name = archive
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("binary");
-            std::fs::copy(archive, dest.join(name))?;
-        }
-        other => bail!("unsupported artifact_format '{other}'"),
-    }
-    Ok(())
+    crate::plugins::artifact::extract(archive, dest, format)
 }
 
 pub(crate) fn is_elf(path: &Path) -> Result<bool> {

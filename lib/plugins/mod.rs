@@ -13,12 +13,16 @@
 
 pub mod apk;
 pub mod arch;
+pub mod artifact;
 pub mod build_system;
 pub mod deb;
+pub mod depmap;
 pub mod forge;
 pub mod ipk;
 pub mod registry;
+pub mod repo;
 pub mod rpm;
+pub mod signer;
 
 use anyhow::{Context, Result};
 use std::os::unix::fs::PermissionsExt;

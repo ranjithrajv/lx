@@ -860,13 +860,14 @@ impl PackageConfig {
 
     /// Shared validation between [`validate`] and [`validate_for_local`].
     fn validate_shared(&self) -> Result<()> {
-        if !self.artifact_format.is_empty() {
-            match self.artifact_format.as_str() {
-                "tar.gz" | "tgz" | "zip" | "raw" => {}
-                other => bail!(
-                    "unsupported artifact_format '{other}' (expected tar.gz, tgz, zip, or raw)"
-                ),
-            }
+        if !self.artifact_format.is_empty()
+            && crate::plugins::artifact::get_artifact_format(&self.artifact_format).is_none()
+        {
+            bail!(
+                "unsupported artifact_format '{}' (expected one of: {})",
+                self.artifact_format,
+                crate::plugins::artifact::artifact_format_names().join(", ")
+            );
         }
         if let ArchSpec::List(names) = &self.architectures {
             if names.iter().any(|n| n.trim().is_empty()) {

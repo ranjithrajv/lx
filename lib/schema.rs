@@ -69,8 +69,8 @@ pub fn generate_schema() -> serde_json::Value {
             },
             "artifact_format": {
                 "type": "string",
-                "enum": ["tar.gz", "tgz", "zip", "raw"],
-                "description": "Archive format of the release asset"
+                "enum": ["tar.gz", "tgz", "tar", "tar.xz", "tar.zst", "zip", "raw"],
+                "description": "Archive format of the release asset (artifact-format plugin; auto-detected when omitted)"
             },
             "description": {
                 "type": "string",

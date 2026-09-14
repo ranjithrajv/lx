@@ -153,16 +153,10 @@ fn asset_matches_arch(filename: &str, debian_arch: &str, aliases: &[&str]) -> bo
     })
 }
 
-/// Guess the artifact format from a filename.
+/// Guess the artifact format from a filename, via the artifact-format
+/// plugin registry (so new formats are recognized without editing here).
 pub fn guess_format(name: &str) -> &'static str {
-    let lower = name.to_ascii_lowercase();
-    if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
-        "tar.gz"
-    } else if lower.ends_with(".zip") {
-        "zip"
-    } else {
-        "raw"
-    }
+    crate::plugins::artifact::detect_artifact_format(name)
 }
 
 /// Run the discover subcommand: fetch release metadata, match assets per

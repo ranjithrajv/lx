@@ -1,11 +1,15 @@
 # Packager Architecture
 
-**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource)
-**Status:** Implemented — 4 independent plugin dimensions:
+**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource; 2026-09-14: +5 Packagers/Sources/BuildSystems; 2026-09-14: +4 cross-cutting dimensions)
+**Status:** Implemented — 8 independent plugin dimensions:
 * **5× Packager:** `deb` + `rpm` + `arch` + `apk` + `ipk`
 * **8× ForgeSource:** `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit` + `gitee` + `sourceforge`
 * **7× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `autotools` + `make` + `custom`
 * **11× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `go` + `hex` + `dart` + `nuget` + `maven` + `composer` + `cpan`
+* **6× ArtifactFormat:** `tar.gz` + `tar.xz` + `tar.zst` + `tar` + `zip` + `raw`
+* **3× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign`
+* **5× DependencyMapper:** `debian` + `rpm` + `pacman` + `alpine` + `openwrt`
+* **5× RepoIndexer:** `apt` + `opkg` + `pacman` + `apk` + `rpm`
 
 `lx` builds Linux packages from many kinds of upstream. The original
 implementation only produced Debian `.deb`s from GitHub. To support RPM/Arc,
@@ -494,9 +498,41 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 5 Package + 9 Source + 7 BuildSystem + 11 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `RepoIndexer` traits — 5 + 8 + 7 + 11 + 6 + 3 + 5 + 5 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
-| Signing per format (`deb.signature/rpm.signature`) | Only `lintian` for `deb`, reproducible `SOURCE_DATE_EPOCH` for all; `check_sidecar` provider-agnostic via `RawGetter` |
+| Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |
 
 See `docs/decisions/2026-08-20-nfpm-adoptions.md` and `README.md` for the `nfpm`-inspired `relations`/`ancillaries`/`epoch` already shared.
+
+## 12. Cross-cutting plugin dimensions
+
+The original four dimensions answer *"where does the payload come from /
+what does it become."* Four more cover lifecycles that used to be hardcoded
+`match format` branches in the core:
+
+| Dimension | Trait / registry | Impls | Selected by | Replaces |
+|---|---|---|---|---|
+| **ArtifactFormat** | `lib/plugins/artifact/mod.rs` | `tar.gz` `tar.xz` `tar.zst` `tar` `zip` `raw` | `artifact_format:` / auto-detect | `build.rs::extract` + `discovery::guess_format` match |
+| **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
+| **DependencyMapper** | `lib/plugins/depmap/mod.rs` | `debian` `rpm` `pacman` `alpine` `openwrt` | target `package_format` | per-format `match` inside `depmap.rs` |
+| **RepoIndexer** | `lib/plugins/repo/mod.rs` | `apt` `opkg` `pacman` `apk` `rpm` | `lx repo --format` | apt-only `lib/repo.rs` |
+
+* **ArtifactFormat** — `artifact_format:` (or filename auto-detection)
+  selects how an upstream archive is unpacked. `tar.xz`/`tar.zst` are new;
+  `zip` is registered and recognized but extraction is not yet implemented.
+* **Signer** — the first backend whose `supports(format, method)` matches
+  wins (`signer_for`). Detached backends write a sibling signature now;
+  embedded backends declare `embedded()` and the packager writes the
+  signature while building the artifact.
+* **DependencyMapper** — each target format owns its package-name translation
+  and version-operator syntax. Deb/RPM/Arch delegate to the shared
+  ecosystem→Debian tables in `depmap.rs`; Alpine renders `name>=ver` and
+  translates libc/runtime names; OpenWrt translates names but keeps opkg's
+  Debian-style syntax.
+* **RepoIndexer** — `lx repo --format deb|ipk|arch|apk|rpm` writes the
+  format's index (`Packages`/`Release`, `Packages`, `<repo>.db.tar.gz`,
+  `APKINDEX.tar.gz`, `repodata/`). The apt indexer delegates to the original
+  `repo.rs` implementation; the others read each artifact's metadata
+  (`.ipk` control, `.PKGINFO`, `rpm -qp`) in-process.
+

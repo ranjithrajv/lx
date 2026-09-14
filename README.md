@@ -28,6 +28,10 @@ editing the core pipeline:
 | **ForgeSource** | Discover forge releases/assets | 8 (github, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge) | `--source` / URL sniffing |
 | **BuildSystem** | Compile source tree | 7 (cmake, cargo, go, meson, autotools, make, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 11 (npm, python, gem, cargo, go, hex, dart, nuget, maven, composer, cpan) | `registry_source:` |
+| **ArtifactFormat** | Unpack a release asset | 6 (tar.gz, tar.xz, tar.zst, tar, zip, raw) | `artifact_format:` / filename |
+| **Signer** | Sign the artifact | 3 (gpg-detach, rpm-pgp, deb-debsign) | `(package_format, sign_method)` |
+| **DependencyMapper** | Map deps to target names/syntax | 5 (debian, rpm, pacman, alpine, openwrt) | target `package_format` |
+| **RepoIndexer** | Publish a package index | 5 (apt, opkg, pacman, apk, rpm) | `lx repo --format` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
 available* (returns release metadata), RegistrySource fetches *specific
