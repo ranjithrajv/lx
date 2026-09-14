@@ -58,7 +58,11 @@ impl Packager for ApkPackager {
         // Alpine combines version + revision into `pkgver` (`1.0.0-r1`).
         let pkgver = format!("{version}-r{revision}");
         let arch = lx_lib::apkarchive::to_alpine_arch(&job.arch);
-        let file_name = format!("{}-{pkgver}.apk", cfg.package_name());
+        // Include the arch in the filename — every other format does — so
+        // multi-arch builds into a flat output dir don't overwrite each other.
+        // The `.PKGINFO` segment carries the canonical `arch=`, so the apk index
+        // is unaffected.
+        let file_name = format!("{}-{pkgver}-{arch}.apk", cfg.package_name());
 
         let relations = cfg.effective_relations("apk");
         let mut depends = split_list(&relations.depends);
