@@ -56,12 +56,12 @@ pub fn run(args: UpgradeArgs, token: Option<&str>) -> Result<()> {
 
     let targets: Vec<String> = match &args.package {
         Some(p) => {
-            if !manifest.packages.contains_key(p) {
+            if !manifest.contains(p) {
                 bail!("'{p}' is not managed by lx (run `lx install {p}` first)");
             }
             vec![p.clone()]
         }
-        None => manifest.packages.keys().cloned().collect(),
+        None => manifest.names().map(str::to_string).collect(),
     };
 
     if targets.is_empty() && !args.all {

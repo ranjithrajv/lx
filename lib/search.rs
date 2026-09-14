@@ -221,7 +221,7 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
                 }
             }
             let installed_version = debs::dpkg_installed_version(short);
-            let installed = installed_version.is_some() || manifest.packages.contains_key(short);
+            let installed = installed_version.is_some() || manifest.contains(short);
             if args.installed && !installed {
                 continue;
             }
@@ -270,7 +270,7 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
             }
         }
         let installed_version = debs::dpkg_installed_version(package);
-        let installed = installed_version.is_some() || manifest.packages.contains_key(package);
+        let installed = installed_version.is_some() || manifest.contains(package);
         if args.installed && !installed {
             continue;
         }
@@ -312,8 +312,7 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
                 Ok(src_hits) => {
                     for h in src_hits {
                         let installed_version = debs::dpkg_installed_version(&h.name);
-                        let installed =
-                            installed_version.is_some() || manifest.packages.contains_key(&h.name);
+                        let installed = installed_version.is_some() || manifest.contains(&h.name);
                         if args.installed && !installed {
                             continue;
                         }

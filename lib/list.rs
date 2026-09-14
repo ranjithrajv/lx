@@ -21,7 +21,7 @@ pub struct ListArgs {
 /// on disk.
 pub fn run(args: ListArgs) -> Result<()> {
     let manifest = Manifest::load()?;
-    if manifest.packages.is_empty() {
+    if manifest.is_empty() {
         println!("no lx-managed packages installed");
         return Ok(());
     }
@@ -30,7 +30,7 @@ pub fn run(args: ListArgs) -> Result<()> {
         "{:<20} {:<20} {:<8} {:<10} {:<8}INSTALLED",
         "PACKAGE", "VERSION", "ARCH", "DIST", "GENS"
     );
-    for (name, gens) in &manifest.packages {
+    for (name, gens) in manifest.history() {
         let Some(entry) = gens.last() else { continue };
         let format = consumer::format_or_host(&entry.format);
         let note = match consumer::installed_version(name, format) {
@@ -50,7 +50,7 @@ pub fn run(args: ListArgs) -> Result<()> {
         );
         if args.tree {
             let mut ancestors = HashSet::new();
-            ancestors.insert(name.clone());
+            ancestors.insert(name.to_string());
             print_deps(name, 1, &ancestors);
         }
     }

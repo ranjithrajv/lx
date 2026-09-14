@@ -16,7 +16,7 @@ pub struct ShowArgs {
 
 pub fn run(args: ShowArgs) -> Result<()> {
     let manifest = Manifest::load().unwrap_or_default();
-    let entries = manifest.packages.get(&args.package);
+    let entries = manifest.generations(&args.package);
     let installed = scandeps::pkg_installed_version(&args.package);
 
     if entries.is_none() && installed.is_none() {

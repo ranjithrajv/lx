@@ -38,7 +38,7 @@ fn forget_removes_entry() {
         },
     );
     assert!(m.forget("eza").is_some());
-    assert!(m.packages.is_empty());
+    assert!(m.is_empty());
     assert!(m.forget("eza").is_none());
 }
 
@@ -63,7 +63,7 @@ fn generations_accumulate_and_previous_walks_history() {
     assert_eq!(m.previous("eza", 1).unwrap().version, "2");
     assert_eq!(m.previous("eza", 2).unwrap().version, "1");
     assert!(m.previous("eza", 3).is_none());
-    assert_eq!(m.packages["eza"].len(), 3);
+    assert_eq!(m.generations("eza").unwrap().len(), 3);
 }
 
 #[test]
