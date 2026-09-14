@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
+use crate::github::{Asset, Release, ReleaseMeta};
 
 /// SourceForge RSS client.
 pub struct SourceForgeClient {
@@ -121,16 +121,6 @@ impl SourceForgeClient {
             tag: release.tag_name,
             published_at: None,
         }])
-    }
-
-    pub fn repo_license(&self, _project: &str) -> Result<Option<RepoLicense>> {
-        Ok(None)
-    }
-    pub fn repo_root(&self, _project: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-    pub fn repo_file_text(&self, _project: &str, _path: &str) -> Result<Option<String>> {
-        Ok(None)
     }
 
     fn api_cache<T>(&self, key: &str, fetch: impl FnOnce() -> Result<T>) -> Result<T>

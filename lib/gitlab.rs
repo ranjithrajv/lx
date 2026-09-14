@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
+use crate::github::{Asset, Release, ReleaseMeta};
 
 /// GitLab API client mirroring `GitHubClient`'s surface.
 /// Uses blocking `reqwest` and the same 5-minute JSON cache as the other
@@ -136,18 +136,6 @@ impl GitlabClient {
                 published_at: r.released_at.clone().or(r.created_at.clone()),
             })
             .collect())
-    }
-
-    // Stubs for license/root/file – GitLab has different endpoints but we return None/empty for now.
-    // This keeps dual-license detection benign (falls back to config's license_spdx).
-    pub fn repo_license(&self, _owner: &str, _repo: &str) -> Result<Option<RepoLicense>> {
-        Ok(None)
-    }
-    pub fn repo_root(&self, _owner: &str, _repo: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-    pub fn repo_file_text(&self, _owner: &str, _repo: &str, _path: &str) -> Result<Option<String>> {
-        Ok(None)
     }
 
     pub fn map_release(raw: GitlabReleaseRaw, repo: &str) -> Release {

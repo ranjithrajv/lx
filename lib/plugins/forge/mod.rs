@@ -212,23 +212,13 @@ pub fn parse_host_url(s: &str, host: &str) -> Option<String> {
     None
 }
 
-/// Implement `Plugin` + `ForgeSource` for an "owner/repo" provider client,
-/// delegating the methods every such provider shares. A provider file then
-/// carries only its identity and URL parser instead of seven near-identical
-/// methods:
-///
-/// ```ignore
-/// repo_forge_source!(
-///     GitlabForgeSource, lx_lib::gitlab::GitlabClient,
-///     "gitlab", "GitLab Releases …",
-///     Some("GITLAB_TOKEN"), Some("gitlab_host"), parse_gitlab_url,
-/// );
-/// ```
-///
-/// The repo-info methods (`repo_license`/`repo_root`/`repo_file_text`) are
-/// generated too; clients that don't support them return empty results.
-macro_rules! repo_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:path $(,)?) => {
+/// The shared body of [`repo_forge_source!`] /
+/// [`repo_forge_source_with_repo_info!`]: `Plugin` + the `ForgeSource`
+/// methods every "owner/repo" provider shares. `$extra` is spliced into the
+/// `ForgeSource` impl so the repo-info variant can add its three methods
+/// without duplicating this body.
+macro_rules! repo_forge_source_impl {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident, $($extra:item),* $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name
@@ -296,6 +286,48 @@ macro_rules! repo_forge_source {
                 client.raw_get(url)
             }
 
+            $($extra)*
+        }
+    };
+}
+
+pub(crate) use repo_forge_source_impl;
+
+/// Implement `Plugin` + `ForgeSource` for an "owner/repo" provider that does
+/// **not** offer repo-info (license / root listing / file text). A provider
+/// file then carries only its identity and URL parser:
+///
+/// ```ignore
+/// repo_forge_source!(
+///     GitlabForgeSource, lx_lib::gitlab::GitlabClient,
+///     "gitlab", "GitLab Releases …",
+///     Some("GITLAB_TOKEN"), Some("gitlab_host"), parse_gitlab_url,
+/// );
+/// ```
+///
+/// This is the ISP point: `repo_license`/`repo_root`/`repo_file_text` fall
+/// back to the trait defaults instead of being generated as stubs. Providers
+/// that do offer repo-info use [`repo_forge_source_with_repo_info!`].
+macro_rules! repo_forge_source {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
+        $crate::plugins::forge::repo_forge_source_impl!(
+            $ty, $client, $name, $desc, $token_env, $host_key, $parse,
+        );
+    };
+}
+
+/// The repo-info variant of [`repo_forge_source!`], for providers whose API
+/// actually exposes license / root-listing / raw-file reads (today GitHub).
+macro_rules! repo_forge_source_with_repo_info {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
+        $crate::plugins::forge::repo_forge_source_impl!(
+            $ty,
+            $client,
+            $name,
+            $desc,
+            $token_env,
+            $host_key,
+            $parse,
             fn repo_license(
                 &self,
                 repo: &str,
@@ -305,8 +337,7 @@ macro_rules! repo_forge_source {
                 let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
                 let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
                 client.repo_license(owner, repo_name)
-            }
-
+            },
             fn repo_root(
                 &self,
                 repo: &str,
@@ -316,8 +347,7 @@ macro_rules! repo_forge_source {
                 let (owner, repo_name) = $crate::discovery::split_repo(repo)?;
                 let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
                 client.repo_root(owner, repo_name)
-            }
-
+            },
             fn repo_file_text(
                 &self,
                 repo: &str,
@@ -329,17 +359,18 @@ macro_rules! repo_forge_source {
                 let client = $crate::source_client::new_client_for::<$client>(token, cache_dir)?;
                 client.repo_file_text(owner, repo_name, path)
             }
-        }
+        );
     };
 }
 
 pub(crate) use repo_forge_source;
+pub(crate) use repo_forge_source_with_repo_info;
 
 /// The single-project counterpart of [`repo_forge_source!`]: Gerrit and
 /// SourceForge identify a package by a bare project name (which may itself
 /// contain slashes), so no `owner/repo` split is applied.
 macro_rules! project_forge_source {
-    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:path $(,)?) => {
+    ($ty:ty, $client:ty, $name:literal, $desc:literal, $token_env:expr, $host_key:expr, $parse:ident $(,)?) => {
         impl $crate::plugins::plugin::Plugin for $ty {
             fn name(&self) -> &'static str {
                 $name

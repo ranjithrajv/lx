@@ -2,11 +2,11 @@
 
 use lx_lib::github::GitHubClient;
 
-use super::repo_forge_source;
+use super::repo_forge_source_with_repo_info;
 
 pub struct GithubForgeSource;
 
-repo_forge_source!(
+repo_forge_source_with_repo_info!(
     GithubForgeSource,
     GitHubClient,
     "github",

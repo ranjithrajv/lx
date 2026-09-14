@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
+use crate::github::{Asset, Release, ReleaseMeta};
 
 /// Bitbucket Cloud API client (`api.bitbucket.org/2.0`).
 /// Bitbucket has no native "releases" – we treat `downloads` as a single
@@ -115,16 +115,6 @@ impl BitbucketClient {
             tag: r.tag_name,
             published_at: r.published_at.map(|t| t.to_string()),
         }])
-    }
-
-    pub fn repo_license(&self, _owner: &str, _repo: &str) -> Result<Option<RepoLicense>> {
-        Ok(None)
-    }
-    pub fn repo_root(&self, _owner: &str, _repo: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-    pub fn repo_file_text(&self, _owner: &str, _repo: &str, _path: &str) -> Result<Option<String>> {
-        Ok(None)
     }
 
     pub fn map_downloads_to_release(raw: BitbucketDownloadsRaw, repo: &str) -> Release {

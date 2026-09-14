@@ -16,7 +16,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
+use crate::github::{Asset, Release, ReleaseMeta};
 
 /// Gitee API v5 client.
 pub struct GiteeClient {
@@ -157,16 +157,6 @@ impl GiteeClient {
                 published_at: r.created_at.clone(),
             })
             .collect())
-    }
-
-    pub fn repo_license(&self, _owner: &str, _repo: &str) -> Result<Option<RepoLicense>> {
-        Ok(None)
-    }
-    pub fn repo_root(&self, _owner: &str, _repo: &str) -> Result<Vec<String>> {
-        Ok(Vec::new())
-    }
-    pub fn repo_file_text(&self, _owner: &str, _repo: &str, _path: &str) -> Result<Option<String>> {
-        Ok(None)
     }
 
     pub fn map_release(raw: GiteeReleaseRaw, owner: &str, repo: &str) -> Release {
