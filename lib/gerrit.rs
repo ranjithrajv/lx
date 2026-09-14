@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta};
+use crate::release::{Asset, Release, ReleaseMeta};
 
 /// Gerrit Code Review API client.
 /// Gerrit does not have GitHub-style releases, so we map tags → pseudo-releases.

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta};
+use crate::release::{Asset, Release, ReleaseMeta};
 
 /// GitLab API client mirroring `GitHubClient`'s surface.
 /// Uses blocking `reqwest` and the same 5-minute JSON cache as the other
@@ -210,16 +210,9 @@ fn urlencoding_encode(s: &str) -> String {
 }
 
 pub fn parse_gitlab_time(s: &str) -> Option<i64> {
-    // GitLab times are ISO8601 like 2025-01-01T00:00:00.000Z
-    // Try jiff's RFC3339 parser first (handles both with and without fractional).
-    if let Ok(ts) = s.parse::<jiff::Timestamp>() {
-        return Some(ts.as_second());
-    }
-    // Fallback to explicit strptime patterns
-    jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%S%.fZ", s)
-        .or_else(|_| jiff::Timestamp::strptime("%Y-%m-%dT%H:%M:%SZ", s))
-        .ok()
-        .map(|t| t.as_second())
+    // GitLab times are ISO8601 like 2025-01-01T00:00:00.000Z; the parser is
+    // shared by every forge client (`crate::release`).
+    crate::release::parse_timestamp(s)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

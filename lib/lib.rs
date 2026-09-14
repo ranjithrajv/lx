@@ -94,6 +94,7 @@ pub mod plugins;
 pub mod progress;
 pub mod publish;
 pub mod reinstall;
+pub mod release;
 pub mod relocatable;
 pub mod remove;
 pub mod repo;

@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta};
+use crate::release::{Asset, Release, ReleaseMeta};
 
 /// Gitea API client (also used for Forgejo – API compatible).
 /// Mirrors `GitHubClient`/`GitlabClient` surface, uses blocking `reqwest`.

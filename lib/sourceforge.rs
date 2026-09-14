@@ -27,7 +27,7 @@ use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use std::path::PathBuf;
 
-use crate::github::{Asset, Release, ReleaseMeta};
+use crate::release::{Asset, Release, ReleaseMeta};
 
 /// SourceForge RSS client.
 pub struct SourceForgeClient {

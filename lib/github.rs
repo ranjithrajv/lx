@@ -2,6 +2,11 @@
 
 use anyhow::{anyhow, Context, Result};
 
+// The provider-agnostic release model lives in `crate::release` (every forge
+// client shares it). Re-exported here so existing `github::Release` paths keep
+// working; new code should import from `crate::release`.
+pub use crate::release::{Asset, Release, ReleaseMeta, RepoLicense};
+
 /// GitHub client using blocking `reqwest` against the REST API directly —
 /// no async runtime. Mirrors [`crate::gitlab::GitlabClient`]'s shape and
 /// shares the 5-minute JSON API cache, so every source-provider client in
@@ -226,11 +231,11 @@ impl From<GitHubReleaseRaw> for Release {
                     browser_download_url: a.browser_download_url,
                 })
                 .collect(),
-            // GitHub reports RFC3339; reuse gitlab.rs's generic ISO8601 parser.
+            // GitHub reports RFC3339.
             published_at: r
                 .published_at
                 .as_deref()
-                .and_then(crate::gitlab::parse_gitlab_time),
+                .and_then(crate::release::parse_timestamp),
             body: r.body,
         }
     }
@@ -276,53 +281,4 @@ impl crate::checksum::RawGetter for GitHubClient {
     fn raw_get(&self, url: &str) -> Result<Box<dyn std::io::Read + Send>> {
         GitHubClient::raw_get(self, url)
     }
-}
-
-/// Minimal release metadata for suggestions.
-#[derive(Debug, Clone)]
-pub struct ReleaseMeta {
-    pub tag: String,
-    pub published_at: Option<String>,
-}
-
-/// Repository license metadata (SPDX id + optional full text).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct RepoLicense {
-    pub spdx: String,
-    pub text: Option<String>,
-}
-
-/// Domain model for a GitHub release (the subset lx needs, normalized so
-/// every forge source shares one release type).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Release {
-    pub tag_name: String,
-    pub prerelease: bool,
-    pub draft: bool,
-    pub html_url: String,
-    pub assets: Vec<Asset>,
-    /// Unix epoch seconds the release was published, when GitHub reports
-    /// one. Used as the reproducible-build timestamp source for generated
-    /// package metadata (changelog date, copyright year) instead of
-    /// wall-clock build time, so the same release always produces the same
-    /// bytes regardless of when it's built.
-    pub published_at: Option<i64>,
-    /// The release's own markdown notes, when GitHub reports any. Used as
-    /// a ready-made "changelog" for `lx update --diff` instead of
-    /// deriving one from commits/tags.
-    #[serde(default)]
-    pub body: Option<String>,
-}
-
-/// Domain model for a release asset (the subset lx needs).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Asset {
-    pub name: String,
-    pub size: Option<u64>,
-    pub browser_download_url: String,
-    /// Inline checksums the provider already published, as algorithm → hex
-    /// (e.g. `sha256` from a GitHub/Gitea asset `digest`, or `md5` from a
-    /// SourceForge feed). Verified after download when no sidecar is found.
-    #[serde(default)]
-    pub checksums: std::collections::BTreeMap<String, String>,
 }
