@@ -40,7 +40,8 @@ impl Packager for IpkPackager {
         let job = ctx.job;
 
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let conffiles = super::apply_contents(cfg, ctx.staging_root, "ipk")?;
+        let (conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "ipk")?;
+        let conffiles: Vec<String> = conffiles.into_iter().map(|c| c.path).collect();
 
         let version = ctx.debian_version.to_string();
         let build = if ctx.build_version.trim().is_empty() {
@@ -71,12 +72,13 @@ impl Packager for IpkPackager {
 
         let out_dir = super::output_dir(ctx.staging_root)?;
         let dest = out_dir.join(&file_name);
-        lx_lib::ipkarchive::build_with_scripts(
+        lx_lib::ipkarchive::build_with_scripts_with_meta(
             ctx.staging_root,
             control.as_bytes(),
             &extras,
             ctx.mtime,
             &dest,
+            &file_meta,
         )
         .with_context(|| format!("failed to build {}", dest.display()))?;
 
@@ -121,6 +123,28 @@ fn render_control(
     ));
     if !cfg.license_spdx.trim().is_empty() {
         out.push_str(&format!("License: {}\n", cfg.license_spdx.trim()));
+    }
+    // nfpm `ipk:` block parity.
+    if !cfg.ipk.abi_version.trim().is_empty() {
+        out.push_str(&format!("ABIVersion: {}\n", cfg.ipk.abi_version.trim()));
+    }
+    if !cfg.ipk.tags.is_empty() {
+        out.push_str(&format!("Tags: {}\n", cfg.ipk.tags.join(" ")));
+    }
+    if cfg.ipk.auto_installed {
+        out.push_str("Auto-Installed: yes\n");
+    }
+    if cfg.ipk.essential {
+        out.push_str("Essential: yes\n");
+    }
+    if !cfg.ipk.alternatives.is_empty() {
+        let alts: Vec<String> = cfg
+            .ipk
+            .alternatives
+            .iter()
+            .map(|a| format!("{}:{}:{}", a.priority, a.link_name, a.target))
+            .collect();
+        out.push_str(&format!("Alternatives: {}\n", alts.join(", ")));
     }
     out.push_str(&format!("Description: {}\n", cfg.effective_description()));
     out

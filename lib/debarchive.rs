@@ -13,6 +13,8 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use crate::filemeta::{self, FileMeta, FileMetaMap};
+
 /// Build a `.deb` from a staged filesystem tree and a rendered control
 /// file.
 ///
@@ -98,10 +100,58 @@ pub fn build_full_signed(
     extras: &[ControlMember],
     gpg_signer: Option<(&OriginSigner, &str)>,
 ) -> Result<()> {
+    build_full_signed_with_meta(
+        root,
+        control,
+        mtime,
+        deb_path,
+        compression,
+        extras,
+        gpg_signer,
+        &FileMetaMap::new(),
+    )
+}
+
+/// [`build_full`] with per-file `contents[].file_info` overrides.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn build_full_with_meta(
+    root: &Path,
+    control: &[u8],
+    mtime: i64,
+    deb_path: &Path,
+    compression: &str,
+    extras: &[ControlMember],
+    origin_signer: Option<&OriginSigner>,
+    meta: &FileMetaMap,
+) -> Result<()> {
+    build_full_signed_with_meta(
+        root,
+        control,
+        mtime,
+        deb_path,
+        compression,
+        extras,
+        origin_signer.map(|s| (s, "origin")),
+        meta,
+    )
+}
+
+/// [`build_full_signed`] with per-file `contents[].file_info` overrides.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
+pub fn build_full_signed_with_meta(
+    root: &Path,
+    control: &[u8],
+    mtime: i64,
+    deb_path: &Path,
+    compression: &str,
+    extras: &[ControlMember],
+    gpg_signer: Option<(&OriginSigner, &str)>,
+    meta: &FileMetaMap,
+) -> Result<()> {
     let comp = normalize_compression(compression)
         .with_context(|| format!("invalid compression '{compression}'"))?;
     let mut md5sums = String::new();
-    let data_tar = build_data_tar(root, mtime, &mut md5sums, &comp)
+    let data_tar = build_data_tar(root, mtime, &mut md5sums, &comp, meta)
         .with_context(|| format!("failed to build data.tar.{ext}", ext = comp.ext()))?;
     let control_tar = build_control_tar(control, md5sums.as_bytes(), mtime, &comp, extras)
         .with_context(|| format!("failed to build control.tar.{ext}", ext = comp.ext()))?;
@@ -206,6 +256,16 @@ fn zstd_compress(data: &[u8], level: u32) -> Result<Vec<u8>> {
 /// Recursively tar+gzip `root`'s contents (sorted, normalized ownership
 /// and mtime), accumulating an md5sums listing as it goes.
 pub fn build_data_tar_gz(root: &Path, mtime: i64, md5sums: &mut String) -> Result<Vec<u8>> {
+    build_data_tar_gz_with_meta(root, mtime, md5sums, &FileMetaMap::new())
+}
+
+/// [`build_data_tar_gz`] with per-file `contents[].file_info` overrides.
+pub fn build_data_tar_gz_with_meta(
+    root: &Path,
+    mtime: i64,
+    md5sums: &mut String,
+    meta: &FileMetaMap,
+) -> Result<Vec<u8>> {
     build_data_tar(
         root,
         mtime,
@@ -214,6 +274,7 @@ pub fn build_data_tar_gz(root: &Path, mtime: i64, md5sums: &mut String) -> Resul
             kind: CompressionKind::Gzip,
             level: None,
         },
+        meta,
     )
 }
 
@@ -222,11 +283,12 @@ fn build_data_tar(
     mtime: i64,
     md5sums: &mut String,
     comp: &Compression,
+    meta: &FileMetaMap,
 ) -> Result<Vec<u8>> {
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_dir_sorted(&mut builder, root, "./", root, mtime, Some(md5sums))?;
+        append_dir_sorted(&mut builder, root, "./", root, mtime, Some(md5sums), meta)?;
         builder.finish()?;
     }
     compress_tar(&tar_bytes, mtime, comp)
@@ -244,7 +306,15 @@ pub fn tar_xz_tree(fs_root: &Path, archive_prefix: &str, mtime: i64) -> Result<V
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_dir_sorted(&mut builder, fs_root, archive_prefix, fs_root, mtime, None)?;
+        append_dir_sorted(
+            &mut builder,
+            fs_root,
+            archive_prefix,
+            fs_root,
+            mtime,
+            None,
+            &FileMetaMap::new(),
+        )?;
         builder.finish()?;
     }
     xz(&tar_bytes, 9)
@@ -336,8 +406,8 @@ fn build_control_tar(
     let mut tar_bytes = Vec::new();
     {
         let mut builder = tar::Builder::new(&mut tar_bytes);
-        append_file_bytes(&mut builder, "./control", control, 0o644, mtime)?;
-        append_file_bytes(&mut builder, "./md5sums", md5sums, 0o644, mtime)?;
+        append_file_bytes(&mut builder, "./control", control, 0o644, mtime, None)?;
+        append_file_bytes(&mut builder, "./md5sums", md5sums, 0o644, mtime, None)?;
         for extra in extras {
             append_file_bytes(
                 &mut builder,
@@ -345,6 +415,7 @@ fn build_control_tar(
                 &extra.content,
                 extra.mode,
                 mtime,
+                None,
             )?;
         }
         builder.finish()?;
@@ -366,6 +437,7 @@ fn append_dir_sorted<W: Write>(
     fs_dir: &Path,
     mtime: i64,
     mut md5sums: Option<&mut String>,
+    meta: &FileMetaMap,
 ) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(fs_dir)
         .with_context(|| format!("failed to read '{}'", fs_dir.display()))?
@@ -379,31 +451,45 @@ fn append_dir_sorted<W: Write>(
             .expect("walked path must be under original_root");
         let archive_path = format!("{archive_prefix}{}", rel.to_string_lossy());
         let file_type = entry.file_type()?;
+        let entry_meta = filemeta::lookup(meta, &archive_path);
 
         if file_type.is_symlink() {
             let target = std::fs::read_link(&fs_path)?;
             let mut header = tar::Header::new_gnu();
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
-            header.set_mode(crate::constants::SYMLINK_MODE);
-            header.set_mtime(mtime.max(0) as u64);
             header.set_uid(0);
             header.set_gid(0);
+            filemeta::apply_tar_header(
+                &mut header,
+                entry_meta,
+                crate::constants::SYMLINK_MODE,
+                mtime,
+            );
             header.set_path(&archive_path)?;
             header.set_link_name(&target)?;
             header.set_cksum();
             builder.append(&header, std::io::empty())?;
         } else if file_type.is_dir() {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_size(0);
-            header.set_mode(crate::constants::DIR_MODE);
-            header.set_mtime(mtime.max(0) as u64);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_path(format!("{archive_path}/"))?;
-            header.set_cksum();
-            builder.append(&header, std::io::empty())?;
+            // `disown_subtree` directories are not owned by the package:
+            // recurse, but omit the explicit directory entry so the parent
+            // file (or the OS) implies it.
+            if !entry_meta.is_some_and(|m| m.disown) {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_uid(0);
+                header.set_gid(0);
+                filemeta::apply_tar_header(
+                    &mut header,
+                    entry_meta,
+                    crate::constants::DIR_MODE,
+                    mtime,
+                );
+                header.set_path(format!("{archive_path}/"))?;
+                header.set_cksum();
+                builder.append(&header, std::io::empty())?;
+            }
             append_dir_sorted(
                 builder,
                 original_root,
@@ -411,6 +497,7 @@ fn append_dir_sorted<W: Write>(
                 &fs_path,
                 mtime,
                 md5sums.as_deref_mut(),
+                meta,
             )?;
         } else {
             let content = std::fs::read(&fs_path)
@@ -420,7 +507,7 @@ fn append_dir_sorted<W: Write>(
                 let digest = md5::compute(&content);
                 sums.push_str(&format!("{digest:x}  {}\n", rel.to_string_lossy()));
             }
-            append_file_bytes(builder, &archive_path, &content, mode, mtime)?;
+            append_file_bytes(builder, &archive_path, &content, mode, mtime, entry_meta)?;
         }
     }
     Ok(())
@@ -432,14 +519,14 @@ fn append_file_bytes<W: Write>(
     content: &[u8],
     mode: u32,
     mtime: i64,
+    meta: Option<&FileMeta>,
 ) -> Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Regular);
     header.set_size(content.len() as u64);
-    header.set_mode(mode);
-    header.set_mtime(mtime.max(0) as u64);
     header.set_uid(0);
     header.set_gid(0);
+    filemeta::apply_tar_header(&mut header, meta, mode, mtime);
     header.set_path(archive_path)?;
     header.set_cksum();
     builder.append(&header, content)?;

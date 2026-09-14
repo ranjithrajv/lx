@@ -19,7 +19,7 @@ metadata, scripts, and signing).
 | Glob patterns | ✅ (`-x` excludes) | ✅ `contents:` src | ✅ `contents:` src |
 | Disable globbing | ❌ | ✅ `disable_globbing` | ✅ `disable_globbing` |
 | Exclude patterns | ✅ `-x pattern` | ❌ | ❌ |
-| Per-file mode/owner/group | ✅ `--rpm-attr`, `--deb-user/group` | ✅ `file_info` | 🟡 global umask |
+| Per-file mode/owner/group | ✅ `--rpm-attr`, `--deb-user/group` | ✅ `file_info` | ✅ `contents[].file_info` |
 | Changelog | `--deb-changelog`, `--rpm-changelog` | ✅ `changelog: file.yml` | ✅ auto-generated |
 | Installed size | `--deb-installed-size` | ❌ | ❌ |
 | Config files marking | ✅ `--config-files` | ✅ `type: config` | ✅ `type: config` |
@@ -30,10 +30,10 @@ metadata, scripts, and signing).
 | Dir type | ❌ | ✅ `type: dir` | ✅ `type: dir` |
 | Ghost type (RPM) | ❌ | ✅ `type: ghost` | ✅ `type: ghost` |
 | Per-packager content filter | ❌ | ✅ `packager: deb` | ✅ `packager: deb` |
-| Disown subtree | ❌ | ✅ `disown_subtree` | ❌ |
+| Disown subtree | ❌ | ✅ `disown_subtree` | ✅ `contents[].disown_subtree` |
 | Env var expansion | ❌ | ❌ | ✅ `${VAR}` / `${VAR:-default}` |
 | Overlay config merge | ❌ | ❌ | ✅ `apply_overlay()` |
-| Expanded paths | ❌ | ✅ `expand: true` | ❌ |
+| Expanded paths | ❌ | ✅ `expand: true` | ✅ `contents[].expand` |
 | Options file | ✅ `--fpm-options-file` | ❌ | ❌ |
 | Musl-static builds | ❌ | ❌ | ✅ `musl: true` |
 | `from-dir`/`from-file` mode | ❌ | ❌ | ✅ `--from-dir`/`--from-file` |
@@ -100,7 +100,7 @@ How it works per build system:
 | Contributors | 200+ | 100+ | — |
 | Package manager | Ruby gem | Go module / binary | Cargo / binary |
 | CI integration | Any CI (shell) | Any CI (binary) | GitHub Action + binary |
-| Library API | ❌ | ✅ Go library | 🟡 Rust (not yet public) |
+| Library API | ❌ | ✅ Go library | ✅ `lx_lib::api` (Rust) |
 | Completions | ❌ | ✅ bash/fish/zsh/powershell | ✅ bash/fish/zsh/powershell |
 
 ---
@@ -113,7 +113,7 @@ How it works per build system:
 | Package a Python/gem/npm/CPAN module | **fpm** | Auto-downloads from language package managers |
 | macOS .pkg / FreeBSD / Solaris / snap | **fpm** | Only tool supporting these |
 | CI/CD packaging with rich per-format control | **nfpm** | Mature, binary, YAML config, per-file metadata |
-| Windows msix output | **nfpm** | Only Linux-focused tool with msix |
+| Windows msix output | **nfpm** (PFX) or **lx** (PEM key+cert) | both sign natively |
 | Package a GitHub release end-to-end | **lx** | Auto-fetch, verify, auto-install ancillaries |
 | Supply-chain security (SBOM, verification) | **lx** | Checksum verification, SBOM, SLSA provenance |
 | Consumer install/upgrade/rollback workflow | **lx** | Only tool with consumer CLI + repo serving |

@@ -29,6 +29,13 @@ ignore = [
   # See docs/decisions/2026-08-14-octocrab.md and the cargo-audit hook
   # in .pre-commit-config.yaml for the rationale.
   "RUSTSEC-2023-0071",
+  # RUSTSEC-2026-0194 / RUSTSEC-2026-0195 (quick-xml NsReader DoS) reach
+  # lx only through the `msix` crate, which lx uses **solely** for PKCS#7
+  # (AppxSignature.p7x) serialization via `rasn` — it never parses untrusted
+  # XML. The vulnerable quick-xml path is not on any code path lx executes.
+  # Revisit if the msix crate bumps quick-xml (>= 0.41) or is replaced.
+  "RUSTSEC-2026-0194",
+  "RUSTSEC-2026-0195",
 ]
 yanked = "warn"
 git-fetch-with-cli = true

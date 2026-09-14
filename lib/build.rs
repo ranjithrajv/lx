@@ -438,11 +438,11 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     }
 
     // Resolve effective package format: --format overrides package.yaml.
-    let effective_format = args
-        .format
-        .as_deref()
-        .unwrap_or(&cfg.effective_package_format())
-        .to_ascii_lowercase();
+    let effective_format = crate::config::canonical_format(
+        args.format
+            .as_deref()
+            .unwrap_or(&cfg.effective_package_format()),
+    );
     let plugin_names = crate::plugins::packager_names();
     if crate::plugins::get_packager(&effective_format).is_none() {
         bail!(
@@ -952,7 +952,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         match effective_format.as_str() {
             "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
             "arch" => crate::source::generate_arch(&args.output, &pkg)?,
-            "apk" | "ipk" => bail!(
+            "apk" | "ipk" | "msix" | "osxpkg" => bail!(
                 "--source is not supported for '{effective_format}' packages (no source-package format)"
             ),
             _ => crate::source::generate(&args.output, &pkg)?,
@@ -1264,7 +1264,7 @@ fn run_local(
         match effective_format {
             "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
             "arch" => crate::source::generate_arch(&args.output, &pkg)?,
-            "apk" | "ipk" => bail!(
+            "apk" | "ipk" | "msix" | "osxpkg" => bail!(
                 "--source is not supported for '{effective_format}' packages (no source-package format)"
             ),
             _ => crate::source::generate(&args.output, &pkg)?,
@@ -1928,7 +1928,10 @@ fn build_one(
     };
     let debian_version =
         lx_lib::pkgmeta::normalize_version(&raw_version, &cfg.effective_version_schema());
-    let mtime = lx_lib::pkgmeta::reproducible_epoch(job.published_at);
+    let mtime = match cfg.effective_mtime()? {
+        Some(m) => m,
+        None => lx_lib::pkgmeta::reproducible_epoch(job.published_at),
+    };
     let staging_root = tmp.join(format!(
         "{}-{}-root-{}",
         job.arch,
@@ -2011,6 +2014,7 @@ fn build_one(
             key_id: &sign_key_id,
             passphrase: sign_passphrase.as_deref(),
             sign_type: &sign_type,
+            cert_file: &cfg.signature.cert_file,
         };
         match crate::plugins::signer::signer_for(&format, &sign_method) {
             Some(signer) if signer.embedded() => {

@@ -9,7 +9,7 @@ Part of the [lx docs](../README.md).
 * **7× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `autotools` + `make` + `custom`
 * **11× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `go` + `hex` + `dart` + `nuget` + `maven` + `composer` + `cpan`
 * **6× ArtifactFormat:** `tar.gz` + `tar.xz` + `tar.zst` + `tar` + `zip` + `raw`
-* **4× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign` + `apk-rsa`
+* **6× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign` + `apk-rsa` + `msix-p7x` + `pkg-xar`
 * **5× DependencyMapper:** `debian` + `rpm` + `pacman` + `alpine` + `openwrt`
 * **8× PackageIndex:** 5 write (`apt` + `opkg` + `pacman` + `apk` + `rpm`) + 3 read (`lx-community` + `aur` + `repology`)
 
@@ -210,7 +210,7 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 |---|---|
 | Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `PackageIndex` traits — 5 + 9 + 7 + 11 + 6 + 4 + 5 + 8 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
-| Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`/`apk-rsa`; `check_sidecar` provider-agnostic via `RawGetter` |
+| Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`/`apk-rsa`/`msix-p7x` + post-build `pkg-xar`; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |
 
 See `docs/decisions/2026-08-20-nfpm-adoptions.md` and `README.md` for the `nfpm`-inspired `relations`/`ancillaries`/`epoch` already shared.

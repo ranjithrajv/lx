@@ -11,6 +11,8 @@ use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use crate::filemeta::{self, FileMeta, FileMetaMap};
+
 /// Package metadata fields shared by [`build`] and `render_pkginfo`.
 #[derive(Debug, Clone, Copy)]
 pub struct PackageMeta<'a> {
@@ -138,6 +140,7 @@ pub fn build(
         mtime,
         arch_path,
         install_script,
+        &FileMetaMap::new(),
     )
 }
 
@@ -145,6 +148,8 @@ pub fn build(
 /// (`depend`, `optdepend`, `conflict`, `provides`, `replaces`, `backup`),
 /// an optional `packager` and an optional epoch (rendered into `pkgver` as
 /// `epoch:version-release`, matching makepkg's `get_full_version`).
+///
+/// `file_meta` carries `contents[].file_info` / `disown_subtree` overrides.
 #[allow(clippy::too_many_arguments)]
 pub fn build_with_relations(
     root: &Path,
@@ -156,6 +161,7 @@ pub fn build_with_relations(
     mtime: i64,
     arch_path: &Path,
     install_script: Option<&str>,
+    file_meta: &FileMetaMap,
 ) -> Result<()> {
     let pacman_arch = to_pacman_arch(arch);
     let pkgver = match epoch.map(str::trim).filter(|e| !e.is_empty()) {
@@ -183,22 +189,36 @@ pub fn build_with_relations(
         let mut builder = tar::Builder::new(&mut tar_bytes);
 
         // .PKGINFO
-        append_file_bytes(&mut builder, ".PKGINFO", pkginfo.as_bytes(), 0o644, mtime)?;
+        append_file_bytes(
+            &mut builder,
+            ".PKGINFO",
+            pkginfo.as_bytes(),
+            0o644,
+            mtime,
+            None,
+        )?;
         // .MTREE will be generated after we know all payload entries,
         // but for determinism we need to include it now. Simplest: generate
         // MTREE from the same walk and add as regular file.
-        let mtree = render_mtree(root, mtime)?;
-        append_file_bytes(&mut builder, ".MTREE", mtree.as_bytes(), 0o644, mtime)?;
+        let mtree = render_mtree(root, mtime, file_meta)?;
+        append_file_bytes(&mut builder, ".MTREE", mtree.as_bytes(), 0o644, mtime, None)?;
 
         // Optional .INSTALL (pre/post-upgrade hooks).
         if let Some(script) = install_script {
             if !script.trim().is_empty() {
-                append_file_bytes(&mut builder, ".INSTALL", script.as_bytes(), 0o644, mtime)?;
+                append_file_bytes(
+                    &mut builder,
+                    ".INSTALL",
+                    script.as_bytes(),
+                    0o644,
+                    mtime,
+                    None,
+                )?;
             }
         }
 
         // Payload: recursively add root contents (sorted, normalized).
-        append_dir_sorted(&mut builder, root, "", root, mtime)?;
+        append_dir_sorted(&mut builder, root, "", root, mtime, file_meta)?;
 
         builder.finish()?;
     }
@@ -375,7 +395,7 @@ pub fn render_install_script(preupgrade: &str, postupgrade: &str) -> Option<Stri
     Some(out)
 }
 
-fn render_mtree(root: &Path, mtime: i64) -> Result<String> {
+fn render_mtree(root: &Path, mtime: i64, file_meta: &FileMetaMap) -> Result<String> {
     // Minimal mtree: #mtree header + entries for each file/dir/symlink.
     // Format: ./path type=file mode=644 time=mtime size=123 sha256digest=...
     let mut out = String::from("#mtree\n");
@@ -390,7 +410,13 @@ fn render_mtree(root: &Path, mtime: i64) -> Result<String> {
         mtime.max(0)
     ));
 
-    fn walk_mtree(original_root: &Path, dir: &Path, mtime: i64, out: &mut String) -> Result<()> {
+    fn walk_mtree(
+        original_root: &Path,
+        dir: &Path,
+        mtime: i64,
+        file_meta: &FileMetaMap,
+        out: &mut String,
+    ) -> Result<()> {
         let mut entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::io::Result<Vec<_>>>()?;
         entries.sort_by_key(|e| e.file_name());
         for entry in entries {
@@ -400,20 +426,32 @@ fn render_mtree(root: &Path, mtime: i64) -> Result<String> {
                 .expect("walked path must be under original_root");
             let mtree_path = format!("./{}", rel.to_string_lossy());
             let ty = entry.file_type()?;
-            let time = mtime.max(0);
+            let entry_meta = filemeta::lookup(file_meta, &rel.to_string_lossy());
+            let time = entry_meta.and_then(|m| m.mtime).unwrap_or(mtime).max(0);
             if ty.is_symlink() {
                 let target = std::fs::read_link(&fs_path)?;
+                let mode = entry_meta.and_then(|m| m.mode).unwrap_or(0o777);
                 out.push_str(&format!(
-                    "{mtree_path} time={time}.0 mode=777 type=link link={}\n",
+                    "{mtree_path} time={time}.0 mode={mode:o} type=link link={}\n",
                     target.to_string_lossy()
                 ));
             } else if ty.is_dir() {
-                out.push_str(&format!("{mtree_path} time={time}.0 mode=755 type=dir\n"));
-                walk_mtree(original_root, &fs_path, mtime, out)?;
+                // `disown_subtree` dirs stay out of the manifest; the files
+                // beneath them are still listed.
+                let disowned = entry_meta.is_some_and(|m| m.disown);
+                if !disowned {
+                    let mode = entry_meta.and_then(|m| m.mode).unwrap_or(0o755);
+                    out.push_str(&format!(
+                        "{mtree_path} time={time}.0 mode={mode:o} type=dir\n"
+                    ));
+                }
+                walk_mtree(original_root, &fs_path, mtime, file_meta, out)?;
             } else if ty.is_file() {
                 let meta = std::fs::metadata(&fs_path)?;
                 let size = meta.len();
-                let mode = meta.permissions().mode() & 0o777;
+                let mode = entry_meta
+                    .and_then(|m| m.mode)
+                    .unwrap_or_else(|| meta.permissions().mode() & 0o777);
                 // sha256 for mtree digest (optional but nice)
                 let digest = sha256_hex(&std::fs::read(&fs_path)?);
                 out.push_str(&format!(
@@ -424,7 +462,7 @@ fn render_mtree(root: &Path, mtime: i64) -> Result<String> {
         Ok(())
     }
 
-    walk_mtree(root, root, mtime, &mut out)?;
+    walk_mtree(root, root, mtime, file_meta, &mut out)?;
     Ok(out)
 }
 
@@ -441,6 +479,7 @@ fn append_dir_sorted<W: Write>(
     archive_prefix: &str,
     fs_dir: &Path,
     mtime: i64,
+    meta: &FileMetaMap,
 ) -> Result<()> {
     let mut entries: Vec<_> = std::fs::read_dir(fs_dir)
         .with_context(|| format!("failed to read '{}'", fs_dir.display()))?
@@ -454,37 +493,55 @@ fn append_dir_sorted<W: Write>(
             .expect("walked path must be under original_root");
         let archive_path = format!("{archive_prefix}{}", rel.to_string_lossy());
         let file_type = entry.file_type()?;
+        let entry_meta = filemeta::lookup(meta, &archive_path);
 
         if file_type.is_symlink() {
             let target = std::fs::read_link(&fs_path)?;
             let mut header = tar::Header::new_gnu();
             header.set_entry_type(tar::EntryType::Symlink);
             header.set_size(0);
-            header.set_mode(crate::constants::SYMLINK_MODE);
-            header.set_mtime(mtime.max(0) as u64);
             header.set_uid(0);
             header.set_gid(0);
+            filemeta::apply_tar_header(
+                &mut header,
+                entry_meta,
+                crate::constants::SYMLINK_MODE,
+                mtime,
+            );
             header.set_path(&archive_path)?;
             header.set_link_name(&target)?;
             header.set_cksum();
             builder.append(&header, std::io::empty())?;
         } else if file_type.is_dir() {
-            let mut header = tar::Header::new_gnu();
-            header.set_entry_type(tar::EntryType::Directory);
-            header.set_size(0);
-            header.set_mode(crate::constants::DIR_MODE);
-            header.set_mtime(mtime.max(0) as u64);
-            header.set_uid(0);
-            header.set_gid(0);
-            header.set_path(format!("{archive_path}/"))?;
-            header.set_cksum();
-            builder.append(&header, std::io::empty())?;
-            append_dir_sorted(builder, original_root, archive_prefix, &fs_path, mtime)?;
+            if !entry_meta.is_some_and(|m| m.disown) {
+                let mut header = tar::Header::new_gnu();
+                header.set_entry_type(tar::EntryType::Directory);
+                header.set_size(0);
+                header.set_uid(0);
+                header.set_gid(0);
+                filemeta::apply_tar_header(
+                    &mut header,
+                    entry_meta,
+                    crate::constants::DIR_MODE,
+                    mtime,
+                );
+                header.set_path(format!("{archive_path}/"))?;
+                header.set_cksum();
+                builder.append(&header, std::io::empty())?;
+            }
+            append_dir_sorted(
+                builder,
+                original_root,
+                archive_prefix,
+                &fs_path,
+                mtime,
+                meta,
+            )?;
         } else {
             let content = std::fs::read(&fs_path)
                 .with_context(|| format!("failed to read '{}'", fs_path.display()))?;
             let mode = std::fs::metadata(&fs_path)?.permissions().mode() & 0o777;
-            append_file_bytes(builder, &archive_path, &content, mode, mtime)?;
+            append_file_bytes(builder, &archive_path, &content, mode, mtime, entry_meta)?;
         }
     }
     Ok(())
@@ -496,14 +553,14 @@ fn append_file_bytes<W: Write>(
     content: &[u8],
     mode: u32,
     mtime: i64,
+    meta: Option<&FileMeta>,
 ) -> Result<()> {
     let mut header = tar::Header::new_gnu();
     header.set_entry_type(tar::EntryType::Regular);
     header.set_size(content.len() as u64);
-    header.set_mode(mode);
-    header.set_mtime(mtime.max(0) as u64);
     header.set_uid(0);
     header.set_gid(0);
+    filemeta::apply_tar_header(&mut header, meta, mode, mtime);
     header.set_path(archive_path)?;
     header.set_cksum();
     builder.append(&header, content)?;

@@ -231,6 +231,7 @@ fn build_with_relations_round_trips_pkginfo() {
         1_735_689_600,
         &out,
         None,
+        &Default::default(),
     )
     .unwrap();
 

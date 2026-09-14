@@ -137,7 +137,7 @@ This preserves the nfpm-inspired ancillary handling (`docs/decisions/2026-08-20-
 
 ## 6. Package Plugins
 
-### deb — `lib/plugins/deb.rs` + `lib/debarchive.rs` *(5 total: deb + rpm + arch + apk + ipk)*
+### deb — `lib/plugins/deb.rs` + `lib/debarchive.rs` *(7 total: deb + rpm + arch + apk + ipk + msix + osxpkg)*
 
 *Extension* `deb`, *defaults* `bookworm/trixie/forky/sid`, *matrix* → `PackageConfig::arch_supported_for_dist()` (universal + distro-gated `i386/armel/riscv64/loong64`).
 
@@ -170,6 +170,18 @@ Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar
 *Extension* `ipk`, *defaults* `openwrt`, permissive matrix.
 
 OpenWrt/opkg `.ipk` shares the `.deb` `ar` layout (`debian-binary` + `control.tar.gz` + `data.tar.gz`), so archiving delegates to `debarchive` and only the control dialect (`Package/Version/Architecture/Installed-Size/License/Depends/Provides/Conflicts`) and filename (`name_version_arch.ipk`) differ. `scripts:` are emitted as `preinst`/`postinst`/`prerm`/`postrm` control members, and config-typed `contents:` entries are listed in a `conffiles` member. Gzip is pinned regardless of `compression:` since it is the only format opkg has always accepted.
+
+### msix — `lib/plugins/msix.rs` + `lib/msixarchive.rs`
+
+*Extension* `msix`, *defaults* `windows`, permissive matrix. Windows MSIX output, mirroring nfpm's `msix` packager.
+
+Builds an OPC (zip) container with `[Content_Types].xml`, `AppxManifest.xml`, and `AppxBlockMap.xml`, plus the staged payload at its destination paths. Metadata comes from the `msix:` config block: `publisher` (required), `properties` (display name/logo), `identity.resource_id`, `applications` (required; FullTrust entry points auto-add the `runFullTrust` restricted capability), `dependencies.target_device_families`, and `capabilities`. Version is normalized to MSIX's 4-part numeric form and the architecture maps from Debian naming (`amd64→x64`, `i386→x86`, …). **Native signing:** with `signature.key_file` (PKCS#8 RSA key, PEM) and `signature.cert_file` (X.509 cert, PEM), the packager appends a real `AppxSignature.p7x` (PKCS#7 over the Appx digests) using the `msix` crate; the certificate Subject must match the manifest `Publisher`. `msix.signature.pfx_file` is not supported.
+
+### osxpkg — `lib/plugins/osxpkg.rs` + `lib/osxpkgarchive.rs`
+
+*Extension* `pkg`, *defaults* `macos`, permissive matrix. macOS flat package, mirroring fpm's `osxpkg` output.
+
+fpm shells out to macOS `pkgbuild`; lx writes the **xar** container in-process. The archive holds `PackageInfo` (identifier = `package_name`, version, install location from `prefix:` or `/`, script declarations) and a `Payload` member — a **newc `cpio`** archive of the staged tree, gzip-compressed — plus a `Scripts` cpio member when `scripts.preinstall`/`postinstall` are set. Header is big-endian; the TOC is zlib-compressed XML with an archive SHA-256 checksum and per-member `extracted`/`archived` SHA-1 checksums. `pkg` is accepted as an alias for `--format`. **Native signing:** with `signature.key_file` (PKCS#8 key, PEM) and `signature.cert_file` (X.509 cert, PEM), the built package is signed in place by the `pkg-xar` backend using `apple-xar`'s `XarSigner` (adds the `Signature` member over the archive checksum). No `Bom` is generated, so some `installer` paths may still require one.
 
 ## 7. BuildSystem Plugins (Compile Source)
 
@@ -304,7 +316,7 @@ forgejo_host: codeberg.org      # optional self-hosted Forgejo
 bitbucket_host: bitbucket.example.com # optional self-hosted Bitbucket
 gerrit_host: review.gerrithub.io # optional self-hosted Gerrit
 gitee_host: gitee.example.com   # optional self-hosted Gitee
-package_format: deb     # deb | rpm | arch | apk | ipk
+package_format: deb     # deb | rpm | arch | apk | ipk | msix
 build_system: cmake     # cmake | cargo | go | meson | autotools | make | custom (omit = auto-detect)
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
 registry_source: npm        # npm | python | gem | cargo | go | hex | dart | nuget | maven | composer | cpan (uses github_repo as package name)
@@ -321,7 +333,7 @@ what does it become."* Four more cover cross-cutting lifecycles and the
 | Dimension | Trait / registry | Impls | Selected by | Replaces |
 |---|---|---|---|---|
 | **ArtifactFormat** | `lib/plugins/artifact/mod.rs` | `tar.gz` `tar.xz` `tar.zst` `tar` `zip` `raw` | `artifact_format:` / auto-detect | `build.rs::extract` + `discovery::guess_format` match |
-| **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` `apk-rsa` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
+| **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` `apk-rsa` `msix-p7x` `pkg-xar` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
 | **DependencyMapper** | `lib/plugins/depmap/mod.rs` | `debian` `rpm` `pacman` `alpine` `openwrt` | target `package_format` | per-format `match` inside `depmap.rs` |
 | **PackageIndex** | `lib/plugins/package_index/mod.rs` | 5 write (`apt` `opkg` `pacman` `apk` `rpm`) + 3 read (`lx-community` `aur` `repology`) | `lx repo --format` / `indexes.yaml` | apt-only `lib/repo.rs` + `SourceKind` match in `index/registry.rs` |
 
@@ -333,7 +345,10 @@ what does it become."* Four more cover cross-cutting lifecycles and the
   (`gpg-detach`); embedded backends declare `embedded()` and the packager
   writes the signature while building the artifact (`rpm-pgp`,
   `deb-debsign`, and `apk-rsa` — Alpine's `.SIGN.RSA.<keyname>` over the
-  control segment, signed in-process via the `rsa` crate).
+  control segment, signed in-process via the `rsa` crate). `msix-p7x` is
+  embedded (the MSIX packager writes `AppxSignature.p7x` using the `msix`
+  crate); `pkg-xar` is post-build (it rewrites the `.pkg` with
+  `apple-xar`'s `XarSigner`). Both take a PEM key + X.509 certificate.
 * **DependencyMapper** — each target format owns its package-name translation
   and version-operator syntax. Deb/RPM/Arch delegate to the shared
   ecosystem→Debian tables in `depmap.rs`; Alpine renders `name>=ver` and

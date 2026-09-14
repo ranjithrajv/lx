@@ -5,7 +5,14 @@ use lx_lib::plugins::signer::{get_signer, signer_for, signer_names};
 #[test]
 fn registry_lists_all_signers() {
     let names = signer_names();
-    for expected in ["gpg-detach", "rpm-pgp", "deb-debsign", "apk-rsa"] {
+    for expected in [
+        "gpg-detach",
+        "rpm-pgp",
+        "deb-debsign",
+        "apk-rsa",
+        "msix-p7x",
+        "pkg-xar",
+    ] {
         assert!(names.contains(&expected), "missing signer {expected}");
         assert!(get_signer(expected).is_some());
     }
@@ -46,4 +53,19 @@ fn apk_uses_the_rsa_signer() {
 #[test]
 fn debsign_is_not_offered_for_non_deb() {
     assert!(signer_for("arch", "debsign").is_none());
+}
+
+/// MSIX and macOS pkg have native signing schemes; they select their own
+/// native signer rather than the generic detached OpenPGP backend.
+#[test]
+fn msix_and_osxpkg_use_native_signers() {
+    let msix = signer_for("msix", "detach").expect("msix signer");
+    assert_eq!(msix.name(), "msix-p7x");
+    assert!(msix.embedded(), "msix signature is written by the packager");
+
+    for format in ["osxpkg", "pkg"] {
+        let pkg = signer_for(format, "detach").expect("pkg signer");
+        assert_eq!(pkg.name(), "pkg-xar", "format {format}");
+        assert!(!pkg.embedded(), "pkg is signed post-build");
+    }
 }

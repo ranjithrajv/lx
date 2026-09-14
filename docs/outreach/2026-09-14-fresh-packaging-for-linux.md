@@ -245,9 +245,11 @@ A post that only lists wins isn't worth sending, so:
   a local `--pinned-metadata` pin; it does not yet consume Sigstore or
   GitHub artifact attestations, so an upstream that publishes only an
   attestation (no checksum sidecar) fails closed rather than being trusted.
-- **Breadth.** No `osxpkg`, `freebsd`, `snap`, `tar`, `zip`, or
-  self-extracting output, and no per-file owner/group/mode. Those stay with
-  `fpm` and `nfpm`; `lx` complements rather than replaces them.
+- **Breadth.** No `freebsd`, `snap`, `tar`, `zip`, or self-extracting
+  output; `msix` and `osxpkg` are best-effort and unsigned. Per-file
+  `owner`/`group`/`mode` are supported via `contents[].file_info`. fpm and
+  nfpm still cover the remaining outputs; `lx` complements rather than
+  replaces them.
 - **Hosted infrastructure.** `lx repo` is a generator, not a CDN. There is
   no snapshotting, retention policy, or sync service.
 - **The matrix shrinks but doesn't vanish.** `--format all`/`lx publish`

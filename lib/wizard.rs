@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use clap::Args;
 use dialoguer::{theme::ColorfulTheme, Confirm, Input};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
 
@@ -27,11 +27,19 @@ pub struct InitArgs {
     #[arg(long, value_name = "AUR_PKG")]
     pub from_aur: Option<String>,
 
+    /// Import an nfpm config: convert `nfpm.yaml` into a starter
+    /// `package.yaml` (name/version/arch, relations, scripts, per-format
+    /// blocks, signing, and the `contents:` DSL including `file_info`,
+    /// `expand`, and `disown_subtree`). Review the generated notes — keys
+    /// nfpm has and lx does not are called out explicitly.
+    #[arg(long, value_name = "NFPM_YAML")]
+    pub from_nfpm: Option<PathBuf>,
+
     /// Scaffold from a forge repo: auto-discover the release assets for
     /// "owner/repo" and write a starter package.yaml (non-interactive; the
     /// former `lx discover --full`, written to --output). Conflicts with
-    /// --template / --from-aur.
-    #[arg(long, value_name = "REPO", conflicts_with_all = ["template", "from_aur"])]
+    /// --template / --from-aur / --from-nfpm.
+    #[arg(long, value_name = "REPO", conflicts_with_all = ["template", "from_aur", "from_nfpm"])]
     pub from: Option<String>,
 
     /// With --from: version/tag to inspect (default: latest release).
@@ -121,6 +129,10 @@ pub fn run(args: InitArgs) -> Result<()> {
     // --from-aur: convert an AUR PKGBUILD into a starter package.yaml.
     if let Some(name) = &args.from_aur {
         return import_from_aur(name, args.output);
+    }
+    // --from-nfpm: convert an nfpm.yaml into a starter package.yaml.
+    if let Some(path) = &args.from_nfpm {
+        return import_from_nfpm(path, args.output);
     }
     // --template: write a bundled starter config verbatim (the action's
     // "Option 3: Use a Template" workflow) and stop — no prompts.
@@ -543,6 +555,37 @@ fn github_guess(url: &str, pkgname: &str) -> String {
         }
     }
     format!("OWNER/{pkgname}   # FIXME: not a GitHub URL")
+}
+
+/// `lx init --from-nfpm <nfpm.yaml>` — convert an nfpm config into a starter
+/// package.yaml. Unlike `--from-aur`, this is a purely local transform: no
+/// network, and the nfpm config's own `contents:`/`scripts`/relations carry
+/// over. The output is marked REVIEW ME because nfpm has no source-repo
+/// concept (lx needs `github_repo` for forge builds) and a few nfpm keys have
+/// no lx equivalent — those are listed in a generated notes footer.
+fn import_from_nfpm(path: &Path, output: Option<PathBuf>) -> Result<()> {
+    let body = crate::nfpm::convert_file(path)?;
+    let output =
+        output.unwrap_or_else(|| PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME));
+    if output.exists() {
+        bail!(
+            "'{}' already exists; remove it or pass --output",
+            output.display()
+        );
+    }
+    if let Some(parent) = output.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
+    std::fs::write(&output, body)?;
+    println!(
+        "Converted {} to {} — review the notes, then `lx validate {}`.",
+        path.display(),
+        output.display(),
+        output.display()
+    );
+    Ok(())
 }
 
 use anyhow::Context;

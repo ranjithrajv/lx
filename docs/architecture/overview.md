@@ -8,7 +8,7 @@ editing the core pipeline:
 
 | Dimension | Purpose | Count | Selection |
 |---|---|---|---|
-| **Packager** | Produce installable artifact | 5 (deb, rpm, arch, apk, ipk) | `--format` / `package_format:` |
+| **Packager** | Produce installable artifact | 7 (deb, rpm, arch, apk, ipk, msix, osxpkg) | `--format` / `package_format:` |
 | **ForgeSource** | Discover forge releases/assets | 9 (github, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge, custom) | `--source` / URL sniffing / `source: custom` |
 | **BuildSystem** | Compile source tree | 7 (cmake, cargo, go, meson, autotools, make, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 11 (npm, python, gem, cargo, go, hex, dart, nuget, maven, composer, cpan) | `registry_source:` |

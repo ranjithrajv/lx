@@ -204,7 +204,9 @@ Collected, so the ✅ rows above are not read as universal:
 - **No upstream attestation consumption** (see I7).
 - **`dpkg-sig` is not implemented**, and a live `debsig-verify` test does
   not exist.
-- **No Windows/macOS output** (`msix`, `osxpkg`) — left to `nfpm`/`fpm`.
+- **Windows/macOS output is signed in-process** (`msix` p7x, xar
+  `Signature`) from a PEM key + certificate; notarization is a separate
+  Apple service and `.pkg` has no `Bom`.
 - **`SourceKind::Custom` is not yet a plugin** (`lib/index/registry.rs`),
   so a custom read index needs code.
 - **Gated checks are gated.** The rpm/apk/ipk client tests only run when

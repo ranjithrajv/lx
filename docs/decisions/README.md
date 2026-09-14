@@ -38,5 +38,6 @@ renames. For current behavior, see the [documentation hub](../README.md).
 - [System-wide `lx upgrade --all` (distro-aware)](2026-09-11-upgrade-all-distro.md)
 - [System-wide `lx upgrade --all --auto-migrate`](2026-09-11-upgrade-auto-migrate.md)
 - [Dependency Decision: RPM scriptlet extraction & cross-distro package install](2026-09-12-foss-mind-rpm-scriptlets.md)
+- [Native MSIX (`.p7x`) and macOS pkg (xar) signing](2026-09-14-msix-pkg-signing.md)
 - [Host build-dependency solving and installation (`--install-build-deps`)](2026-09-14-build-deps.md)
 - [`lx shlibdeps`: symbol-versioned dependency resolution (dpkg-shlibdeps parity)](2026-09-14-shlibdeps.md)

@@ -64,6 +64,10 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 percent-encoding = "2.3"
 cpio = "0.4"
+msix = "0.4"
+xcommon = "0.3"
+apple-xar = "0.20"
+x509-certificate = "0.24"
 
 [dev-dependencies]
 assert_cmd = "2.0"

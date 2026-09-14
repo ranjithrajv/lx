@@ -53,7 +53,8 @@ impl Packager for DebPackager {
 pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
     let cfg = ctx.cfg;
     let job = ctx.job;
-    let conffiles = super::apply_contents(cfg, ctx.staging_root, "deb")?;
+    let (conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "deb")?;
+    let conffiles: Vec<String> = conffiles.into_iter().map(|c| c.path).collect();
 
     // Render control/changelog/copyright.
     let control = render_control(
@@ -127,7 +128,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         };
     let signer_ref = origin_signer.as_ref().map(|f| f.as_ref());
     let sig_type = cfg.effective_sign_type();
-    lx_lib::debarchive::build_full_signed(
+    lx_lib::debarchive::build_full_signed_with_meta(
         ctx.staging_root,
         control.as_bytes(),
         ctx.mtime,
@@ -135,6 +136,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         &comp,
         &extras,
         signer_ref.map(|s| (s, sig_type.as_str())),
+        &file_meta,
     )
     .with_context(|| format!("failed to build {}", deb_dest.display()))?;
 

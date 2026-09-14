@@ -22,8 +22,8 @@ Linux packagers, with specific flags, fields, and behaviors documented.
 | apk (Alpine) | `-t apk` | ✅ `apk` | ✅ `--format apk` |
 | arch (`.pkg.tar.zst`) | `-t pacman` | ✅ `archlinux` | ✅ `--format arch` |
 | ipk (OpenWrt) | ❌ | ✅ `ipk` | ✅ `--format ipk` |
-| msix (Windows) | ❌ | ✅ `msix` | ❌ |
-| osxpkg (macOS) | `-t osxpkg` | ❌ | ❌ |
+| msix (Windows) | ❌ | ✅ `msix` | ✅ (native p7x signing) |
+| osxpkg (macOS) | `-t osxpkg` | ❌ | ✅ (native xar signing) |
 | freebsd | `-t freebsd` | ❌ | ❌ |
 | solaris | `-t solaris` | ❌ | ❌ |
 | p5p | ❌ | ❌ | ❌ |
@@ -40,7 +40,7 @@ Linux packagers, with specific flags, fields, and behaviors documented.
 - **nfpm** covers the 7 major Linux formats + Windows msix. It has
   format-specific sub-config blocks (`deb:`, `rpm:`, `apk:`,
   `archlinux:`, `ipk:`, `msix:`).
-- **lx** focuses on deb/rpm/arch/apk/ipk and uniquely produces *source*
+- **lx** focuses on deb/rpm/arch/apk/ipk (plus msix/osxpkg, natively signable) and uniquely produces *source*
   packages (`.dsc` + `.orig.tar.xz` + `.debian.tar.xz`, `.src.rpm`,
   PKGBUILD). Format conversion is via `lx convert` (deb↔rpm↔arch) —
   reads source metadata + install tree, rebuilds natively in target
@@ -300,7 +300,7 @@ overrides:
 | deb signing | ❌ | ✅ debsign + dpkg-sig | ✅ debsign + detach |
 | rpm signing | `--rpm-sign` (rpmbuild) | ✅ PGP embedded | ✅ PGP embedded |
 | apk signing | ❌ | ✅ RSA PEM | ✅ RSA/SHA-1, in-process |
-| msix signing | ❌ | ✅ PFX | N/A |
+| msix signing | ❌ | ✅ PFX | ✅ (PEM key + cert; native p7x) |
 | Checksum verification | ❌ | ❌ | ✅ fail-closed by default |
 | SBOM output | ❌ | ❌ | ✅ SPDX 2.3 |
 | SLSA provenance | ❌ | ❌ | ✅ SLSA v1 |

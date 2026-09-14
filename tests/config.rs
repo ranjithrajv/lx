@@ -274,16 +274,21 @@ fn rejects_bad_overrides_key_and_contents() {
 package_name: foo
 github_repo: owner/foo
 overrides:
-  msix:
+  bogus:
     depends: "x"
 "#;
     let cfg: PackageConfig = serde_yaml::from_str(bad_key).unwrap();
     assert!(cfg.validate().is_err());
 
-    // apk/ipk are now valid override targets too.
+    // apk/ipk/msix are now valid override targets too.
     let apk_key =
         "package_name: foo\ngithub_repo: owner/foo\noverrides:\n  apk:\n    depends: \"x\"\n";
     let cfg: PackageConfig = serde_yaml::from_str(apk_key).unwrap();
+    assert!(cfg.validate().is_ok());
+
+    let msix_key =
+        "package_name: foo\ngithub_repo: owner/foo\noverrides:\n  msix:\n    depends: \"x\"\n";
+    let cfg: PackageConfig = serde_yaml::from_str(msix_key).unwrap();
     assert!(cfg.validate().is_ok());
 
     let rel_dst = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: usr/bin/a\n";
@@ -610,13 +615,18 @@ contents:
     assert_eq!(cfg.contents[0].packager, "deb");
     assert_eq!(cfg.contents[1].packager, "rpm");
 
-    let bad = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: msix\n";
+    let bad = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: bogus\n";
     assert!(PackageConfig::parse_str(bad).is_err());
 
-    // apk/ipk are accepted contents filters now.
-    let apk =
-        "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: apk\n";
-    assert!(PackageConfig::parse_str(apk).is_ok());
+    // apk/ipk/msix are accepted contents filters now.
+    for fmt in ["apk", "ipk", "msix"] {
+        let yaml =
+            format!("package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: {fmt}\n");
+        assert!(
+            PackageConfig::parse_str(&yaml).is_ok(),
+            "{fmt} should be accepted"
+        );
+    }
 }
 
 #[test]

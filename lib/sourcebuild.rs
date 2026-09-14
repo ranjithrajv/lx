@@ -64,11 +64,11 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
 
     // Target format: `--format` overrides package.yaml, defaulting to deb.
     // Source mode now wraps in whatever format is selected.
-    let format = args
-        .format
-        .as_deref()
-        .unwrap_or(&cfg.effective_package_format())
-        .to_ascii_lowercase();
+    let format = crate::config::canonical_format(
+        args.format
+            .as_deref()
+            .unwrap_or(&cfg.effective_package_format()),
+    );
     if !matches!(format.as_str(), "deb" | "rpm" | "arch") {
         bail!("build_mode: source supports deb, rpm, and arch (got '{format}')");
     }
@@ -179,7 +179,10 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     // Wrap one package per suite using the selected format's plugin.
     std::fs::create_dir_all(&args.output)?;
     let debian_version = lx_lib::pkgmeta::strip_upstream_prefix(&version);
-    let mtime = lx_lib::pkgmeta::reproducible_epoch(None);
+    let mtime = match cfg.effective_mtime()? {
+        Some(m) => m,
+        None => lx_lib::pkgmeta::reproducible_epoch(None),
+    };
     let sign_key = cfg.effective_sign_key(args.sign_key.as_deref());
     let sign_key_id = cfg.effective_sign_key_id(args.sign_key_id.as_deref());
     let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
@@ -218,7 +221,8 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         let pkg_tmp = match format.as_str() {
             "rpm" => crate::plugins::rpm::archive_staged_tree(&ctx),
             "arch" => crate::plugins::arch::archive_staged_tree(&ctx),
-            _ => crate::plugins::deb::archive_staged_tree(&ctx),
+            "deb" => crate::plugins::deb::archive_staged_tree(&ctx),
+            other => bail!("source builds do not support '{other}' packages"),
         }
         .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
         let dest = args.output.join(

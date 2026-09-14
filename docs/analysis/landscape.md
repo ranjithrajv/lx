@@ -69,9 +69,9 @@ closest peers to `lx build --from-dir`/`--from-file`.
 `lx` overlaps this layer at its edges (`--from-dir`/`--from-file`,
 `build_mode: source`) but does not try to be a general file-driven
 packager. `--format all` emits every format from one config, and `lx
-publish` runs that plus the repository indexes in one command. If you want
-`msix`, `osxpkg`, per-file `mode`/`owner`/`group`, or `expand: true`,
-`nfpm` and `fpm` still win — see the comparison docs.
+publish` runs that plus the repository indexes in one command. For signed
+`msix`/`osxpkg`, `freebsd`/`solaris`/`snap`/`tar` output, or fpm's extra
+language inputs, `nfpm` and `fpm` still win — see the comparison docs.
 
 ---
 
@@ -86,7 +86,7 @@ a *release* somewhere and close the gap to an installed package.
 | [Homebrew / Linuxbrew](https://brew.sh/) | Formulae (source or bottle) | Kegs in `/home/linuxbrew` | Not native packages; parallel, prefix-isolated |
 | [makedeb](https://www.makedeb.org/) + AUR | `PKGBUILD` | `.deb` | Builds by executing recipes |
 | `*2deb` converters | Language packages | `.deb` | Single ecosystem each |
-| **`lx`** | Forge releases, registries, source, local files | deb/rpm/apk/arch/ipk + source packages + repo | Deliberately not `msix`/`osxpkg`/`snap`/`tar` output, and not a general distro build |
+| **`lx`** | Forge releases, registries, source, local files | deb/rpm/apk/arch/ipk + msix/osxpkg (natively signable) + source packages + repo | Not `snap`/`tar` output, and not a general distro build |
 
 The distinguishing choice in this group is the **trust model**: deb-get
 is HTTPS-only, makedeb executes recipes, and `lx` is fail-closed on
@@ -286,8 +286,8 @@ pin versions, verify the output yourself, and file what breaks.
 distro toolchain, not to swallow them. Natural pairings:
 
 - **`lx build` + `nfpm`/`fpm`** — use `lx` for the forge-fetch/verify
-  pipeline, and `nfpm`/`fpm` when you need an output format or a
-  per-file control `lx` does not have (`msix`, `osxpkg`, `disown_subtree`).
+  pipeline, and `nfpm`/`fpm` when you need signed Windows/macOS packages,
+  `freebsd`/`snap`/`tar` output, or fpm's extra language inputs.
 - **`lx build` + `reprepro`/`aptly`/OBS** — `lx` produces the artifacts
   and `lx repo` the small repo; hand a large archive to a dedicated
   archive manager.
@@ -321,8 +321,9 @@ Stated so the map does not imply ambitions that do not exist:
   only, by native rebuild, and only for the shapes `lx` itself produces.
 - **Not a package-manager replacement.** `dpkg`/`apt`/`rpm`/`pacman`/
   `dnf`/`zypper`/`apk`/`xbps` are consumed and orchestrated.
-- **Not chasing Windows/macOS output.** `msix` and `osxpkg` are left to
-  `nfpm` and `fpm`.
+- **Windows/macOS output is signed in-process** (`msix` p7x, xar
+  `Signature`) from a PEM key + certificate. Notarization (Apple) is a
+  separate service, and no `Bom` is generated for `.pkg`.
 
 ---
 

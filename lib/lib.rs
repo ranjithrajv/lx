@@ -44,6 +44,7 @@
 // using `lx_lib::` qualified paths unchanged after the merge.
 extern crate self as lx_lib;
 
+pub mod api;
 pub mod apkarchive;
 pub mod archarchive;
 pub mod bindep;
@@ -83,7 +84,10 @@ pub mod list;
 pub mod lock;
 pub mod manifest;
 pub mod migrate;
+pub mod msixarchive;
+pub mod nfpm;
 pub mod optimize;
+pub mod osxpkgarchive;
 pub mod pkgmeta;
 pub mod pkgname;
 pub mod plugins;

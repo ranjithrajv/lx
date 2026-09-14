@@ -139,9 +139,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup guide, hook
 reference, and project layout.
 
 Performance comparisons against the tools `lx` replaces (dpkg-deb,
-dpkg-shlibdeps, dpkg-scanpackages, fpm, nfpm) are recorded in
-[`benchmarking/`](benchmarking/): run `./benchmarking/run.sh` to reproduce
-and log a new result.
+dpkg-shlibdeps, dpkg-scanpackages, fpm, nfpm, …) live in
+[`benchmarking/`](benchmarking/): the
+[benchmark catalogue](benchmarking/benchmarks.md) lists what to record,
+`./benchmarking/run.sh` reproduces the automated rows, and
+[`results.md`](benchmarking/results.md) keeps the records.
 
 [`docs/decisions/`](docs/decisions/README.md) records the non-obvious calls
 made while porting from the bash action (library choices, config-format

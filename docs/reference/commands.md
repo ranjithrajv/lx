@@ -6,12 +6,12 @@ groups are covered below, plus the flags worth calling out.
 
 | Command | Purpose |
 |---|---|
-| `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk), `--format all` builds every format, and `--format deb,rpm` builds each listed |
+| `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk/msix/osxpkg), `--format all` builds every format, and `--format deb,rpm` builds each listed |
 | `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format. `--to` defaults to the host's native format |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
-| `lx init` | Interactively generate a `package.yaml`; `--from <owner/repo>` scaffolds one non-interactively by auto-discovering release assets (`package_format` pre-filled from the host) |
+| `lx init` | Interactively generate a `package.yaml`; `--from <owner/repo>` scaffolds one non-interactively by auto-discovering release assets (`package_format` pre-filled from the host); `--from-aur <pkg>` imports an AUR PKGBUILD; `--from-nfpm <nfpm.yaml>` converts an nfpm config |
 | `lx install <package>` | Fetch and install a pre-built native package (deb/rpm/arch, resolved from the host) from the `latest-debs` GitHub org. `--reinstall` re-installs (an lx-managed package's recorded version) |
 | `lx update [package]` | Check installed packages against their latest release, no install |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |

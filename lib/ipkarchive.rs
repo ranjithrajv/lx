@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use crate::debarchive::ControlMember;
+use crate::filemeta::FileMetaMap;
 
 /// Build an `.ipk` from a staged filesystem tree and a rendered control
 /// file. `control` is the already-rendered OpenWrt control content.
@@ -33,8 +34,22 @@ pub fn build_with_scripts(
     mtime: i64,
     ipk_path: &Path,
 ) -> Result<()> {
-    crate::debarchive::build_full(root, control, mtime, ipk_path, "gzip", extras, None)
-        .with_context(|| format!("failed to build {}", ipk_path.display()))
+    build_with_scripts_with_meta(root, control, extras, mtime, ipk_path, &FileMetaMap::new())
+}
+
+/// [`build_with_scripts`] with per-file `contents[].file_info` overrides.
+pub fn build_with_scripts_with_meta(
+    root: &Path,
+    control: &[u8],
+    extras: &[ControlMember],
+    mtime: i64,
+    ipk_path: &Path,
+    meta: &FileMetaMap,
+) -> Result<()> {
+    crate::debarchive::build_full_with_meta(
+        root, control, mtime, ipk_path, "gzip", extras, None, meta,
+    )
+    .with_context(|| format!("failed to build {}", ipk_path.display()))
 }
 
 /// Extract an `.ipk`'s `data.tar.gz` payload into `dest` (the inverse of

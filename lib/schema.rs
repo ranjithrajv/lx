@@ -328,16 +328,44 @@ pub fn generate_schema() -> serde_json::Value {
                                 "config|noreplace",
                                 "config|missingok",
                                 "tree",
+                                "config|tree",
+                                "config|noreplace|tree",
+                                "config|missingok|tree",
                                 "symlink",
                                 "dir",
-                                "ghost"
+                                "ghost",
+                                "doc",
+                                "license",
+                                "licence",
+                                "readme"
                             ],
-                            "description": "Entry type (default file); config* also registers a deb conffile; ghost is RPM-only"
+                            "description": "Entry type (default file); config* registers a conffile/config; config|*|tree marks every file in a tree; doc/license/readme are RPM classifications; ghost is RPM-only"
                         },
                         "packager": {
                             "type": "string",
-                            "enum": ["deb", "rpm", "arch"],
+                            "enum": ["deb", "rpm", "arch", "apk", "ipk", "msix", "osxpkg"],
                             "description": "If set, only apply this entry when building that format (nfpm parity)"
+                        },
+                        "file_info": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "description": "Per-file metadata override (nfpm parity)",
+                            "properties": {
+                                "owner": {"type": "string", "description": "Owning user name (archive header)"},
+                                "group": {"type": "string", "description": "Owning group name (archive header)"},
+                                "mode": {"type": "string", "description": "Permission bits as an octal string, e.g. 0o644"},
+                                "mtime": {"type": "string", "description": "RFC 3339 timestamp or Unix epoch seconds"},
+                                "lang": {"type": "string", "description": "RPM %lang(<lang>) tag; ignored by other formats"}
+                            }
+                        },
+                        "expand": {
+                            "type": "boolean",
+                            "description": "Expand $VAR/${VAR} in src/dst at staging time (nfpm parity)"
+                        },
+                        "disown_subtree": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "For type tree: directories matching these globs are not owned by the package (nfpm parity)"
                         }
                     }
                 }
@@ -346,12 +374,15 @@ pub fn generate_schema() -> serde_json::Value {
                 "type": "object",
                 "description": "Per-format relation-field overrides; an overridden field replaces the top-level value (empty string clears it)",
                 "additionalProperties": false,
-                "propertyNames": {"enum": ["deb", "rpm", "arch"]},
-                "additionalProperties": false,
+                "propertyNames": {"enum": ["deb", "rpm", "arch", "apk", "ipk", "msix", "osxpkg"]},
                 "properties": {
                     "deb": {"$ref": "#/$defs/formatOverrides"},
                     "rpm": {"$ref": "#/$defs/formatOverrides"},
-                    "arch": {"$ref": "#/$defs/formatOverrides"}
+                    "arch": {"$ref": "#/$defs/formatOverrides"},
+                    "apk": {"$ref": "#/$defs/formatOverrides"},
+                    "ipk": {"$ref": "#/$defs/formatOverrides"},
+                    "msix": {"$ref": "#/$defs/formatOverrides"},
+                    "osxpkg": {"$ref": "#/$defs/formatOverrides"}
                 }
             },
             "scripts": {
@@ -396,6 +427,117 @@ pub fn generate_schema() -> serde_json::Value {
                         "type": "array",
                         "items": {"type": "string"},
                         "description": "Triggers after uninstall (%triggerpostun). Each entry is 'package: script_path'."
+                    },
+                    "compression": {"type": "string", "description": "Payload compression: gzip|xz|lzma|zstd|none"},
+                    "auto_provides": {"type": "boolean", "description": "Auto-generate Provides from payload sonames"},
+                    "auto_requires": {"type": "boolean", "description": "Auto-generate Requires from payload sonames"},
+                    "defines": {"type": "array", "items": {"type": "string"}, "description": "rpmbuild macros (accepted; reported, not applied in-process)"},
+                    "group": {"type": "string", "description": "RPM Group: header (nfpm rpm.group)"},
+                    "buildhost": {"type": "string", "description": "RPM BuildHost: header (nfpm rpm.buildhost)"},
+                    "prefixes": {"type": "array", "items": {"type": "string"}, "description": "Relocatable Prefixes; accepted for nfpm parity, not applied by the in-process rpm crate"},
+                    "requires_post": {"type": "array", "items": {"type": "string"}, "description": "Requires(post): accepted for nfpm parity, not applied by the rpm crate"}
+                }
+            },
+            "ipk": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "OpenWrt/opkg-specific configuration (nfpm's `ipk:` block). Ignored by other formats.",
+                "properties": {
+                    "alternatives": {
+                        "type": "array",
+                        "description": "opkg Alternatives entries (priority:link_name:target)",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "priority": {"type": "integer"},
+                                "link_name": {"type": "string"},
+                                "target": {"type": "string"}
+                            }
+                        }
+                    },
+                    "tags": {"type": "array", "items": {"type": "string"}},
+                    "abi_version": {"type": "string"},
+                    "auto_installed": {"type": "boolean"},
+                    "essential": {"type": "boolean"}
+                }
+            },
+            "msix": {
+                "type": "object",
+                "additionalProperties": false,
+                "description": "MSIX (Windows) configuration. Ignored by the Linux formats. Signing uses signature.key_file (PKCS#8 PEM) + signature.cert_file (PEM).",
+                "properties": {
+                    "arch": {"type": "string", "description": "MSIX architecture (x64/x86/arm64/neutral); defaults from the target arch"},
+                    "publisher": {"type": "string", "description": "Publisher identity, e.g. 'CN=Acme, O=Acme, C=US' (required)"},
+                    "identity": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {"resource_id": {"type": "string"}}
+                    },
+                    "properties": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "display_name": {"type": "string"},
+                            "publisher_display_name": {"type": "string"},
+                            "logo": {"type": "string"}
+                        }
+                    },
+                    "applications": {
+                        "type": "array",
+                        "description": "Applications in the package (required)",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "properties": {
+                                "id": {"type": "string"},
+                                "executable": {"type": "string"},
+                                "entry_point": {"type": "string"},
+                                "visual_elements": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "display_name": {"type": "string"},
+                                        "description": {"type": "string"},
+                                        "background_color": {"type": "string"},
+                                        "square150x150_logo": {"type": "string"},
+                                        "square44x44_logo": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "dependencies": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "target_device_families": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": false,
+                                    "properties": {
+                                        "name": {"type": "string"},
+                                        "min_version": {"type": "string"},
+                                        "max_version_tested": {"type": "string"}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "capabilities": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "capabilities": {"type": "array", "items": {"type": "string"}},
+                            "device_capabilities": {"type": "array", "items": {"type": "string"}},
+                            "restricted": {"type": "array", "items": {"type": "string"}}
+                        }
+                    },
+                    "signature": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {"pfx_file": {"type": "string", "description": "PFX certificate; not yet supported (build fails if set)"}}
                     }
                 }
             },
@@ -461,6 +603,10 @@ pub fn generate_schema() -> serde_json::Value {
                         "type": "string",
                         "enum": ["origin", "maint", "archive"],
                         "description": "Debsign role → ar member _gpg{type} (default origin). Ignored unless method is debsign."
+                    },
+                    "cert_file": {
+                        "type": "string",
+                        "description": "X.509 certificate (PEM) for msix/osxpkg signing (env-expandable)"
                     }
                 }
             },
@@ -488,9 +634,13 @@ pub fn generate_schema() -> serde_json::Value {
                 "type": "string",
                 "description": "Debian epoch for version resets"
             },
+            "mtime": {
+                "type": "string",
+                "description": "Reproducible build timestamp override (RFC 3339 or epoch seconds); nfpm's mtime"
+            },
             "package_format": {
                 "type": "string",
-                "enum": ["deb", "rpm", "arch", "apk", "ipk"],
+                "enum": ["deb", "rpm", "arch", "apk", "ipk", "msix", "osxpkg"],
                 "description": "Package format plugin (default: deb)"
             },
             "source": {

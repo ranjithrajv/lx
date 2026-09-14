@@ -27,6 +27,8 @@
 pub mod apk_rsa;
 pub mod deb_debsign;
 pub mod gpg_detach;
+pub mod msix_p7x;
+pub mod pkg_xar;
 pub mod rpm_pgp;
 
 use anyhow::Result;
@@ -41,6 +43,9 @@ pub struct SignContext<'a> {
     pub passphrase: Option<&'a str>,
     /// debsign role (`origin` / `maint` / `archive`).
     pub sign_type: &'a str,
+    /// X.509 certificate path for signers that embed it (`osxpkg`); empty
+    /// otherwise.
+    pub cert_file: &'a str,
 }
 
 /// What a signer did (or that the packager already did it).
@@ -75,6 +80,8 @@ pub fn all_signers() -> Vec<Box<dyn Signer>> {
         Box::new(apk_rsa::ApkRsa),
         Box::new(rpm_pgp::RpmPgp),
         Box::new(deb_debsign::DebDebsign),
+        Box::new(msix_p7x::MsixP7x),
+        Box::new(pkg_xar::PkgXar),
         Box::new(gpg_detach::GpgDetach),
     ]
 }

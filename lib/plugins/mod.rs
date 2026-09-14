@@ -19,6 +19,8 @@ pub mod deb;
 pub mod depmap;
 pub mod forge;
 pub mod ipk;
+pub mod msix;
+pub mod osxpkg;
 pub mod package_index;
 pub mod plugin;
 pub mod registry;
@@ -147,6 +149,8 @@ pub fn all_packagers() -> Vec<Box<dyn Packager>> {
         Box::new(arch::ArchPackager),
         Box::new(apk::ApkPackager),
         Box::new(ipk::IpkPackager),
+        Box::new(msix::MsixPackager),
+        Box::new(osxpkg::OsxPkgPackager),
     ]
 }
 

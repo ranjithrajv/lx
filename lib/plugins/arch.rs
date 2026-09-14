@@ -51,7 +51,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
 
     // Layer the `contents:` overlay. Config-typed entries become the
     // pacman `backup` list (preserved on upgrade/removal).
-    let configs = super::apply_contents_with_config(cfg, ctx.staging_root, "arch")?;
+    let (configs, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "arch")?;
 
     let version = ctx.debian_version.to_string();
     let release = super::format_release(ctx.build_version, &job.dist);
@@ -166,6 +166,7 @@ pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
         ctx.mtime,
         &dest,
         install_script.as_deref(),
+        &file_meta,
     )
     .with_context(|| format!("failed to build {}", dest.display()))?;
 

@@ -42,7 +42,7 @@ impl Packager for ApkPackager {
         let job = ctx.job;
 
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        let _conffiles = super::apply_contents(cfg, ctx.staging_root, "apk")?;
+        let (_conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "apk")?;
 
         let version = ctx.debian_version.to_string();
         let revision = if ctx.build_version.trim().is_empty() {
@@ -123,7 +123,7 @@ impl Packager for ApkPackager {
         } else {
             None
         };
-        lx_lib::apkarchive::build_full(
+        lx_lib::apkarchive::build_full_with_meta(
             ctx.staging_root,
             &meta,
             arch,
@@ -131,6 +131,7 @@ impl Packager for ApkPackager {
             &dest,
             signer,
             &control_files,
+            &file_meta,
         )
         .with_context(|| format!("failed to build {}", dest.display()))?;
 

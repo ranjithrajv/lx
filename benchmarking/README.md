@@ -8,25 +8,27 @@ so a number here always answers a real substitution question: *if I swap
 tool X for `lx`, what does the swap cost in wall-clock time?*
 
 - [`run.sh`](run.sh) — reproduces the measurements on the current machine.
+- [`benchmarks.md`](benchmarks.md) — the full catalogue of benchmarks to
+  record, with levels and status.
 - [`results.md`](results.md) — the record log. One dated section per run.
 
 ## What gets measured
 
-`lx` replaces different tools at different levels (see the replacement doc
-for the precise definitions). Only operations with an **offline, local
-equivalent** are benchmarked automatically; the rest are listed as
-manual/future work so the scope is explicit rather than implied.
+The full backlog — every `lx` job worth timing against the tool it replaces,
+grouped by replacement level, with a status per row — is the
+[**benchmark catalogue**](benchmarks.md). This file is the harness; the
+catalogue is the list.
+
+Only operations with an **offline, local equivalent** are automated. Three
+rows run today:
 
 | # | `lx` operation | Compared against | Level | Status |
 |---|---|---|---|---|
 | 1 | `lx build --from-dir` (pack a `.deb`) | `dpkg-deb --build`; `fpm -s dir -t deb`; `nfpm pkg -p deb` | functional / feature parity | automated |
 | 2 | `lx deps resolve` | `dpkg-shlibdeps` | **drop-in** (command) | automated |
 | 3 | `lx repo` (apt index) | `dpkg-scanpackages`; `apt-ftparchive packages` | functional | automated |
-| 4 | `lx build --source` (source package) | `dpkg-source -b` | functional | manual — needs a forge fetch / a prepared `debian/` tree |
-| 5 | `lx convert` (deb → rpm/arch) | `fpm -s deb -t rpm` | functional | manual — needs rpm/arch host tooling |
-| 6 | `lx build` via `action.yml` | `debian-multiarch-builder` action | **drop-in** (interface) | manual — measured end-to-end in CI, not on a laptop |
-| 7 | `lx repo --format apk` (apk index + sign) | `abuild-sign` / `openssl` | functional | manual — needs Alpine tooling |
 
+Everything else in the catalogue is network-, host-tooling-, or CI-gated.
 Automated rows run with no network access, so results are reproducible and
 not dominated by release-download latency.
 
@@ -98,7 +100,9 @@ self-describing.
 
 ## Adding a benchmark
 
-1. Add the pair to the table above with its level and status.
+1. Pick a row from the [catalogue](benchmarks.md) and set its status to
+   `automated`.
 2. Add a `bench_*` function to [`run.sh`](run.sh) that stages its input,
    times each available tool with `measure`, and emits rows via `run_one`.
-3. Call it from `main`, run it, and record the output in `results.md`.
+3. Call it from `main`, run it, record the output in `results.md`, and set
+   the catalogue row's status to `recorded`.

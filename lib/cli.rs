@@ -42,7 +42,8 @@ pub enum Commands {
     /// Validate a package.yaml config and check release availability (no build)
     Validate(crate::validate::ValidateArgs),
     /// Interactively generate a package.yaml config (or scaffold from a
-    /// forge repo with `--from`, a template, or an AUR PKGBUILD)
+    /// forge repo with `--from`, a template, an AUR PKGBUILD, or an
+    /// nfpm.yaml with `--from-nfpm`)
     Init(crate::wizard::InitArgs),
     /// Fetch and install a pre-built native package (deb/rpm/arch).
     /// `--reinstall` re-installs (the recorded version for lx-managed packages)
