@@ -37,6 +37,10 @@ impl Packager for ApkPackager {
         true
     }
 
+    fn artifact_glob(&self, package: &str) -> String {
+        format!("{package}-*.apk")
+    }
+
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
         let cfg = ctx.cfg;
         let job = ctx.job;

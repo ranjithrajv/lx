@@ -59,15 +59,11 @@ impl Default for SummaryInputs {
 pub fn write(out_dir: &Path, attempted: usize, inputs: &SummaryInputs) -> Result<()> {
     let mut packages = Vec::new();
     let mut total_size = 0u64;
-    let pattern = match inputs.package_format.as_str() {
-        "rpm" => format!("{}-*.rpm", inputs.package),
-        "arch" => format!("{}-*.pkg.tar.*", inputs.package),
-        "apk" => format!("{}-*.apk", inputs.package),
-        "ipk" => format!("{}_*.ipk", inputs.package),
-        "msix" => format!("{}_*.msix", inputs.package),
-        "osxpkg" => format!("{}-*.pkg", inputs.package),
-        _ => format!("{}_*.deb", inputs.package),
-    };
+    // The filename convention lives with the packager plugin, so a new
+    // format carries its own glob instead of adding an arm here.
+    let pattern = crate::plugins::get_packager(&inputs.package_format)
+        .map(|p| p.artifact_glob(&inputs.package))
+        .unwrap_or_else(|| format!("{}_*.deb", inputs.package));
     let matcher = glob::Pattern::new(&pattern)?;
     let mut entries: Vec<_> = std::fs::read_dir(out_dir)?
         .filter_map(|e| e.ok())

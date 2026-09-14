@@ -1128,21 +1128,22 @@ impl PackageConfig {
                 bail!("architectures list must not contain empty entries");
             }
         }
-        if !self.package_format.trim().is_empty() {
-            match self.package_format.trim().to_ascii_lowercase().as_str() {
-                "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg" => {}
-                other => bail!(
-                    "unsupported package_format '{other}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
-                ),
-            }
+        if !self.package_format.trim().is_empty()
+            && crate::plugins::get_packager(self.package_format.trim()).is_none()
+        {
+            bail!(
+                "unsupported package_format '{}' (expected one of: {})",
+                self.package_format,
+                crate::plugins::packager_names().join(", ")
+            );
         }
         if !self.source.trim().is_empty() {
-            match self.source.trim().to_ascii_lowercase().as_str() {
-                "github" | "gitlab" | "gitea" | "forgejo" | "bitbucket" | "gerrit" | "gitee"
-                | "sourceforge" | "custom" => {}
-                other => bail!(
-                    "unsupported source '{other}' (expected github, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge, or custom)"
-                ),
+            if crate::plugins::forge::get_forge_source(self.source.trim()).is_none() {
+                bail!(
+                    "unsupported source '{}' (expected one of: {})",
+                    self.source,
+                    crate::plugins::forge::forge_source_names().join(", ")
+                );
             }
             if self.source.trim().eq_ignore_ascii_case("custom")
                 && self.upstream_url.trim().is_empty()
@@ -1171,13 +1172,10 @@ impl PackageConfig {
             }
         }
         for key in self.overrides.keys() {
-            let k = key.trim().to_ascii_lowercase();
-            if !matches!(
-                k.as_str(),
-                "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg"
-            ) {
+            if crate::plugins::get_packager(key.trim()).is_none() {
                 bail!(
-                    "unsupported overrides format '{key}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
+                    "unsupported overrides format '{key}' (expected one of: {})",
+                    crate::plugins::packager_names().join(", ")
                 );
             }
         }
@@ -1222,13 +1220,14 @@ impl PackageConfig {
                     "unsupported contents type '{other}' (expected file, config, config|noreplace, config|missingok, config|tree, config|noreplace|tree, config|missingok|tree, tree, symlink, dir, ghost, doc, license, or readme)"
                 ),
             }
-            if !entry.packager.trim().is_empty() {
-                match entry.packager.trim().to_ascii_lowercase().as_str() {
-                    "deb" | "rpm" | "arch" | "apk" | "ipk" | "msix" | "osxpkg" | "pkg" => {}
-                    other => bail!(
-                        "unsupported contents packager '{other}' (expected deb, rpm, arch, apk, ipk, msix, or osxpkg)"
-                    ),
-                }
+            if !entry.packager.trim().is_empty()
+                && crate::plugins::get_packager(entry.packager.trim()).is_none()
+            {
+                bail!(
+                    "unsupported contents packager '{}' (expected one of: {})",
+                    entry.packager,
+                    crate::plugins::packager_names().join(", ")
+                );
             }
             // Fail early on malformed per-file metadata rather than mid-build.
             entry.file_info.parsed_mode()?;
@@ -1271,11 +1270,15 @@ impl PackageConfig {
             other => bail!("unsupported build_mode '{other}' (expected binary or source)"),
         }
         if self.is_source_mode() {
-            match self.build_system.trim().to_ascii_lowercase().as_str() {
-                "" | "cmake" | "cargo" | "go" | "meson" | "autotools" | "make" | "custom" => {}
-                other => bail!(
-                    "unsupported build_system '{other}' (expected one of: cmake, cargo, go, meson, autotools, make, custom)"
-                ),
+            if !self.build_system.trim().is_empty()
+                && crate::plugins::build_system::get_build_system(self.build_system.trim())
+                    .is_none()
+            {
+                bail!(
+                    "unsupported build_system '{}' (expected one of: {})",
+                    self.build_system,
+                    crate::plugins::build_system::build_system_names().join(", ")
+                );
             }
             if self.effective_build_system() == "custom" && self.install_commands.is_empty() {
                 bail!("build_system: custom requires install_commands (install the FHS tree into $DESTDIR)");
@@ -1509,15 +1512,9 @@ impl PackageConfig {
             out.extend(self.ubuntu_distributions.clone());
             return out;
         }
-        let defaults: &[&str] = match format.to_ascii_lowercase().as_str() {
-            "rpm" => lx_lib::constants::DEFAULT_RPM_DISTRIBUTIONS,
-            "arch" => lx_lib::constants::DEFAULT_ARCH_DISTRIBUTIONS,
-            "apk" => lx_lib::constants::DEFAULT_APK_DISTRIBUTIONS,
-            "ipk" => lx_lib::constants::DEFAULT_IPK_DISTRIBUTIONS,
-            "msix" => lx_lib::constants::DEFAULT_MSIX_DISTRIBUTIONS,
-            "osxpkg" => lx_lib::constants::DEFAULT_OSX_DISTRIBUTIONS,
-            _ => lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS,
-        };
+        let defaults: &[&str] = crate::plugins::get_packager(format)
+            .map(|p| p.default_distributions())
+            .unwrap_or(lx_lib::constants::DEFAULT_DEBIAN_DISTRIBUTIONS);
         defaults.iter().map(|s| s.to_string()).collect()
     }
 

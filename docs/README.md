@@ -37,6 +37,8 @@ pick a section below.
   rest of the ecosystem, in both directions
 - [Composability](evaluation/composability.md) — independent parts that
   select, combine, and extend
+- [Composition over inheritance](evaluation/composition-over-inheritance.md) —
+  composed behaviour vs. a widening base type or repeated `match`
 
 ## Outreach
 

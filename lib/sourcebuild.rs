@@ -69,8 +69,21 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             .as_deref()
             .unwrap_or(&cfg.effective_package_format()),
     );
-    if !matches!(format.as_str(), "deb" | "rpm" | "arch") {
-        bail!("build_mode: source supports deb, rpm, and arch (got '{format}')");
+    // Resolve the packager once; source builds need a format that can wrap a
+    // tree the build system already staged. Which formats those are comes
+    // from the plugins themselves, not a central list.
+    let packager = crate::plugins::get_packager(&format)
+        .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{format}'"))?;
+    if !packager.supports_source_build() {
+        let supported: Vec<&str> = crate::plugins::all_packagers()
+            .iter()
+            .filter(|p| p.supports_source_build())
+            .map(|p| p.name())
+            .collect();
+        bail!(
+            "build_mode: source supports {} (got '{format}')",
+            supported.join(", ")
+        );
     }
 
     // Suites: configured distributions (or --distributions) minus skips,
@@ -218,35 +231,32 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             sign_method: &sign_method,
             detected_deps: Vec::new(),
         };
-        let pkg_tmp = match format.as_str() {
-            "rpm" => crate::plugins::rpm::archive_staged_tree(&ctx),
-            "arch" => crate::plugins::arch::archive_staged_tree(&ctx),
-            "deb" => crate::plugins::deb::archive_staged_tree(&ctx),
-            other => bail!("source builds do not support '{other}' packages"),
-        }
-        .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
+        let pkg_tmp = packager
+            .archive_staged_tree(&ctx)
+            .with_context(|| format!("wrapping {dist}/{host} ({format})"))?;
         let dest = args.output.join(
             pkg_tmp
                 .file_name()
                 .ok_or_else(|| anyhow::anyhow!("built package has no filename"))?,
         );
         std::fs::copy(&pkg_tmp, &dest)?;
-        // rpm embeds its PGP signature inside the build; deb/arch sign a
-        // detached sibling post-build. `debsign` is deb-only and treated as
-        // detach for arch.
-        let detach_sign = match format.as_str() {
-            "deb" => sign_method == "detach",
-            "arch" => true,
-            _ => false,
-        };
-        if detach_sign {
-            if let Some(key) = &sign_key {
-                let req = lx_lib::sign::SignRequest {
-                    key_file: key,
-                    key_id: &sign_key_id,
-                    passphrase: sign_passphrase.as_deref(),
-                };
-                lx_lib::sign::gpg_detach_sign(&dest, &req)?;
+        // Post-build signing goes through the `Signer` plugin for
+        // `(format, method)`: embedded backends (`rpm-pgp`, `deb-debsign`)
+        // already signed while the tree was archived, detached backends
+        // (`gpg-detach`) write a sibling signature now.
+        if let Some(key) = &sign_key {
+            let sign_type = cfg.effective_sign_type();
+            let sign_ctx = crate::plugins::signer::SignContext {
+                key_file: key,
+                key_id: &sign_key_id,
+                passphrase: sign_passphrase.as_deref(),
+                sign_type: &sign_type,
+                cert_file: &cfg.signature.cert_file,
+            };
+            if let crate::plugins::signer::PostBuild::Detached { path, .. } =
+                crate::plugins::signer::apply_post_build(&format, &sign_method, &dest, &sign_ctx)?
+            {
+                println!("  ✓ signed {} -> {}", dest.display(), path.display());
             }
         }
         println!("  ✓ built {} ({dist})", dest.display());
@@ -326,11 +336,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
         published_at: None,
         license: None,
     };
-    let source_result = match format.as_str() {
-        "rpm" => crate::source::generate_rpm(&args.output, &pkg),
-        "arch" => crate::source::generate_arch(&args.output, &pkg),
-        _ => crate::source::generate(&args.output, &pkg),
-    };
+    let source_result = packager.generate_source_package(&args.output, &pkg);
     if let Err(e) = source_result {
         eprintln!("⚠ source package generation failed (binaries stand on their own): {e:#}");
     }

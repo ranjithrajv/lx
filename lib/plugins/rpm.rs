@@ -7,7 +7,7 @@
 //! (ED AB EE DB magic) instead of an ar+control+data archive.
 
 use anyhow::{Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{BuildContext, Packager};
 use crate::plugins::plugin::plugin_identity;
@@ -37,7 +37,23 @@ impl Packager for RpmPackager {
         // Stage install tree under ctx.staging_root (same layout as deb),
         // then archive it as an rpm.
         super::stage_install_tree(ctx.cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        archive_staged_tree(ctx)
+        self.archive_staged_tree(ctx)
+    }
+
+    fn artifact_glob(&self, package: &str) -> String {
+        format!("{package}-*.rpm")
+    }
+
+    fn supports_source_build(&self) -> bool {
+        true
+    }
+
+    fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf> {
+        build_archive(ctx)
+    }
+
+    fn generate_source_package(&self, out_dir: &Path, pkg: &crate::source::Pkg) -> Result<()> {
+        crate::source::generate_rpm(out_dir, pkg)
     }
 }
 
@@ -47,7 +63,7 @@ impl Packager for RpmPackager {
 /// header, and writes the RPM. Source-mode builds populate the staging root
 /// from a `DESTDIR` install tree instead of `stage_install_tree` and reuse
 /// this directly.
-pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
+fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let cfg = ctx.cfg;
     let job = ctx.job;
 

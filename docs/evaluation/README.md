@@ -11,6 +11,7 @@ marketing pages: a criterion `lx` fails is the most useful thing in them.
 |---|---|
 | [Interoperability](interoperability.md) | Can `lx` exchange artifacts, metadata, and control with the rest of the Linux packaging ecosystem — in both directions? |
 | [Composability](composability.md) | Can `lx`'s capabilities be selected, combined, and reused — by operators, and by people adding a plugin? |
+| [Composition over inheritance](composition-over-inheritance.md) | Is behaviour built from small composed parts, or from a widening base type / repeated `match`? |
 
 ## Method
 

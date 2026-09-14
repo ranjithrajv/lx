@@ -949,14 +949,9 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
             published_at: release.published_at,
             license: license.clone(),
         };
-        match effective_format.as_str() {
-            "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
-            "arch" => crate::source::generate_arch(&args.output, &pkg)?,
-            "apk" | "ipk" | "msix" | "osxpkg" => bail!(
-                "--source is not supported for '{effective_format}' packages (no source-package format)"
-            ),
-            _ => crate::source::generate(&args.output, &pkg)?,
-        }
+        crate::plugins::get_packager(&effective_format)
+            .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{effective_format}'"))?
+            .generate_source_package(&args.output, &pkg)?;
     }
 
     // Feature 1: Checksum sidecars (.sha256, .sha512) for integrity verification.
@@ -1261,14 +1256,9 @@ fn run_local(
                 })
             },
         };
-        match effective_format {
-            "rpm" => crate::source::generate_rpm(&args.output, &pkg)?,
-            "arch" => crate::source::generate_arch(&args.output, &pkg)?,
-            "apk" | "ipk" | "msix" | "osxpkg" => bail!(
-                "--source is not supported for '{effective_format}' packages (no source-package format)"
-            ),
-            _ => crate::source::generate(&args.output, &pkg)?,
-        }
+        crate::plugins::get_packager(effective_format)
+            .ok_or_else(|| anyhow::anyhow!("unsupported package_format '{effective_format}'"))?
+            .generate_source_package(&args.output, &pkg)?;
     }
     Ok(())
 }
@@ -2016,28 +2006,23 @@ fn build_one(
             sign_type: &sign_type,
             cert_file: &cfg.signature.cert_file,
         };
-        match crate::plugins::signer::signer_for(&format, &sign_method) {
-            Some(signer) if signer.embedded() => {
+        match crate::plugins::signer::apply_post_build(&format, &sign_method, &final_path, &ctx)? {
+            crate::plugins::signer::PostBuild::Embedded(name) => {
                 println!(
                     "    ✓ signed {} ({}: embedded by the packager)",
                     final_path.display(),
-                    signer.name()
+                    name
                 );
             }
-            Some(signer) => match signer.sign(&final_path, &ctx)? {
-                crate::plugins::signer::SignOutcome::Detached(sig) => {
-                    println!(
-                        "    ✓ signed {} -> {} ({})",
-                        final_path.display(),
-                        sig.display(),
-                        signer.name()
-                    );
-                }
-                crate::plugins::signer::SignOutcome::Embedded => {
-                    println!("    ✓ signed {} ({})", final_path.display(), signer.name());
-                }
-            },
-            None => {
+            crate::plugins::signer::PostBuild::Detached { signer, path } => {
+                println!(
+                    "    ✓ signed {} -> {} ({})",
+                    final_path.display(),
+                    path.display(),
+                    signer
+                );
+            }
+            crate::plugins::signer::PostBuild::Unsupported => {
                 eprintln!(
                     "    ⚠ no signer supports format '{format}' method '{sign_method}'; artifact left unsigned"
                 );

@@ -33,6 +33,10 @@ impl Packager for OsxPkgPackager {
         true
     }
 
+    fn artifact_glob(&self, package: &str) -> String {
+        format!("{package}-*.pkg")
+    }
+
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf> {
         let cfg = ctx.cfg;
         let job = ctx.job;

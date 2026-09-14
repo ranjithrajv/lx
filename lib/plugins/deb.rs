@@ -40,17 +40,29 @@ impl Packager for DebPackager {
         // Stage install tree under ctx.staging_root, then layer the
         // `contents:` overlay (completions, units, desktop files, ...).
         super::stage_install_tree(cfg, ctx.binary_dir, ctx.staging_root, ctx.mtime)?;
-        archive_staged_tree(ctx)
+        self.archive_staged_tree(ctx)
+    }
+
+    fn supports_source_build(&self) -> bool {
+        true
+    }
+
+    fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf> {
+        build_archive(ctx)
+    }
+
+    fn generate_source_package(&self, out_dir: &Path, pkg: &crate::source::Pkg) -> Result<()> {
+        crate::source::generate(out_dir, pkg)
     }
 }
 
 /// Archive an already-populated `staging_root` into a `.deb`.
 ///
-/// Shared tail of [`DebPlugin::build`]: layers `contents:`, renders
+/// Shared tail of [`DebPackager::build`]: layers `contents:`, renders
 /// control/changelog/copyright, and writes the ar container. Source-mode
 /// builds populate the staging root from a `DESTDIR` install tree instead
 /// of `stage_install_tree` and reuse this directly.
-pub(crate) fn archive_staged_tree(ctx: &BuildContext) -> Result<PathBuf> {
+fn build_archive(ctx: &BuildContext) -> Result<PathBuf> {
     let cfg = ctx.cfg;
     let job = ctx.job;
     let (conffiles, file_meta) = super::apply_contents_full(cfg, ctx.staging_root, "deb")?;

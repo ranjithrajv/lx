@@ -15,12 +15,35 @@
 
 ### Evaluation docs
 
-- New `docs/evaluation/` with an index and two evidence-based
+- New `docs/evaluation/` with an index and three evidence-based
   quality-attribute evaluations: `interoperability.md` (exchange with the
-  packaging ecosystem in both directions) and `composability.md` (the
-  plugin dimensions as selectable, combinable, extensible parts). Each
+  packaging ecosystem in both directions), `composability.md` (the
+  plugin dimensions as selectable, combinable, extensible parts), and
+  `composition-over-inheritance.md` (behaviour built from small composed
+  parts rather than a widening base type or repeated `match`). Each
   fixes its rubric, names the code and tests behind every verdict, and
   records the partial/unmet criteria.
+
+### Composition over inheritance: per-format dispatch onto the plugins
+
+- `Packager` gains provided methods so the source-build wrapper, the build
+  summary, and config validation no longer `match` on the format:
+  `supports_source_build` / `archive_staged_tree` / `generate_source_package`
+  (deb/rpm/arch override; other formats inherit a clear error) and
+  `artifact_glob` (default `{package}_*.{extension}`, overridden by
+  rpm/arch/apk/osxpkg).
+- `lib/sourcebuild.rs` and the two `--source` bodies in `lib/build.rs`
+  resolve the packager once and delegate; the detach-sign branch now goes
+  through the new `signer::apply_post_build`, shared with the binary-build
+  signing path.
+- `lib/summary.rs` asks the packager for its `artifact_glob`; `lib/config.rs`
+  validates `package_format`, `source`, `overrides:` keys, and
+  `contents[].packager` against the plugin registries, and
+  `effective_distributions_for` reads `Packager::default_distributions()`
+  instead of a central `DEFAULT_*` table.
+- Evaluation: `docs/evaluation/composition-over-inheritance.md` C8 moves from
+  partial to ✅, and new `tests/plugins.rs` cases pin the source-build
+  capability and artifact-glob conventions.
 
 ### Real-client and live-endpoint verification
 

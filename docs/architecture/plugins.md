@@ -106,20 +106,27 @@ The four core dimensions, each with its own trait and registry (the
 cross-cutting dimensions added later are in §12):
 
 ```rust
+// Identity — lib/plugins/plugin.rs; supertrait of every dimension
+pub trait Plugin: Send + Sync {
+    fn name(&self) -> &'static str;        // canonical id, e.g. "deb" | "github"
+    fn description(&self) -> &'static str; // help / error text
+}
+
 // Packager — lib/plugins/mod.rs
-pub trait Packager: Send + Sync {
-    fn name(&self) -> &'static str;              // "deb" | "rpm" | "arch"
+pub trait Packager: Plugin {
     fn file_extension(&self) -> &'static str;    // "deb" | "rpm" | "pkg.tar.zst"
-    fn description(&self) -> &'static str;
     fn default_distributions(&self) -> &'static [&'static str];
     fn arch_supported_for_dist(&self, arch: &str, dist: &str) -> bool;
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf>;
+    // Provided — a format overrides only what differs:
+    fn artifact_glob(&self, package: &str) -> String;             // summary filename pattern
+    fn supports_source_build(&self) -> bool;                      // default false
+    fn archive_staged_tree(&self, ctx: &BuildContext) -> Result<PathBuf>;
+    fn generate_source_package(&self, out: &Path, pkg: &Pkg) -> Result<()>;
 }
 
 // ForgeSource — lib/plugins/forge/mod.rs
-pub trait ForgeSource: Send + Sync {
-    fn name(&self) -> &'static str; // "github" | "gitlab" | …
-    fn description(&self) -> &'static str;
+pub trait ForgeSource: Plugin {
     fn parse_url(&self, url: &str) -> Option<String>;
     fn latest_release(&self, repo: &str, token: Option<&str>, cache_dir: Option<&Path>) -> Result<Release>;
     fn release_by_tag(&self, repo: &str, tag: &str, token: Option<&str>, cache_dir: Option<&Path>) -> Result<Release>;
@@ -131,18 +138,14 @@ pub trait ForgeSource: Send + Sync {
 }
 
 // BuildSystem — lib/plugins/build_system/mod.rs
-pub trait BuildSystem: Send + Sync {
-    fn name(&self) -> &'static str;              // "cmake" | "cargo" | "go" | "meson" | "autotools" | "make" | "custom"
-    fn description(&self) -> &'static str;
-    fn recognize(&self, src_dir: &Path) -> bool; // auto-detect from source tree
+pub trait BuildSystem: Plugin {
+    fn recognize(&self, src_dir: &Path) -> bool;  // default false; auto-detect from source tree
     fn build(&self, cfg: &PackageConfig, src_dir: &Path, workdir: &Path) -> Result<PathBuf>;
-    fn required_tools(&self) -> Vec<&'static str>; // checked before build
+    fn required_tools(&self) -> Vec<&'static str>; // default none; checked before build
 }
 
 // RegistrySource — lib/plugins/registry/mod.rs
-pub trait RegistrySource: Send + Sync {
-    fn name(&self) -> &'static str;              // "npm" | "python" | "gem" | "cargo" | …
-    fn description(&self) -> &'static str;
+pub trait RegistrySource: Plugin {
     fn required_tools(&self) -> Vec<&'static str>; // checked before fetch (e.g. ["npm"])
     fn fetch(&self, package: &str, version: &str, cfg: &PackageConfig) -> Result<RegistryPayload>;
 }
@@ -158,7 +161,7 @@ Each dimension has its own registry (`all_plugins()`, `all_forge_sources()`, `al
 
 ## 9. Wiring
 
-* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|gitlab|gitea|forgejo|bitbucket|gerrit|gitee|sourceforge|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host/gitee_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|meson|autotools|make|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem|cargo|go|hex|dart|nuget|maven|composer|cpan`.
+* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated **through the plugin registry** (the accepted values are `github|gitlab|gitea|forgejo|bitbucket|gerrit|gitee|sourceforge|custom`), `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host/gitee_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated through `all_build_systems()` (`cmake|cargo|go|meson|autotools|make|custom`). `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) (`npm|python|gem|cargo|go|hex|dart|nuget|maven|composer|cpan`) resolved by `get_registry_source` at build time.
 * `lib/build.rs` resolves `effective_source` → `get_forge_source`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `registry_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
 * `lib/sourcebuild.rs` resolves the build system plugin: explicit `build_system:` → `get_build_system()`, else `detect_build_system(src_dir)`, else error. Runs `prebuild_steps`, checks `required_tools()`, then calls `build_sys.build()`.
 * `lib/discovery.rs` (used by `lx init --from`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_forge_source`.
@@ -171,10 +174,9 @@ Each dimension has its own registry (`all_plugins()`, `all_forge_sources()`, `al
 **Package (e.g. `apk`):**
 
 1. `lib/<format>archive.rs` – `pub fn build(root, name, version, …) -> Result<()>` doing deterministic archive (see `archarchive.rs` for pattern).
-2. `lib/plugins/<format>.rs` – `impl Packager` (name, extension, defaults, `build` calls `stage_install_tree` + `lx_lib::<format>archive::build`).
-3. Register in `lib/plugins/mod.rs` + `lib/config.rs` match arm + `effective_distributions_for`.
-4. `lib/summary.rs` pattern arm + `lib/build.rs` source skip if needed.
-5. Add tests in `lib/plugins/mod.rs` (registry + `build_valid_archives` magic check).
+2. `lib/plugins/<format>.rs` – `impl Packager` + `plugin_identity!`; `build` calls `stage_install_tree` + `lx_lib::<format>archive::build`. Override `default_distributions`, and `artifact_glob` when the filename is not `{package}_*.{extension}` (rpm/arch/apk/osxpkg do).
+3. Register in `lib/plugins/mod.rs` `all_packagers()` — one line. Nothing in `lib/config.rs` or `lib/summary.rs`: format validation, default distributions, and the summary glob all resolve through the registry. Override `supports_source_build` + `archive_staged_tree` + `generate_source_package` only if the format can wrap a source-build tree.
+4. Add tests in `lib/plugins/mod.rs` (registry + `build_valid_archives` magic check).
 
 **Source (e.g. `myforge`):**
 
@@ -183,24 +185,22 @@ Each dimension has its own registry (`all_plugins()`, `all_forge_sources()`, `al
 3. Implement `lx_lib::checksum::RawGetter for Client`.
 4. `lib/plugins/forge/<provider>.rs` – `impl ForgeSource` delegating to `lib::<provider>::Client` (see `lib/plugins/forge/gitlab.rs`/`gitea.rs`).
 5. Register in `lib/plugins/forge/mod.rs` + `parse_url` for `https://{host}/owner/repo`.
-6. Add `source = "<provider>"` to `lib/config.rs` + `*_host: Option<String>` + `resolve_source_token` in `lib/build.rs` + `host` env handling.
+6. Add `*_host: Option<String>` to `lib/config.rs` + `resolve_source_token` in `lib/build.rs` + `host` env handling (the `source:` value itself validates through the registry).
 7. Tests: `lib/<provider>::tests` (release mapping, `parse_*_url`), `lib/plugins/forge/tests` (`parse_any_url` dispatch, registry gains the new name).
 
 **BuildSystem (e.g. `meson`):**
 
-1. `lib/plugins/build_system/<name>.rs` – `impl BuildSystem` with `name()`, `description()`, `recognize(src_dir)` (detect the project file, e.g. `meson.build`), `build(cfg, src_dir, workdir)` (compile + stage DESTDIR-style tree), and `required_tools()` (e.g. `["meson", "ninja"]`).
-2. Register in `lib/plugins/build_system/mod.rs` `all_build_systems()`.
-3. Add `build_system = "<name>"` to `lib/config.rs` validation.
-4. Tests: `lib/plugins/build_system/tests` (registry gains the new name, `recognize` detection, `build` produces expected tree).
+1. `lib/plugins/build_system/<name>.rs` – `impl BuildSystem` + `plugin_identity!`, with `recognize(src_dir)` (detect the project file, e.g. `meson.build`), `build(cfg, src_dir, workdir)` (compile + stage DESTDIR-style tree), and `required_tools()` (e.g. `["meson", "ninja"]`).
+2. Register in `lib/plugins/build_system/mod.rs` `all_build_systems()`. `lib/config.rs` validation resolves the name through this registry, so there is no list to edit.
+3. Tests: `lib/plugins/build_system/tests` (registry gains the new name, `recognize` detection, `build` produces expected tree).
 
 No core pipeline changes – `sourcebuild.rs` is build-system-agnostic; it only calls `build_sys.build()`.
 
 **RegistrySource (e.g. `cpan`):**
 
-1. `lib/plugins/registry/<name>.rs` – `impl RegistrySource` with `name()`, `description()`, `required_tools()` (e.g. `["cpan"]), and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
-2. Register in `lib/plugins/registry/mod.rs` `all_registry_sources()`.
-3. Add `registry_source = "<name>"` to `lib/config.rs` validation.
-4. Tests: `lib/plugins/registry/tests` (registry gains the new name, `fetch` produces expected payload).
+1. `lib/plugins/registry/<name>.rs` – `impl RegistrySource` + `plugin_identity!`, with `required_tools()` (e.g. `["cpan"]`) and `fetch(package, version, cfg)` which downloads/extracts the package and returns an `InputPayload { files_dir, resolved_version, description }`.
+2. Register in `lib/plugins/registry/mod.rs` `all_registry_sources()`. `lib/config.rs` does not hold a `registry_source` list.
+3. Tests: `lib/plugins/registry/tests` (registry gains the new name, `fetch` produces expected payload).
 
 No core pipeline changes – `build.rs` routes any non-empty `registry_source` through `run_local()` after `fetch()`.
 

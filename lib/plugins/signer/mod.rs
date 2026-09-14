@@ -96,6 +96,41 @@ pub fn signer_for(format: &str, method: &str) -> Option<Box<dyn Signer>> {
     PluginSet::new(all_signers()).take_first(|s| s.supports(format, method))
 }
 
+/// What [`apply_post_build`] did.
+pub enum PostBuild {
+    /// No registered backend supports `(format, method)`.
+    Unsupported,
+    /// The packager already embedded the signature while building.
+    Embedded(&'static str),
+    /// A detached signature was written next to the artifact.
+    Detached { signer: &'static str, path: PathBuf },
+}
+
+/// Apply post-build signing for `(format, method)`.
+///
+/// Embedded backends are a no-op — the packager signed the artifact while
+/// building it — and detached backends write a sibling signature. This is
+/// the one place either caller (`build` and the source-build wrapper) needs
+/// to know how a format is signed.
+pub fn apply_post_build(
+    format: &str,
+    method: &str,
+    artifact: &Path,
+    ctx: &SignContext,
+) -> Result<PostBuild> {
+    match signer_for(format, method) {
+        None => Ok(PostBuild::Unsupported),
+        Some(signer) if signer.embedded() => Ok(PostBuild::Embedded(signer.name())),
+        Some(signer) => match signer.sign(artifact, ctx)? {
+            SignOutcome::Detached(path) => Ok(PostBuild::Detached {
+                signer: signer.name(),
+                path,
+            }),
+            SignOutcome::Embedded => Ok(PostBuild::Embedded(signer.name())),
+        },
+    }
+}
+
 pub fn signer_names() -> Vec<&'static str> {
     PluginSet::new(all_signers()).names()
 }

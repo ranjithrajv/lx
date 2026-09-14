@@ -123,11 +123,8 @@ pub trait Packager: Plugin {
 
     /// Default distributions when `debian_distributions` is empty and the
     /// plugin is selected. For `deb` this is Debian suites; for `rpm` this
-    /// is RPM-based distros.
-    // Exercised by `default_distributions_differ_by_format` below; not yet
-    /// called by the live distribution-resolution path, which still reads
-    // the DEFAULT_*_DISTRIBUTIONS constants directly (see config.rs).
-    #[allow(dead_code)]
+    /// is RPM-based distros. Consumed by
+    /// [`PackageConfig::effective_distributions_for`](crate::config::PackageConfig::effective_distributions_for).
     fn default_distributions(&self) -> &'static [&'static str];
 
     /// Whether an architecture is supported for a given distribution.
@@ -139,6 +136,38 @@ pub trait Packager: Plugin {
     /// shared helpers like [`stage_install_tree`]) and then creates the
     /// archive at the returned `PathBuf` (typically inside a temp dir).
     fn build(&self, ctx: &BuildContext) -> Result<PathBuf>;
+
+    /// Glob (relative to the output directory) matching the artifacts this
+    /// packager wrote for `package`. Used by the build summary so the
+    /// filename convention lives with the format, not in a central `match`.
+    fn artifact_glob(&self, package: &str) -> String {
+        format!("{package}_*.{}", self.file_extension())
+    }
+
+    /// Whether this format can wrap a tree the source-build pipeline already
+    /// staged (via a [`BuildSystem`](crate::plugins::build_system::BuildSystem)
+    /// rather than [`stage_install_tree`]).
+    fn supports_source_build(&self) -> bool {
+        false
+    }
+
+    /// Archive an already-populated `staging_root` into this format.
+    ///
+    /// The source-build pipeline stages via the build system, so it cannot
+    /// call [`build`](Self::build) (which stages from `binary_dir`); it calls
+    /// this instead. Default: the format does not support source builds.
+    fn archive_staged_tree(&self, _ctx: &BuildContext) -> Result<PathBuf> {
+        anyhow::bail!("format '{}' does not support source builds", self.name())
+    }
+
+    /// Emit this format's source package from a built binary. Default: the
+    /// format has no source-package representation.
+    fn generate_source_package(&self, _out_dir: &Path, _pkg: &crate::source::Pkg) -> Result<()> {
+        anyhow::bail!(
+            "--source is not supported for '{}' packages (no source-package format)",
+            self.name()
+        )
+    }
 }
 
 /// All known plugins, in registration order.

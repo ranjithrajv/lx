@@ -335,6 +335,53 @@ fn default_distributions_differ_by_format() {
 }
 
 #[test]
+fn source_build_support_is_declared_by_packagers() {
+    // Source mode wraps a tree the build system already staged; which
+    // formats can do that is declared by the plugins, so the caller has no
+    // central list to keep in sync when a packager is added.
+    let formats: Vec<&'static str> = all_packagers()
+        .iter()
+        .filter(|p| p.supports_source_build())
+        .map(|p| p.name())
+        .collect();
+    assert_eq!(formats, vec!["deb", "rpm", "arch"]);
+    assert!(!get_packager("apk").unwrap().supports_source_build());
+    assert!(!get_packager("msix").unwrap().supports_source_build());
+}
+
+#[test]
+fn artifact_glob_follows_each_formats_filename_convention() {
+    assert_eq!(
+        get_packager("deb").unwrap().artifact_glob("hello"),
+        "hello_*.deb"
+    );
+    assert_eq!(
+        get_packager("rpm").unwrap().artifact_glob("hello"),
+        "hello-*.rpm"
+    );
+    assert_eq!(
+        get_packager("arch").unwrap().artifact_glob("hello"),
+        "hello-*.pkg.tar.*"
+    );
+    assert_eq!(
+        get_packager("apk").unwrap().artifact_glob("hello"),
+        "hello-*.apk"
+    );
+    assert_eq!(
+        get_packager("ipk").unwrap().artifact_glob("hello"),
+        "hello_*.ipk"
+    );
+    assert_eq!(
+        get_packager("osxpkg").unwrap().artifact_glob("hello"),
+        "hello-*.pkg"
+    );
+    assert_eq!(
+        get_packager("msix").unwrap().artifact_glob("hello"),
+        "hello_*.msix"
+    );
+}
+
+#[test]
 fn deb_with_new_control_fields_and_compression_is_valid() {
     let plugin = get_packager("deb").unwrap();
     let tmp = tempfile::tempdir().unwrap();
