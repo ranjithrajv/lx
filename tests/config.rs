@@ -182,6 +182,17 @@ fn rejects_unknown_compression() {
 }
 
 #[test]
+fn accepts_every_compression_alias_the_schema_and_archiver_accept() {
+    // Guards the schema enum / validator / archiver agreement: any name the
+    // schema lists and `debarchive::CompressionKind` parses must validate.
+    for c in ["gzip", "gz", "xz", "zstd", "zst", "none"] {
+        let yaml = format!("package_name: foo\ngithub_repo: owner/foo\ncompression: \"{c}\"\n");
+        let cfg: PackageConfig = serde_yaml::from_str(&yaml).unwrap();
+        assert!(cfg.validate().is_ok(), "compression '{c}' should validate");
+    }
+}
+
+#[test]
 fn rejects_non_numeric_compression_level_at_validate_time() {
     let yaml = "package_name: foo\ngithub_repo: owner/foo\ncompression: \"gzip:fast\"\n";
     let cfg: PackageConfig = serde_yaml::from_str(yaml).unwrap();
