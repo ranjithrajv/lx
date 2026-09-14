@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
 use super::{PackageIndex, ReadIndex};
-use crate::index::{IndexHit, InstallOpts};
+use crate::index::{IndexHit, InstallOpts, InstallOutcome};
 use crate::plugins::plugin::plugin_identity;
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5";
@@ -134,7 +134,7 @@ impl ReadIndex for AurSource {
         }
     }
 
-    fn install(&self, package: &str, opts: InstallOpts) -> Result<()> {
+    fn install(&self, package: &str, opts: InstallOpts) -> Result<Option<InstallOutcome>> {
         if opts.tag.is_some() {
             bail!("AUR has no prebuilt tags; it builds from the PKGBUILD");
         }
@@ -149,7 +149,10 @@ impl ReadIndex for AurSource {
             bail!("aborted");
         }
         println!("building AUR '{package}' from PKGBUILD …");
-        super::lx_community::build_from_recipe(&yaml, package, &opts)
+        // A PKGBUILD compiles from source; the build produces artifacts but
+        // doesn't install, so there is no lx-managed generation to record.
+        super::lx_community::build_from_recipe(&yaml, package, &opts)?;
+        Ok(None)
     }
 
     fn update(&self) -> Result<bool> {

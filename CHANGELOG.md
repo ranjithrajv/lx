@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### `lx index` installs join the lx lifecycle; `lx install` consumes the indexes
+
+- `ReadIndex::install` now returns an `InstallOutcome` instead of `()`.
+  `lx index install` records a prebuilt install as an lx-managed generation,
+  so index-installed packages appear in `lx list`/`lx show` and can be
+  `lx upgrade`d or `lx rollback`ed. Recipe builds (which only produce
+  artifacts) record nothing.
+- `lx install` falls back to the enabled indexes (`registry::active_sources`)
+  when the `latest-debs` org has no repository/release for the package, and
+  gains `--source <index>` to resolve from one named index directly. Both
+  routes record the install in the manifest.
+- `lx upgrade` and `lx update` fall back to the enabled indexes for packages
+  the org doesn't carry: they compare the index's advertised version against
+  the installed one and upgrade through the same index. A source that only
+  builds from a recipe (AUR) names no version, so it's reported rather than
+  guessed.
+- `lx search --index` / `--index-only` are wired to the index registry (they
+  were previously declared but ignored). `--index` merges the org with the
+  enabled indexes, `--index-only` searches the indexes alone; duplicate names
+  collapse to the first (org before index, then registry order).
+- The swapped `--raw`/`--local` help text on `lx search` is corrected.
+
 ### Documentation restructure
 
 - `README.md` is now an overview + quick start; the command reference,

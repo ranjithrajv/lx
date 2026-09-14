@@ -32,17 +32,15 @@ pub struct SearchArgs {
     #[arg(long, conflicts_with = "installed")]
     pub not_installed: bool,
 
-    /// Search the bundled recipe index (embedded templates/) instead of
-    /// the latest-debs org over the network. Offline; useful for
-    /// bootstrapping new packages from starter configs.
+    /// Print bare package names, one per line (for scripting).
     #[arg(long)]
     pub raw: bool,
 
-    /// Include the community recipe index (lx-index) in results.
-    #[arg(long)]
+    /// Include the enabled package indexes (`lx index`) in results.
+    #[arg(long, conflicts_with = "local")]
     pub index: bool,
 
-    /// Search only the community index (skip the latest-debs org).
+    /// Search only the enabled package indexes (skip the latest-debs org).
     #[arg(long, conflicts_with = "local")]
     pub index_only: bool,
 
@@ -51,7 +49,9 @@ pub struct SearchArgs {
     #[arg(long)]
     pub distro: bool,
 
-    /// Print bare package names, one per line (for scripting).
+    /// Search the bundled recipe index (embedded templates/) instead of
+    /// the latest-debs org over the network. Offline; useful for
+    /// bootstrapping new packages from starter configs.
     #[arg(long)]
     pub local: bool,
 }
@@ -250,7 +250,11 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    let repos = org_repos(&crate::consumer::index_org(), token)?;
+    let repos = if args.index_only {
+        Vec::new()
+    } else {
+        org_repos(&crate::consumer::index_org(), token)?
+    };
     for repo in &repos {
         let Some(package) = repo.name.strip_suffix("-debian") else {
             continue;
@@ -297,6 +301,52 @@ pub fn run(args: SearchArgs, token: Option<&str>) -> Result<()> {
             host_status: None,
         });
     }
+
+    // Merge the enabled package indexes (`lx index` read backends) when
+    // `--index`/`--index-only` is given. Each backend already matched the
+    // pattern, so these arrive pre-filtered.
+    if args.index || args.index_only {
+        let reg = crate::index::registry::Registry::ensure_exists()?;
+        for src in crate::index::registry::active_sources(&reg) {
+            match src.search(args.pattern.as_deref()) {
+                Ok(src_hits) => {
+                    for h in src_hits {
+                        let installed_version = debs::dpkg_installed_version(&h.name);
+                        let installed =
+                            installed_version.is_some() || manifest.packages.contains_key(&h.name);
+                        if args.installed && !installed {
+                            continue;
+                        }
+                        if args.not_installed && installed {
+                            continue;
+                        }
+                        let candidate = manifest
+                            .current(&h.name)
+                            .map(|e| e.version.clone())
+                            .filter(|v| !v.is_empty());
+                        hits.push(Hit {
+                            name: h.name,
+                            desc: h.description,
+                            installed,
+                            installed_version,
+                            candidate,
+                            distro_newest: None,
+                            distro_repos: 0,
+                            distro_outdated: 0,
+                            host_version: None,
+                            host_status: None,
+                        });
+                    }
+                }
+                Err(e) => eprintln!("⚠ {}: {e:#}", src.instance_name()),
+            }
+        }
+    }
+
+    // Several sources can carry the same name (org + index, or two indexes).
+    // Keep the first: org before index, registry order within the indexes.
+    let mut seen = std::collections::HashSet::new();
+    hits.retain(|h| seen.insert(h.name.clone()));
 
     // Optionally enrich with repology distro metadata.
     if args.distro {

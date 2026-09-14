@@ -29,7 +29,12 @@ auto-refreshed; works offline on a stale cache with a warning); a custom
 index caches under `~/.cache/lx/index/<name>/`. The repology
 source caches to `~/.cache/lx/repology/` (JSON files refreshed via the
 repology API on `lx index update`). `lx search` merges index results with the
-`latest-debs` org and embedded templates; `--local` keeps it offline-only.
+`latest-debs` org and embedded templates; `--index` includes the enabled
+indexes, `--index-only` searches them alone, and `--local` keeps it
+offline-only on the embedded templates. `lx install` falls back to the
+enabled indexes when the org doesn't carry the package (`--source <index>`
+forces one), recording the result as an lx-managed generation, and
+`lx upgrade`/`lx update` re-resolve those packages through the indexes.
 
 ## Distro metadata (repology)
 

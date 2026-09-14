@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use clap::Args;
 
 use crate::consumer;
@@ -210,6 +210,7 @@ fn migrate_distro_package(package: &str, token: Option<&str>) -> Result<bool> {
             allow_unverified: true,
             reinstall: true,
             yes: true,
+            source: None,
         },
         token,
     ) {
@@ -235,18 +236,17 @@ fn upgrade_one(
     let format = consumer::format_or_host(&entry.format);
     let org = consumer::index_org();
     let repo = consumer::repo_name(package);
-    let release = client.latest_release(&org, &repo)?;
-    let resolved =
+    // The org is the primary source; a package it doesn't carry (e.g. one
+    // installed via `lx index install --source aur`) falls back to the
+    // enabled indexes instead of failing.
+    let Ok(release) = client.latest_release(&org, &repo) else {
+        return upgrade_one_from_index(package, entry, args);
+    };
+    let Some(resolved) =
         consumer::resolve_asset(&release, package, format, &entry.arch, &entry.distribution)
-            .ok_or_else(|| {
-                anyhow!(
-                    "no {} asset for {}/{} in release '{}'",
-                    format.name(),
-                    entry.arch,
-                    entry.distribution,
-                    release.tag_name
-                )
-            })?;
+    else {
+        return upgrade_one_from_index(package, entry, args);
+    };
     let asset = resolved.asset;
     let candidate_version = resolved.version;
 
@@ -285,5 +285,43 @@ fn upgrade_one(
     );
     manifest.save()?;
 
+    Ok(true)
+}
+
+/// Upgrade a package the `latest-debs` org doesn't carry by re-resolving it
+/// through the enabled indexes (`lx index`). Index sources advertise versions
+/// as release tags; a source that only builds from a recipe has no version to
+/// compare, so it is reported and skipped.
+fn upgrade_one_from_index(package: &str, entry: &PackageEntry, args: &UpgradeArgs) -> Result<bool> {
+    let format = consumer::format_or_host(&entry.format);
+    let Some((name, candidate)) = crate::index::newest_active_candidate(package)? else {
+        bail!(
+            "'{package}' is not published under the {} org or any enabled index",
+            consumer::index_org()
+        );
+    };
+    let Some(candidate) = candidate else {
+        println!("  ? {package}: '{name}' names no version (builds from source)");
+        return Ok(false);
+    };
+
+    let installed =
+        consumer::installed_version(package, format).unwrap_or_else(|| entry.version.clone());
+    if !consumer::is_newer(&installed, &candidate, format)? {
+        println!("  = {package} up to date ({installed})");
+        return Ok(false);
+    }
+    println!("  ↑ {package}: {installed} -> {candidate} (from {name})");
+    if args.dry_run {
+        return Ok(false);
+    }
+
+    let opts = crate::index::InstallOpts {
+        no_verify: args.no_verify,
+        allow_unverified: args.allow_unverified,
+        yes: args.yes,
+        ..Default::default()
+    };
+    crate::index::install_from_active(package, Some(&name), opts)?;
     Ok(true)
 }

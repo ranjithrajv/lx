@@ -12,21 +12,21 @@ groups are covered below, plus the flags worth calling out.
 | `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
 | `lx init` | Interactively generate a `package.yaml`; `--from <owner/repo>` scaffolds one non-interactively by auto-discovering release assets (`package_format` pre-filled from the host); `--from-aur <pkg>` imports an AUR PKGBUILD; `--from-nfpm <nfpm.yaml>` converts an nfpm config |
-| `lx install <package>` | Fetch and install a pre-built native package (deb/rpm/arch, resolved from the host) from the `latest-debs` GitHub org. `--reinstall` re-installs (an lx-managed package's recorded version) |
-| `lx update [package]` | Check installed packages against their latest release, no install |
-| `lx upgrade [package]` | Upgrade installed packages to their latest release. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
+| `lx install <package>` | Fetch and install a pre-built native package (deb/rpm/arch, resolved from the host) from the `latest-debs` GitHub org, falling back to the enabled package indexes when the org has no repository/release; `--source <index>` forces one named index. Records an lx-managed generation. `--reinstall` re-installs (an lx-managed package's recorded version) |
+| `lx update [package]` | Check installed packages against their latest release, no install; packages the org doesn't carry are checked through the enabled indexes |
+| `lx upgrade [package]` | Upgrade installed packages to their latest release; packages the org doesn't carry upgrade through the enabled indexes. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
 | `lx list` | List packages `lx` has installed |
 | `lx show <package>` | Show everything known about one package (manifest + dpkg) |
 | `lx info` | Auto-detect and report the host OS and package system (`--json` for machine-readable output) |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
-| `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--local` searches the offline starter-template index |
+| `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--index`/`--index-only` merge the enabled package indexes; `--local` searches the offline starter-template index |
 | `lx repo <dir>` | Turn a directory of built packages into a servable repository (apt `Packages`/`Release`/`InRelease` by default). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead, and defaults to the host's native format |
 | `lx publish [config]` | Build every requested format and generate that format's repository index in one run (`--formats`, default `deb,rpm,arch`), each in its own `<output>/<format>/` subdirectory — the producer→distributor loop |
 | `lx migrate lpt [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx`. Bare `lx migrate` is equivalent |
 | `lx migrate native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
 | `lx schema` | Generate the JSON schema for `package.yaml` (aliases: `json-schema`, `jsonschema`) |
-| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status) |
+| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status). `install` records the result as an lx-managed generation, so `lx upgrade`/`lx list` track it |
 
 Moved names keep working as hidden aliases so existing scripts don't break:
 `lx scan-deps` → `lx deps scan`, `lx shlibdeps` → `lx deps resolve`,

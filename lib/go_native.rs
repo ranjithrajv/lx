@@ -1075,6 +1075,7 @@ fn install_native_package(package: &str, format: &str, token: Option<&str>) -> R
                 allow_unverified: true,
                 reinstall: false,
                 yes: true,
+                source: None,
             },
             token,
         ),

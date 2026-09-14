@@ -22,6 +22,8 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, Subcommand};
 use std::path::PathBuf;
 
+use crate::manifest::{Manifest, PackageEntry};
+
 /// One search hit from any source.
 ///
 /// The `newest`/`repos`/`outdated`/`vulnerable`/`host_*` fields are
@@ -61,6 +63,27 @@ pub struct InstallOpts {
     /// (AUR `makedepends` + the build system's toolchain) via the host
     /// package manager. Off by default.
     pub install_build_deps: bool,
+}
+
+/// What a [`ReadIndex::install`](crate::plugins::package_index::ReadIndex::install)
+/// actually put on the system. `lx index install` (and the `lx install` index
+/// fallback) records it as an lx-managed generation, so the package joins the
+/// `lx list`/`update`/`upgrade`/`rollback` lifecycle instead of being invisible
+/// to it.
+#[derive(Debug, Clone)]
+pub struct InstallOutcome {
+    pub package: String,
+    /// The installed package's version, in the host package-manager's spelling
+    /// (Debian `Version`, rpm/arch `[epoch:]version-release`).
+    pub version: String,
+    pub arch: String,
+    pub distribution: String,
+    /// Artifact filename that was installed.
+    pub asset: String,
+    /// Index release tag/dir the artifact came from.
+    pub tag: String,
+    /// Native format (`deb`/`rpm`/`arch`).
+    pub format: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -354,8 +377,6 @@ fn run_search(opts: SearchOpts) -> Result<()> {
 }
 
 fn run_install(opts: InstallOptsCli) -> Result<()> {
-    let reg = registry::Registry::ensure_exists()?;
-    let sources = registry::active_sources(&reg);
     let io = InstallOpts {
         tag: opts.tag,
         build: opts.build,
@@ -365,16 +386,103 @@ fn run_install(opts: InstallOptsCli) -> Result<()> {
         download_only: opts.download_only,
         install_build_deps: opts.install_build_deps,
     };
-    for src in &sources {
-        if src.info(&opts.package)?.is_some() {
-            return src.install(&opts.package, io);
+    install_from_active(&opts.package, None, io)
+}
+
+/// Install `package` from the enabled indexes, recording an lx-managed
+/// generation when a backend actually installs something.
+///
+/// With `source`, restrict to the index of that name; otherwise the first
+/// index carrying the package wins (registry order). Shared by
+/// `lx index install` and the `lx install` fallback.
+pub fn install_from_active(package: &str, source: Option<&str>, opts: InstallOpts) -> Result<()> {
+    let reg = registry::Registry::ensure_exists()?;
+    let mut sources = registry::active_sources(&reg);
+    if let Some(name) = source {
+        sources.retain(|s| s.instance_name() == name);
+        if sources.is_empty() {
+            bail!("no enabled index named '{name}'. Run `lx index list` to see available indexes.");
         }
     }
-    bail!(
-        "'{}' not found in any enabled index. Run `lx index search {}`.",
-        opts.package,
-        opts.package
-    )
+    for src in &sources {
+        if src.info(package)?.is_some() {
+            if let Some(outcome) = src.install(package, opts)? {
+                record_install(&outcome)?;
+            }
+            return Ok(());
+        }
+    }
+    match source {
+        Some(name) => bail!("'{package}' not found in index '{name}'"),
+        None => {
+            bail!("'{package}' not found in any enabled index. Run `lx index search {package}`.")
+        }
+    }
+}
+
+/// True when any enabled index knows `package`. Lets `lx install` decide
+/// whether an org miss is worth retrying through the indexes.
+pub fn any_active_has(package: &str) -> Result<bool> {
+    let reg = registry::Registry::ensure_exists()?;
+    for src in registry::active_sources(&reg) {
+        if src.info(package)?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// The newest version the enabled indexes advertise for `package`, plus the
+/// index carrying it. `Ok(None)` when no index knows the package. The version
+/// is `None` when the index names none (e.g. an AUR recipe that only builds
+/// from source), in which case there is nothing to compare an upgrade against.
+///
+/// Used by `lx upgrade`/`lx update` to resolve packages the `latest-debs` org
+/// doesn't carry.
+pub fn newest_active_candidate(package: &str) -> Result<Option<(String, Option<String>)>> {
+    let reg = registry::Registry::ensure_exists()?;
+    for src in registry::active_sources(&reg) {
+        let Some(hit) = src.info(package)? else {
+            continue;
+        };
+        return Ok(Some((
+            src.instance_name().to_string(),
+            newest_version(&hit),
+        )));
+    }
+    Ok(None)
+}
+
+/// Highest version an [`IndexHit`] advertises: its `available` tags and/or
+/// repology's `newest`, ignoring non-version tags such as
+/// `build-from-pkgbuild` and a leading `v`.
+fn newest_version(hit: &IndexHit) -> Option<String> {
+    let mut all: Vec<String> = hit.available.clone();
+    if let Some(n) = &hit.newest {
+        all.push(n.clone());
+    }
+    all.into_iter()
+        .map(|v| v.trim().trim_start_matches('v').to_string())
+        .filter(|v| v.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .max_by(|a, b| crate::versioncmp::rpm_evr_cmp(a, b))
+}
+
+/// Record an index install as an lx-managed generation.
+fn record_install(outcome: &InstallOutcome) -> Result<()> {
+    let mut manifest = Manifest::load()?;
+    manifest.record(
+        &outcome.package,
+        PackageEntry {
+            version: outcome.version.clone(),
+            arch: outcome.arch.clone(),
+            distribution: outcome.distribution.clone(),
+            asset: outcome.asset.clone(),
+            tag: outcome.tag.clone(),
+            installed_at: crate::debs::now_rfc3339(),
+            format: outcome.format.clone(),
+        },
+    );
+    manifest.save()
 }
 
 fn run_update() -> Result<()> {
@@ -767,6 +875,37 @@ mod tests {
     }
 
     #[test]
+    fn newest_version_picks_the_highest_and_skips_non_versions() {
+        let hit = crate::index::IndexHit {
+            available: vec![
+                "v0.9.0".into(),
+                "0.10.0".into(),
+                "build-from-pkgbuild".into(),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(super::newest_version(&hit).as_deref(), Some("0.10.0"));
+    }
+
+    #[test]
+    fn newest_version_falls_back_to_repology_newest() {
+        let hit = crate::index::IndexHit {
+            newest: Some("1.2.3".into()),
+            ..Default::default()
+        };
+        assert_eq!(super::newest_version(&hit).as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn newest_version_none_when_only_non_versions() {
+        let hit = crate::index::IndexHit {
+            available: vec!["build-from-pkgbuild".into()],
+            ..Default::default()
+        };
+        assert_eq!(super::newest_version(&hit), None);
+    }
+
+    #[test]
     fn registry_crud_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("lx");
@@ -829,6 +968,7 @@ mod tests {
     fn parsed_prebuilt_name_deb_with_dist() {
         let p = crate::index::lx_community::parse_prebuilt_name("eza_0.20.0-1+bookworm_amd64.deb")
             .unwrap();
+        assert_eq!(p.version, "0.20.0-1+bookworm");
         assert_eq!(p.arch, "amd64");
         assert_eq!(p.dist, "bookworm");
     }
@@ -836,6 +976,7 @@ mod tests {
     #[test]
     fn parsed_prebuilt_name_deb_without_dist() {
         let p = crate::index::lx_community::parse_prebuilt_name("foo_1.0-1_amd64.deb").unwrap();
+        assert_eq!(p.version, "1.0-1");
         assert_eq!(p.arch, "amd64");
         assert_eq!(p.dist, "");
     }
@@ -845,6 +986,7 @@ mod tests {
         // Unknown extension: take everything before the last '.' as stem.
         let p = crate::index::lx_community::parse_prebuilt_name("foo_1.0-1+bookworm_amd64.xyz")
             .unwrap();
+        assert_eq!(p.version, "1.0-1+bookworm");
         assert_eq!(p.arch, "amd64");
         assert_eq!(p.dist, "bookworm");
     }

@@ -59,6 +59,13 @@ pub struct InstallArgs {
     /// Skip the install confirmation prompt.
     #[arg(short = 'y', long)]
     pub yes: bool,
+
+    /// Resolve the package from this enabled index (see `lx index list`)
+    /// instead of the latest-debs org — prebuilt-first, with a
+    /// build-from-recipe fallback. Useful for packages the org doesn't
+    /// publish. Without it, an org miss falls back to the enabled indexes.
+    #[arg(long)]
+    pub source: Option<String>,
 }
 
 /// `--reinstall` without an explicit `--version` re-installs the version lx
@@ -95,6 +102,42 @@ fn apply_reinstall_defaults(mut args: InstallArgs, manifest: &Manifest) -> Insta
 pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
     let manifest = Manifest::load().unwrap_or_default();
     let args = apply_reinstall_defaults(args, &manifest);
+
+    // `--source`: skip the org entirely and install from that index.
+    if let Some(source) = args.source.clone() {
+        return crate::index::install_from_active(&args.package, Some(&source), index_opts(&args));
+    }
+
+    match install_from_org(&args, token) {
+        Ok(()) => Ok(()),
+        Err(org_err) => {
+            // The org has no such package/release — dogfood the enabled
+            // indexes (lx-community, AUR, custom) before giving up.
+            if crate::index::any_active_has(&args.package)? {
+                crate::index::install_from_active(&args.package, None, index_opts(&args))
+            } else {
+                Err(org_err)
+            }
+        }
+    }
+}
+
+/// Map the consumer install flags onto the shared index install options.
+fn index_opts(args: &InstallArgs) -> crate::index::InstallOpts {
+    crate::index::InstallOpts {
+        tag: args.version.clone(),
+        build: false,
+        no_verify: args.no_verify,
+        allow_unverified: args.allow_unverified,
+        yes: args.yes,
+        download_only: args.download_only.clone(),
+        install_build_deps: false,
+    }
+}
+
+/// The `latest-debs` org path: resolve `<package>-debian`'s release, match the
+/// host asset, download, verify, install, and record.
+fn install_from_org(args: &InstallArgs, token: Option<&str>) -> Result<()> {
     let format = match &args.format {
         Some(f) => consumer::parse_format(f)?,
         None => detect_host_format(),
@@ -240,6 +283,7 @@ mod tests {
             allow_unverified: false,
             reinstall,
             yes: true,
+            source: None,
         }
     }
 

@@ -4,7 +4,7 @@ use anyhow::{bail, Result};
 use clap::Args;
 
 use crate::consumer;
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, PackageEntry};
 use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
@@ -47,21 +47,19 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
         let repo = consumer::repo_name(package);
         let release = match client.latest_release(&consumer::index_org(), &repo) {
             Ok(r) => r,
-            Err(e) => {
-                eprintln!("  ? {package}: {e:#}");
+            Err(_) => {
+                if report_from_index(package, entry, format)? {
+                    outdated += 1;
+                }
                 continue;
             }
         };
         let Some(resolved) =
             consumer::resolve_asset(&release, package, format, &entry.arch, &entry.distribution)
         else {
-            eprintln!(
-                "  ? {package}: no {} asset for {}/{} in release '{}'",
-                format.name(),
-                entry.arch,
-                entry.distribution,
-                release.tag_name
-            );
+            if report_from_index(package, entry, format)? {
+                outdated += 1;
+            }
             continue;
         };
         let candidate = resolved.version;
@@ -86,6 +84,38 @@ pub fn run(args: UpdateArgs, token: Option<&str>) -> Result<()> {
         println!("\n{outdated} package(s) can be upgraded; run `lx upgrade` to install");
     }
     Ok(())
+}
+
+/// Report an org miss through the enabled indexes (`lx index`) — the check
+/// half of the `lx upgrade` index fallback. Returns true when the index
+/// carries a newer version.
+fn report_from_index(
+    package: &str,
+    entry: &PackageEntry,
+    format: crate::index::InstallFormat,
+) -> Result<bool> {
+    let Some((name, candidate)) = crate::index::newest_active_candidate(package)? else {
+        eprintln!(
+            "  ? {package}: not found under the {} org or any enabled index",
+            consumer::index_org()
+        );
+        return Ok(false);
+    };
+    let Some(candidate) = candidate else {
+        eprintln!("  ? {package}: '{name}' names no version (builds from source)");
+        return Ok(false);
+    };
+    let installed =
+        consumer::installed_version(package, format).unwrap_or_else(|| entry.version.clone());
+    if consumer::is_newer(&installed, &candidate, format)? {
+        println!(
+            "  ↑ {package}: {installed} -> {candidate} (from {name}; run `lx upgrade {package}`)"
+        );
+        Ok(true)
+    } else {
+        println!("  = {package} up to date ({installed})");
+        Ok(false)
+    }
 }
 
 /// Prints the candidate release's own notes as a stand-in changelog,

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use super::{PackageIndex, ReadIndex};
 use crate::debs::{confirm, detect_dist};
-use crate::index::{detect_host_format, IndexHit, InstallOpts};
+use crate::index::{detect_host_format, IndexHit, InstallOpts, InstallOutcome};
 use crate::install_pkg::{detect_arch, install_prebuilt};
 
 const RECIPES_DIR: &str = "recipes";
@@ -247,7 +247,7 @@ impl ReadIndex for GitIndexSource {
         }))
     }
 
-    fn install(&self, package: &str, opts: InstallOpts) -> Result<()> {
+    fn install(&self, package: &str, opts: InstallOpts) -> Result<Option<InstallOutcome>> {
         if let Some(age) = self.stale() {
             eprintln!(
                 "⚠ index cache is {age}h old (>{STALE_HOURS}h); run `lx index update` for the newest"
@@ -295,9 +295,9 @@ impl ReadIndex for GitIndexSource {
                             std::fs::create_dir_all(dir)?;
                             std::fs::copy(path, dir.join(filename))?;
                             println!("downloaded {filename} → {}", dir.display());
-                            return Ok(());
+                            return Ok(None);
                         }
-                        return install_prebuilt(
+                        let installed = install_prebuilt(
                             &path,
                             filename,
                             pkg_fmt,
@@ -305,7 +305,26 @@ impl ReadIndex for GitIndexSource {
                             opts.yes,
                             opts.no_verify,
                             opts.allow_unverified,
-                        );
+                        )?;
+                        if !installed {
+                            return Ok(None);
+                        }
+                        // Fall back to the release tag when the filename
+                        // doesn't spell out a version (non-deb spellings).
+                        let version = if parsed.version.is_empty() {
+                            tag.clone()
+                        } else {
+                            parsed.version.clone()
+                        };
+                        return Ok(Some(InstallOutcome {
+                            package: package.to_string(),
+                            version,
+                            arch: arch.clone(),
+                            distribution: dist.clone(),
+                            asset: filename.clone(),
+                            tag: tag.clone(),
+                            format: pkg_fmt.name().to_string(),
+                        }));
                     }
                 }
             }
@@ -317,7 +336,10 @@ impl ReadIndex for GitIndexSource {
             }
             println!("no prebuilt for '{package}' on {dist}/{arch}; building from recipe");
         }
-        build_from_recipe(&entry.yaml, package, &opts)
+        // Recipe builds only produce artifacts; nothing is installed, so
+        // there is no lx-managed generation to record.
+        build_from_recipe(&entry.yaml, package, &opts)?;
+        Ok(None)
     }
 
     fn update(&self) -> Result<bool> {
@@ -333,7 +355,7 @@ impl ReadIndex for GitIndexSource {
     }
 }
 
-/// Parse `{pkg}_{ver}-{build}+{dist}_{arch}.ext` -> (arch, dist).
+/// Parse `{pkg}_{version}+{dist}_{arch}.ext` -> (version, arch, dist).
 pub(crate) fn parse_prebuilt_name(filename: &str) -> Option<ParsedName> {
     let stem = if let Some(s) = filename.strip_suffix(".pkg.tar.zst") {
         s
@@ -347,11 +369,20 @@ pub(crate) fn parse_prebuilt_name(filename: &str) -> Option<ParsedName> {
         parts.next()?
     };
     let (_, arch) = stem.rsplit_once('_')?;
+    // Everything between the first `_` (after the package name) and the
+    // trailing `_{arch}` is the version, in the host manager's spelling
+    // (Debian `Version`, e.g. `0.20.0-1+bookworm`).
+    let version = stem
+        .split_once('_')
+        .and_then(|(_, rest)| rest.rsplit_once('_'))
+        .map(|(v, _)| v)
+        .unwrap_or("");
     let dist = match stem.split_once('+') {
         Some((_, after_plus)) => after_plus.rsplit_once('_').map(|(d, _)| d).unwrap_or(""),
         None => "",
     };
     Some(ParsedName {
+        version: version.to_string(),
         arch: arch.to_string(),
         dist: dist.to_string(),
     })
@@ -359,6 +390,7 @@ pub(crate) fn parse_prebuilt_name(filename: &str) -> Option<ParsedName> {
 
 /// Parsed prebuilt-filename fields.
 pub struct ParsedName {
+    pub version: String,
     pub arch: String,
     pub dist: String,
 }

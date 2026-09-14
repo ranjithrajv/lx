@@ -53,6 +53,7 @@ pub fn run(args: ReinstallArgs, token: Option<&str>) -> Result<()> {
             allow_unverified: args.allow_unverified,
             reinstall: true,
             yes: args.yes,
+            source: None,
         },
         token,
     )

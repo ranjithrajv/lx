@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 use super::{PackageIndex, ReadIndex};
 use crate::debs::{detect_dist, detect_dpkg_arch};
-use crate::index::{IndexHit, InstallOpts};
+use crate::index::{IndexHit, InstallOpts, InstallOutcome};
 use crate::plugins::plugin::plugin_identity;
 
 const API_BASE: &str = "https://repology.org/api/v1";
@@ -461,7 +461,7 @@ impl ReadIndex for RepologySource {
         }))
     }
 
-    fn install(&self, package: &str, _opts: InstallOpts) -> Result<()> {
+    fn install(&self, package: &str, _opts: InstallOpts) -> Result<Option<InstallOutcome>> {
         // Repology is metadata-only. Refuse install and point the user
         // to recipe sources that can actually provide a binary.
         bail!(

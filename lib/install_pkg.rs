@@ -14,7 +14,8 @@ use crate::index::InstallFormat;
 
 /// Install a prebuilt package at `path` in the given `format`. Prompts for
 /// confirmation unless `yes`. Verifies checksum before install when
-/// `expected_sha` is provided (non-empty).
+/// `expected_sha` is provided (non-empty). Returns `true` when the package was
+/// installed, `false` when the user aborted the prompt.
 pub fn install_prebuilt(
     path: &Path,
     filename: &str,
@@ -23,7 +24,7 @@ pub fn install_prebuilt(
     yes: bool,
     no_verify: bool,
     allow_unverified: bool,
-) -> Result<()> {
+) -> Result<bool> {
     if !no_verify && !expected_sha.is_empty() {
         let actual = crate::lx_lib::checksum::sha256_file(path)?;
         if actual != expected_sha {
@@ -48,14 +49,15 @@ pub fn install_prebuilt(
         )?
     {
         println!("Aborted; package left at {}", path.display());
-        return Ok(());
+        return Ok(false);
     }
 
     match format {
-        InstallFormat::Deb => install_deb(path),
-        InstallFormat::Rpm => install_rpm(path),
-        InstallFormat::Arch => install_arch(path),
+        InstallFormat::Deb => install_deb(path)?,
+        InstallFormat::Rpm => install_rpm(path)?,
+        InstallFormat::Arch => install_arch(path)?,
     }
+    Ok(true)
 }
 
 /// The package manager install subcommand for each format (for prompts).

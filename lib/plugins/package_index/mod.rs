@@ -46,7 +46,7 @@ use anyhow::Result;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::index::{IndexHit, InstallOpts};
+use crate::index::{IndexHit, InstallOpts, InstallOutcome};
 use crate::plugins::plugin::Plugin;
 
 /// Which roles a [`PackageIndex`] backend implements.
@@ -146,8 +146,11 @@ pub trait ReadIndex: PackageIndex {
     /// Refresh this index's local cache; `Ok(true)` when it changed.
     fn update(&self) -> Result<bool>;
 
-    /// Install a package from this index.
-    fn install(&self, package: &str, opts: InstallOpts) -> Result<()>;
+    /// Install a package from this index. `Ok(None)` means the backend did
+    /// not install anything (e.g. `--download-only`, an aborted prompt, or a
+    /// recipe build that only produced artifacts); `Ok(Some(outcome))` lets
+    /// the caller record an lx-managed generation.
+    fn install(&self, package: &str, opts: InstallOpts) -> Result<Option<InstallOutcome>>;
 }
 
 /// The write role: publish a local repository index (`lx repo`).
