@@ -8,11 +8,10 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct ComposerRegistrySource;
 
@@ -58,25 +57,19 @@ impl RegistrySource for ComposerRegistrySource {
 
         // composer install with --no-dev (production only), --no-interaction,
         // --no-scripts (avoid post-install scripts that may need network).
-        let output = Command::new("composer")
-            .args([
+        staging::run_tool(
+            "composer",
+            &[
                 "install",
                 "--no-dev",
                 "--no-interaction",
                 "--no-scripts",
                 "--no-progress",
                 "--prefer-dist",
-            ])
-            .current_dir(&project_dir)
-            .output()
-            .context("failed to run `composer install` (is composer on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "composer install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+            ],
+            Some(&project_dir),
+            "composer install",
+        )?;
 
         // composer installs to <project>/vendor/<vendor>/<package>/.
         let vendor_dir = project_dir.join("vendor");

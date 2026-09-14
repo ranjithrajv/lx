@@ -10,12 +10,12 @@
 //! them as .deb/.rpm is less common than npm/pip/gem, but useful for
 //! deployment when a system Perl module version is too old.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct CpanRegistrySource;
 
@@ -48,21 +48,20 @@ impl RegistrySource for CpanRegistrySource {
         // --installdeps: install dependencies so the build succeeds.
         // -L: install to a local directory within our workdir.
         let local_lib = workdir.path().join("perl5");
-        let output = Command::new("cpanm")
-            .args([
+        let local_lib_str = local_lib.to_string_lossy().to_string();
+        staging::run_tool(
+            "cpanm",
+            &[
                 "--notest",
                 "--installdeps",
                 "-L",
-                &local_lib.to_string_lossy(),
+                &local_lib_str,
                 "--quiet",
                 &spec,
-            ])
-            .output()
-            .context("failed to run `cpanm` (is cpanm on PATH?)")?;
-
-        if !output.status.success() {
-            bail!("cpanm failed: {}", String::from_utf8_lossy(&output.stderr));
-        }
+            ],
+            None,
+            "cpanm",
+        )?;
 
         // Now install the module itself into a DESTDIR-style tree.
         // We use `cpanm` with a custom --install_base or build manually.
@@ -71,26 +70,21 @@ impl RegistrySource for CpanRegistrySource {
         std::fs::create_dir_all(&source_dir)?;
 
         // Download and extract the distribution tarball.
-        let download = Command::new("cpanm")
-            .args([
+        staging::run_tool(
+            "cpanm",
+            &[
                 "--notest",
                 "--no-man-pages",
                 "-L",
-                &local_lib.to_string_lossy(),
+                &local_lib_str,
                 "--reinstall",
                 "--interactive",
                 "no",
                 &spec,
-            ])
-            .output()
-            .context("failed to reinstall via cpanm")?;
-
-        if !download.status.success() {
-            bail!(
-                "cpanm reinstall failed: {}",
-                String::from_utf8_lossy(&download.stderr)
-            );
-        }
+            ],
+            None,
+            "cpanm reinstall",
+        )?;
 
         // Find what was installed by looking at the local lib.
         let site_bin = local_lib.join("bin");

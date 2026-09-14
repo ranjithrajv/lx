@@ -7,13 +7,11 @@
 //! sdists or `pip download` for wheels, then extracts into a staging
 //! directory.
 
-use anyhow::{bail, Context, Result};
-use std::path::PathBuf;
-use std::process::Command;
+use anyhow::{Context, Result};
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct PythonRegistrySource;
 
@@ -40,45 +38,33 @@ impl RegistrySource for PythonRegistrySource {
         let workdir = tempfile::tempdir().context("failed to create python workdir")?;
         let download_dir = workdir.path().join("download");
         std::fs::create_dir_all(&download_dir)?;
+        let dest = download_dir.to_string_lossy().to_string();
 
         // pip download fetches the package without installing.
         // --no-binary :all: forces sdist (source distribution) which is
         // more portable than wheels (wheels are platform-specific).
         // --no-deps: we only package this one package, not its deps.
-        let output = Command::new("pip")
-            .args([
+        staging::run_tool(
+            "pip",
+            &[
                 "download",
                 &spec,
                 "--no-binary",
                 ":all:",
                 "--no-deps",
                 "-d",
-                &download_dir.to_string_lossy(),
-            ])
-            .output()
-            .context("failed to run `pip download` (is pip on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "pip download failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+                &dest,
+            ],
+            None,
+            "pip download",
+        )?;
 
         // Find the downloaded archive (sdist: .tar.gz, .zip, or .tar.bz2).
-        let archive = std::fs::read_dir(&download_dir)?
-            .filter_map(|e| e.ok())
-            .find(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.ends_with(".tar.gz")
-                    || name.ends_with(".tgz")
-                    || name.ends_with(".zip")
-                    || name.ends_with(".tar.bz2")
-            })
-            .context("pip download produced no archive")?;
-
-        let archive_path = archive.path();
-        let file_name = archive.file_name().to_string_lossy().to_string();
+        let (archive_path, file_name) = staging::find_downloaded_archive(
+            &download_dir,
+            &[".tar.gz", ".tgz", ".zip", ".tar.bz2"],
+            "pip download",
+        )?;
 
         // Extract version from filename: "name-version.tar.gz" or "name-version.zip".
         let version = extract_sdist_version(&file_name).unwrap_or("0.0.0");
@@ -92,24 +78,11 @@ impl RegistrySource for PythonRegistrySource {
             "tar.gz"
         };
 
-        // Extract.
-        let extract_dir = workdir.path().join("package");
-        std::fs::create_dir_all(&extract_dir)?;
-        crate::build::extract(&archive_path, &extract_dir, format)
-            .context("failed to extract python sdist")?;
+        // sdists nest under "<name>-<version>/".
+        let files_dir =
+            staging::extract_payload(workdir.path(), &archive_path, format, "python sdist")?;
 
-        // sdists nest under "<name>-<version>/". Use it if it exists.
-        let entries: Vec<PathBuf> = std::fs::read_dir(&extract_dir)?
-            .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir())
-            .collect();
-        let files_dir = if entries.len() == 1 {
-            entries.into_iter().next().unwrap()
-        } else {
-            extract_dir
-        };
-
-        let description = read_sdist_description(&files_dir, cfg);
+        let description = staging::description_or(cfg, || read_sdist_description(&files_dir));
 
         Ok(RegistryPayload {
             files_dir,
@@ -139,11 +112,7 @@ fn extract_sdist_version(file_name: &str) -> Option<&str> {
 }
 
 /// Try to read description from setup.cfg or pyproject.toml in the sdist.
-fn read_sdist_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> String {
-    if !cfg.description.is_empty() {
-        return cfg.description.clone();
-    }
-
+fn read_sdist_description(files_dir: &std::path::Path) -> String {
     // Try pyproject.toml first (simple key-value parsing to avoid a
     // toml dependency; we only need the description field).
     let pyproject = files_dir.join("pyproject.toml");

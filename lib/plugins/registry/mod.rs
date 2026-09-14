@@ -28,6 +28,7 @@ pub mod maven;
 pub mod npm;
 pub mod nuget;
 pub mod python;
+pub mod staging;
 
 use anyhow::Result;
 use std::path::PathBuf;

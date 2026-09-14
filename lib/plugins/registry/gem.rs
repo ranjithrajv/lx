@@ -6,12 +6,11 @@
 //! packaging. Uses `gem fetch` to download the .gem file, then extracts
 //! it (gems are tar archives with data.tar.gz + metadata.gz).
 
-use anyhow::{bail, Context, Result};
-use std::process::Command;
+use anyhow::{Context, Result};
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct GemRegistrySource;
 
@@ -45,27 +44,11 @@ impl RegistrySource for GemRegistrySource {
             vec!["fetch", package, "--version", version.trim()]
         };
 
-        let output = Command::new("gem")
-            .args(&args)
-            .current_dir(&download_dir)
-            .output()
-            .context("failed to run `gem fetch` (is gem on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "gem fetch failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        staging::run_tool("gem", &args, Some(&download_dir), "gem fetch")?;
 
         // Find the downloaded .gem file.
-        let gem_file = std::fs::read_dir(&download_dir)?
-            .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().ends_with(".gem"))
-            .context("gem fetch produced no .gem file")?;
-
-        let gem_path = gem_file.path();
-        let file_name = gem_file.file_name().to_string_lossy().to_string();
+        let (gem_path, file_name) =
+            staging::find_downloaded_archive(&download_dir, &[".gem"], "gem fetch")?;
 
         // Extract version from filename: "name-version.gem" or "name-version-platform.gem".
         let version = extract_gem_version(&file_name).unwrap_or("0.0.0");
@@ -80,30 +63,25 @@ impl RegistrySource for GemRegistrySource {
         // The gem structure after extraction:
         //   data.tar.gz    — the actual files
         //   metadata.gz    — gem specification
-        // We need to extract data.tar.gz into the final directory.
+        // Extract data.tar.gz when present; otherwise the archive is flat.
         let data_tgz = extract_dir.join("data.tar.gz");
-        if data_tgz.exists() {
+        let files_dir = if data_tgz.exists() {
             let files_dir = workdir.path().join("files");
             std::fs::create_dir_all(&files_dir)?;
             crate::build::extract(&data_tgz, &files_dir, "tar.gz")
                 .context("failed to extract gem data.tar.gz")?;
-
-            let description = read_gem_description(&extract_dir, &files_dir, cfg);
-
-            Ok(RegistryPayload {
-                files_dir,
-                resolved_version: version.to_string(),
-                description,
-            })
+            files_dir
         } else {
-            // Some gems have a flat structure.
-            let description = read_gem_description(&extract_dir, &extract_dir, cfg);
-            Ok(RegistryPayload {
-                files_dir: extract_dir,
-                resolved_version: version.to_string(),
-                description,
-            })
-        }
+            extract_dir.clone()
+        };
+
+        let description = staging::description_or(cfg, || read_gem_description(&extract_dir));
+
+        Ok(RegistryPayload {
+            files_dir,
+            resolved_version: version.to_string(),
+            description,
+        })
     }
 }
 
@@ -126,15 +104,7 @@ fn extract_gem_version(file_name: &str) -> Option<&str> {
 }
 
 /// Read gem description from metadata.gz or gemspec.
-fn read_gem_description(
-    extract_dir: &std::path::Path,
-    _files_dir: &std::path::Path,
-    cfg: &PackageConfig,
-) -> String {
-    if !cfg.description.is_empty() {
-        return cfg.description.clone();
-    }
-
+fn read_gem_description(extract_dir: &std::path::Path) -> String {
     // Try to read from metadata.gz (it's a YAML-serialized gem spec).
     let metadata_gz = extract_dir.join("metadata.gz");
     if !metadata_gz.exists() {

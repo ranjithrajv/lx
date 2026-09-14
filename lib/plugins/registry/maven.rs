@@ -10,11 +10,10 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct MavenRegistrySource;
 
@@ -64,26 +63,21 @@ impl RegistrySource for MavenRegistrySource {
         std::fs::write(&pom_path, pom).context("failed to write temporary pom.xml")?;
 
         // mvn dependency:copy-dependencies downloads all deps to the target dir.
-        let output = Command::new("mvn")
-            .args([
+        let out_dir = download_dir.to_string_lossy().to_string();
+        staging::run_tool(
+            "mvn",
+            &[
                 "dependency:copy-dependencies",
                 "-DoutputDirectory",
-                &download_dir.to_string_lossy(),
+                &out_dir,
                 "-DincludeScope",
                 "runtime",
                 "--batch-mode",
                 "--quiet",
-            ])
-            .current_dir(workdir.path())
-            .output()
-            .context("failed to run `mvn dependency:copy-dependencies` (is mvn on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "mvn dependency:copy-dependencies failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+            ],
+            Some(workdir.path()),
+            "mvn dependency:copy-dependencies",
+        )?;
 
         // Find the downloaded jar (and optionally sources jar).
         let jar_files: Vec<PathBuf> = std::fs::read_dir(&download_dir)?

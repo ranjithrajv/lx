@@ -10,12 +10,11 @@
 //! with self-contained deployments, the forge source (github) with release
 //! assets is usually better.
 
-use anyhow::{bail, Context, Result};
-use std::process::Command;
+use anyhow::{Context, Result};
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct NugetRegistrySource;
 
@@ -57,17 +56,8 @@ impl RegistrySource for NugetRegistrySource {
         ];
         args.extend(version_args);
 
-        let output = Command::new("nuget")
-            .args(&args)
-            .output()
-            .context("failed to run `nuget install` (is nuget on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "nuget install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        staging::run_tool("nuget", &arg_refs, None, "nuget install")?;
 
         // The package is extracted to <download_dir>/<PackageName>/
         // (even with -ExcludeVersion, the directory is named after the package).
@@ -75,16 +65,8 @@ impl RegistrySource for NugetRegistrySource {
         let files_dir = if package_dir.is_dir() {
             package_dir
         } else {
-            // Fallback: find the only directory in download_dir.
-            let entries: Vec<std::path::PathBuf> = std::fs::read_dir(&download_dir)?
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_dir())
-                .collect();
-            if entries.len() == 1 {
-                entries.into_iter().next().unwrap()
-            } else {
-                download_dir
-            }
+            // Fallback: the only directory in download_dir.
+            staging::unwrap_lone_dir(&download_dir)
         };
 
         let version = extract_nuget_version(&files_dir, package);

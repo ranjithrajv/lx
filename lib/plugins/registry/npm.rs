@@ -6,12 +6,11 @@
 //! for packaging. Uses `npm pack` to download the tarball, then extracts
 //! it into a staging directory.
 
-use anyhow::{bail, Context, Result};
-use std::process::Command;
+use anyhow::{Context, Result};
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct NpmRegistrySource;
 
@@ -41,33 +40,18 @@ impl RegistrySource for NpmRegistrySource {
         // skip the download; we want the actual tarball.
         let pack_output = workdir.path().join("pack");
         std::fs::create_dir_all(&pack_output)?;
+        let pack_dest = pack_output.to_string_lossy().to_string();
 
-        let output = Command::new("npm")
-            .args([
-                "pack",
-                &spec,
-                "--pack-destination",
-                &pack_output.to_string_lossy(),
-            ])
-            .output()
-            .context("failed to run `npm pack` (is npm on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "npm pack failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        staging::run_tool(
+            "npm",
+            &["pack", &spec, "--pack-destination", &pack_dest],
+            None,
+            "npm pack",
+        )?;
 
         // npm pack produces exactly one tarball: "<name>-<version>.tgz"
-        let tarball = std::fs::read_dir(&pack_output)?
-            .filter_map(|e| e.ok())
-            .find(|e| e.file_name().to_string_lossy().ends_with(".tgz"))
-            .context("npm pack produced no tarball")?;
-
-        let tarball_path = tarball.path();
-        let file_name = tarball.file_name();
-        let file_name = file_name.to_string_lossy();
+        let (tarball, file_name) =
+            staging::find_downloaded_archive(&pack_output, &[".tgz"], "npm pack")?;
 
         // Extract version from filename: "name-version.tgz"
         let version = file_name
@@ -78,23 +62,12 @@ impl RegistrySource for NpmRegistrySource {
 
         println!("npm: extracted {file_name} (version {version})");
 
-        // Extract the tarball.
-        let extract_dir = workdir.path().join("package");
-        std::fs::create_dir_all(&extract_dir)?;
-        crate::build::extract(&tarball_path, &extract_dir, "tar.gz")
-            .context("failed to extract npm tarball")?;
-
-        // npm tarballs nest everything under "package/". Use that if it
-        // exists and is the only entry.
-        let package_dir = extract_dir.join("package");
-        let files_dir = if package_dir.is_dir() && package_dir != extract_dir {
-            package_dir
-        } else {
-            extract_dir
-        };
+        // npm tarballs nest everything under "package/".
+        let files_dir =
+            staging::extract_payload(workdir.path(), &tarball, "tar.gz", "npm tarball")?;
 
         // Try to read description from package.json.
-        let description = read_package_description(&files_dir, cfg);
+        let description = staging::description_or(cfg, || read_package_description(&files_dir));
 
         Ok(RegistryPayload {
             files_dir,
@@ -105,10 +78,7 @@ impl RegistrySource for NpmRegistrySource {
 }
 
 /// Try to read the description field from package.json in the extracted dir.
-fn read_package_description(files_dir: &std::path::Path, cfg: &PackageConfig) -> String {
-    if !cfg.description.is_empty() {
-        return cfg.description.clone();
-    }
+fn read_package_description(files_dir: &std::path::Path) -> String {
     let pkg_json = files_dir.join("package.json");
     let Ok(text) = std::fs::read_to_string(&pkg_json) else {
         return String::new();

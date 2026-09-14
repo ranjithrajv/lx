@@ -11,11 +11,10 @@
 //! or tools that only publish to crates.io without GitHub releases.
 
 use anyhow::{bail, Context, Result};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::plugin::plugin_identity;
-use crate::plugins::registry::{RegistryPayload, RegistrySource};
+use crate::plugins::registry::{staging, RegistryPayload, RegistrySource};
 
 pub struct CargoRegistrySource;
 
@@ -49,23 +48,13 @@ impl RegistrySource for CargoRegistrySource {
         let install_root = workdir.path().join("install");
         std::fs::create_dir_all(&install_root)?;
 
-        let output = Command::new("cargo")
-            .args([
-                "install",
-                &spec,
-                "--root",
-                &install_root.to_string_lossy(),
-                "--locked",
-            ])
-            .output()
-            .context("failed to run `cargo install` (is cargo on PATH?)")?;
-
-        if !output.status.success() {
-            bail!(
-                "cargo install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
+        let root = install_root.to_string_lossy().to_string();
+        staging::run_tool(
+            "cargo",
+            &["install", &spec, "--root", &root, "--locked"],
+            None,
+            "cargo install",
+        )?;
 
         // cargo install puts binaries in <root>/bin/.
         let bin_dir = install_root.join("bin");
