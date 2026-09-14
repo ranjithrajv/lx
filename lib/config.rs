@@ -1160,7 +1160,10 @@ impl PackageConfig {
             // instead of mid-build.
             let base = c.split(':').next().unwrap_or("").trim();
             match base {
-                "gzip" | "gz" | "xz" | "zstd" | "none" => {}
+                // Keep this set in sync with `debarchive::CompressionKind`'s
+                // parser and the schema enum; `zst` and `gz` are accepted
+                // aliases, so validation must accept them too.
+                "gzip" | "gz" | "xz" | "zstd" | "zst" | "none" => {}
                 other => {
                     bail!("unsupported compression '{other}' (expected gzip, xz, zstd, or none)")
                 }
