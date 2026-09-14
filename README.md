@@ -19,7 +19,7 @@ repo publisher (`lx repo`).
 
 ## Packager architecture
 
-`lx` has four independent plugin dimensions, each extensible without
+`lx` has eight independent plugin dimensions, each extensible without
 editing the core pipeline:
 
 | Dimension | Purpose | Count | Selection |
@@ -31,7 +31,7 @@ editing the core pipeline:
 | **ArtifactFormat** | Unpack a release asset | 6 (tar.gz, tar.xz, tar.zst, tar, zip, raw) | `artifact_format:` / filename |
 | **Signer** | Sign the artifact | 3 (gpg-detach, rpm-pgp, deb-debsign) | `(package_format, sign_method)` |
 | **DependencyMapper** | Map deps to target names/syntax | 5 (debian, rpm, pacman, alpine, openwrt) | target `package_format` |
-| **RepoIndexer** | Publish a package index | 5 (apt, opkg, pacman, apk, rpm) | `lx repo --format` |
+| **PackageIndex** | Publish **or** read/discover a package index | 8 — 5 write (apt, opkg, pacman, apk, rpm) + 3 read (lx-community, aur, repology) | `lx repo --format` / `indexes.yaml` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
 available* (returns release metadata), RegistrySource fetches *specific
@@ -714,8 +714,8 @@ out across every *enabled* source — the
 [LX community index](https://github.com/ranjithrajv/lx-index) (recipes +
 prebuilt binaries), the [AUR](https://aur.archlinux.org/) (builds PKGBUILDs
 into native packages), and any custom index you register. New sources are
-**plugins**: implement the `IndexSource` trait and add one line to the registry
-— no fork, no recompile of core.
+**plugins**: implement the `PackageIndex` read role and add one line to the
+registry — no fork, no recompile of core.
 
 ```sh
 lx index search eza           # full-text across ALL enabled indexes

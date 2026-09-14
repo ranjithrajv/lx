@@ -3,27 +3,27 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::{parse_key_value, IndexOptions, RepoIndexer};
+use super::{parse_key_value, Capabilities, IndexOptions, PackageIndex};
 
 /// Arch Linux pacman repository: a `<repo>.db.tar.gz` database whose members
 /// are `<pkgname>-<pkgver>/desc` files, built from each package's `.PKGINFO`.
 pub struct PacmanIndexer;
 
-impl RepoIndexer for PacmanIndexer {
-    fn name(&self) -> &'static str {
+impl PackageIndex for PacmanIndexer {
+    fn id(&self) -> &'static str {
         "pacman"
-    }
-
-    fn format(&self) -> &'static str {
-        "arch"
     }
 
     fn description(&self) -> &'static str {
         "pacman repository (<repo>.db.tar.gz from .PKGINFO)"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "zst"
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::WRITE
+    }
+
+    fn file_extension(&self) -> Option<&'static str> {
+        Some("zst")
     }
 
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], opts: &IndexOptions) -> Result<()> {

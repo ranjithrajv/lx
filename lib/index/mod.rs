@@ -2,15 +2,18 @@
 //! `lx index` — a unified package-index manager.
 //!
 //! One command, many upstream indexes. Each *source* (AUR, the LX community
-//! index, a COPR, a custom apt repo, …) implements the [`IndexSource`] trait;
-//! the registry in `~/.config/lx/indexes.yaml` lists the enabled ones.
+//! index, a COPR, a custom apt repo, …) implements the
+//! [`PackageIndex`](crate::plugins::package_index::PackageIndex) trait's read
+//! role; the registry in `~/.config/lx/indexes.yaml` lists the enabled ones.
 //! `lx index search/install/info` fan out across every enabled source;
 //! `lx index add/remove/list` manage the registry.
 
-pub mod aur;
-pub mod lx_community;
 pub mod registry;
-pub mod repology;
+
+// The read backends are plugin implementations under
+// `lib/plugins/package_index/`. Re-exported here so the existing
+// `crate::index::<source>` paths keep resolving.
+pub use crate::plugins::package_index::{aur, lx_community, repology};
 
 // Re-export key types for ergonomic `crate::index::Registry` access.
 pub use registry::Registry;
@@ -44,17 +47,6 @@ pub struct IndexHit {
     pub host_version: Option<String>,
     /// Status of the host distro's version (newest/outdated/vulnerable/…).
     pub host_status: Option<String>,
-}
-
-/// What any package index must implement. New backends (COPR, custom apt, …)
-/// just implement this trait and add one line to
-/// [`registry::active_sources`](registry::active_sources).
-pub trait IndexSource: Send + Sync {
-    fn name(&self) -> &str;
-    fn search(&self, pattern: Option<&str>) -> Result<Vec<IndexHit>>;
-    fn info(&self, package: &str) -> Result<Option<IndexHit>>;
-    fn install(&self, package: &str, opts: InstallOpts) -> Result<()>;
-    fn update(&self) -> Result<bool>;
 }
 
 #[derive(Debug, Clone, Default)]
@@ -262,7 +254,7 @@ fn run_search(opts: SearchOpts) -> Result<()> {
     let mut sources = registry::active_sources(&reg);
     // --repo filter: keep only the named source.
     if let Some(ref filter) = opts.repo {
-        sources.retain(|s| s.name() == filter.as_str());
+        sources.retain(|s| s.instance_name() == filter.as_str());
         if sources.is_empty() {
             bail!(
                 "no enabled index named '{}'. Run `lx index list` to see available indexes.",
@@ -278,10 +270,10 @@ fn run_search(opts: SearchOpts) -> Result<()> {
                 let count = hits.len();
                 all.extend(hits);
                 if opts.verbose {
-                    per_source_counts.push((src.name(), count));
+                    per_source_counts.push((src.instance_name(), count));
                 }
             }
-            Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
+            Err(e) => eprintln!("⚠ {}: {e:#}", src.instance_name()),
         }
     }
     if opts.verbose {
@@ -394,9 +386,9 @@ fn run_update() -> Result<()> {
     }
     for src in &sources {
         match src.update() {
-            Ok(true) => println!("{}: updated", src.name()),
-            Ok(false) => println!("{}: up to date", src.name()),
-            Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
+            Ok(true) => println!("{}: updated", src.instance_name()),
+            Ok(false) => println!("{}: up to date", src.instance_name()),
+            Err(e) => eprintln!("⚠ {}: {e:#}", src.instance_name()),
         }
     }
     Ok(())
@@ -413,14 +405,14 @@ fn run_info(opts: InfoOpts) -> Result<()> {
             Ok(Some(h)) => {
                 found = true;
                 if opts.json {
-                    all_hits.push((src.name(), h));
+                    all_hits.push((src.instance_name(), h));
                 } else {
-                    println!("[{}]", src.name());
+                    println!("[{}]", src.instance_name());
                     print_info_hit(&h);
                 }
             }
             Ok(None) => {}
-            Err(e) => eprintln!("⚠ {}: {e:#}", src.name()),
+            Err(e) => eprintln!("⚠ {}: {e:#}", src.instance_name()),
         }
     }
     if opts.json {
@@ -546,10 +538,8 @@ fn run_list() -> Result<()> {
     for s in &reg.sources {
         let state = if s.enabled { "enabled" } else { "disabled" };
         let kind = match &s.kind {
-            registry::SourceKind::LxCommunity => "lx-community".to_string(),
-            registry::SourceKind::Aur => "aur".to_string(),
-            registry::SourceKind::Repology => "repology".to_string(),
             registry::SourceKind::Custom { url } => format!("custom ({url})"),
+            other => other.plugin_kind().unwrap_or("unknown").to_string(),
         };
         println!("{:<16} {:<14} {}", s.name, kind, state);
     }

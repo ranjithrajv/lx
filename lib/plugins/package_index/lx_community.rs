@@ -7,8 +7,9 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use super::{Capabilities, PackageIndex};
 use crate::debs::{confirm, detect_dist};
-use crate::index::{detect_host_format, IndexHit, IndexSource, InstallOpts};
+use crate::index::{detect_host_format, IndexHit, InstallOpts};
 use crate::install_pkg::{detect_arch, install_prebuilt};
 
 const REPO_URL: &str = "https://github.com/ranjithrajv/lx-index.git";
@@ -152,8 +153,20 @@ pub struct RecipeEntry {
     pub readme: Option<String>,
 }
 
-impl IndexSource for LxCommunitySource {
-    fn name(&self) -> &str {
+impl PackageIndex for LxCommunitySource {
+    fn id(&self) -> &'static str {
+        "lx-community"
+    }
+
+    fn description(&self) -> &'static str {
+        "LX community index (recipes + per-release prebuilts)"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::READ
+    }
+
+    fn instance_name(&self) -> &str {
         &self.name
     }
 

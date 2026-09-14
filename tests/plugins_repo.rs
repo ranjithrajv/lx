@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use lx_lib::plugins::repo::{
-    artifacts_with_ext, get_repo_indexer, repo_indexer_names, IndexOptions,
+use lx_lib::plugins::package_index::{
+    all_index_backends, artifacts_with_ext, get_index_backend, IndexOptions,
 };
 use std::io::Read;
 use std::path::Path;
@@ -38,14 +38,18 @@ fn read_tar_member(gz_bytes: &[u8], name: &str) -> Option<String> {
 
 #[test]
 fn registry_covers_every_package_format() {
-    let names = repo_indexer_names();
+    let write_ids: Vec<&str> = all_index_backends()
+        .iter()
+        .filter(|b| b.capabilities.can_write())
+        .map(|b| b.id)
+        .collect();
     for n in ["apt", "opkg", "pacman", "apk", "rpm"] {
-        assert!(names.contains(&n), "missing indexer {n}");
+        assert!(write_ids.contains(&n), "missing indexer {n}");
     }
     for f in ["deb", "ipk", "arch", "apk", "rpm"] {
-        assert!(get_repo_indexer(f).is_some(), "missing format {f}");
+        assert!(get_index_backend(f).is_some(), "missing format {f}");
     }
-    assert!(get_repo_indexer("nope").is_none());
+    assert!(get_index_backend("nope").is_none());
 }
 
 #[test]
@@ -58,8 +62,9 @@ fn opkg_writes_packages_from_ipk() {
     lx_lib::ipkarchive::build(&root, control.as_bytes(), 1_735_689_600, &ipk).unwrap();
 
     let arts = artifacts_with_ext(tmp.path(), "ipk").unwrap();
-    get_repo_indexer("ipk")
+    get_index_backend("ipk")
         .unwrap()
+        .make("ipk")
         .build_index(tmp.path(), &arts, &opts("openwrt", "test"))
         .unwrap();
 
@@ -90,8 +95,9 @@ fn pacman_writes_a_db_tarball_from_pkg() {
     lx_lib::archarchive::build(&root, &meta, "x86_64", 1_735_689_600, &pkg, None).unwrap();
 
     let arts = artifacts_with_ext(tmp.path(), "zst").unwrap();
-    get_repo_indexer("arch")
+    get_index_backend("arch")
         .unwrap()
+        .make("arch")
         .build_index(tmp.path(), &arts, &opts("core", "test"))
         .unwrap();
 
@@ -121,8 +127,9 @@ fn apk_writes_an_apkindex_tarball_from_apk() {
     lx_lib::apkarchive::build(&root, &meta, "x86_64", 1_735_689_600, &apk).unwrap();
 
     let arts = artifacts_with_ext(tmp.path(), "apk").unwrap();
-    get_repo_indexer("apk")
+    get_index_backend("apk")
         .unwrap()
+        .make("apk")
         .build_index(tmp.path(), &arts, &opts("alpine", "test"))
         .unwrap();
 

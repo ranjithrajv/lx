@@ -4,27 +4,27 @@ use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use super::{IndexOptions, RepoIndexer};
+use super::{Capabilities, IndexOptions, PackageIndex};
 
 /// OpenWrt/opkg repository: a `Packages` index plus `Packages.gz`, built
 /// from each `.ipk`'s control file (same RFC-2822 field syntax as `.deb`).
 pub struct OpkgIndexer;
 
-impl RepoIndexer for OpkgIndexer {
-    fn name(&self) -> &'static str {
+impl PackageIndex for OpkgIndexer {
+    fn id(&self) -> &'static str {
         "opkg"
-    }
-
-    fn format(&self) -> &'static str {
-        "ipk"
     }
 
     fn description(&self) -> &'static str {
         "opkg repository (Packages, Packages.gz)"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "ipk"
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::WRITE
+    }
+
+    fn file_extension(&self) -> Option<&'static str> {
+        Some("ipk")
     }
 
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], _opts: &IndexOptions) -> Result<()> {

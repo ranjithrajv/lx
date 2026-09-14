@@ -2,13 +2,43 @@
 
 ## Unreleased
 
+### PackageIndex plugin dimension (merged RepoIndexer + IndexSource)
+
+- **`RepoIndexer` (write) and `IndexSource` (read) are now one dimension.**
+  Both sides are `PackageIndex` backends in `lib/plugins/package_index/`,
+  selected by canonical id (`apt`, `opkg`, `pacman`, `apk`, `rpm`,
+  `lx-community`, `aur`, `repology`); the user-facing `lx repo --format`
+  values are an alias table (`FORMAT_ALIASES`: `deb→apt`, `ipk→opkg`,
+  `arch→pacman`, `apk`/`rpm` unchanged).
+- The trait defaults every role method and exposes
+  `Capabilities::{READ, WRITE}`, so each backend implements only its half
+  (write: `file_extension`/`build_index`/`sign_index`; read:
+  `search`/`info`/`update`/`install`) rather than stubbing the other. Read
+  backends keep the configured `indexes.yaml` name via `instance_name()`
+  (used for `IndexHit::source` and the `--repo` filter) while `id()` stays
+  canonical; a future local-repo readback backend can implement both roles.
+- `get_index_backend()`/`all_index_backends()` replace `get_repo_indexer()`
+  and `get_index_source()` in `lib/repo.rs` and `lib/index/registry.rs`; the
+  `SourceKind` → constructor `match` is gone (`SourceKind::plugin_kind()`
+  maps the config kind to the id). The three read backends are re-exported
+  as `crate::index::{lx_community,aur,repology}` so
+  `lib/search.rs`/`lib/upgrade.rs`/`lib/repology_depmap.rs` are unchanged.
+- The read backends moved from `lib/index/*.rs` and the write backends from
+  `lib/plugins/repo/*.rs` into `lib/plugins/package_index/`; `IndexOptions`
+  lives there too.
+- `tests/index_merge_golden.rs` freezes `lx repo` output for
+  deb/ipk/arch/apk (+ multi-suite) as normalized SHA-256 goldens
+  (`UPDATE_GOLDENS=1` regenerates) and asserts the registry covers all 8
+  backends with the expected capabilities. No behaviour change to `lx repo`
+  or `lx index`.
+
 ### Repository index signing for every format
 
 - `lx repo --sign-key` now signs the index for **opkg** (`Packages.sig`),
   **pacman** (`<repo>.db.tar.gz.sig`), and **rpm**
   (`repodata/repomd.xml.asc`), not just apt. Alpine's `APKINDEX` needs an
   RSA repository key (not OpenPGP), so it reports "unsupported" rather
-  than silently skipping. Implemented via `RepoIndexer::sign_index`.
+  than silently skipping. Implemented via `PackageIndex::sign_index`.
 - apt `InRelease` is now a real **inline-clearsigned** document
   (`gpg --clearsign`); the previous build wrote an armored *detached*
   signature there. `Release.gpg` (armored detached) is written alongside.
@@ -52,10 +82,11 @@
   `name>=ver` and translates libc/runtime names; OpenWrt translates names
   but keeps opkg syntax. `depmap::map_dependency` routes through the
   registry.
-- **RepoIndexer** (`lib/plugins/repo/`) — `lx repo --format
-  deb|ipk|arch|apk|rpm` now writes apt, opkg, pacman, Alpine, or RPM
-  repository indexes. The apt path delegates to the original `repo.rs`
-  implementation.
+- **PackageIndex (write role)** (`lib/plugins/package_index/`) — `lx repo
+  --format deb|ipk|arch|apk|rpm` now writes apt, opkg, pacman, Alpine, or
+  RPM repository indexes; the `IndexSource` read role was merged into the
+  same dimension later (see above). The apt path delegates to the original
+  `repo.rs` implementation.
 
 ### Removed: duplicate GitHub source plugin and octocrab
 

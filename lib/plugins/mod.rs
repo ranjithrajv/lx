@@ -19,8 +19,8 @@ pub mod deb;
 pub mod depmap;
 pub mod forge;
 pub mod ipk;
+pub mod package_index;
 pub mod registry;
-pub mod repo;
 pub mod rpm;
 pub mod signer;
 

@@ -130,7 +130,7 @@ Target-format rebuilds always go through the in-process packagers
 
 | Tool | Module | Purpose |
 |---|---|---|
-| `git` | `lib/index/lx_community.rs` | shallow clone / pull of the LX community recipe index; works offline on a stale cache |
+| `git` | `lib/plugins/package_index/lx_community.rs` | shallow clone / pull of the LX community recipe index; works offline on a stale cache |
 | `snap` | `lib/go_native.rs` | `snap list` to detect; `snap remove` (apply); `apt-get remove snapd` (`--remove-manager`) |
 | `flatpak` | `lib/go_native.rs` | `flatpak list --app`; `flatpak uninstall -y` |
 | `nix` | `lib/go_native.rs` | `nix profile list`; `nix profile remove` |
@@ -153,9 +153,9 @@ These are HTTP APIs and feeds, not local binaries. All go through
 | Gerrit REST | `lib/gerrit.rs`, `forge/gerrit.rs` |
 | Gitee API v5 | `lib/gitee.rs`, `forge/gitee.rs` |
 | SourceForge project RSS (files as pseudo-releases) | `lib/sourceforge.rs`, `forge/sourceforge.rs` |
-| Repology API (`--distro`, `index update/outdated/coverage`) | `lib/index/repology.rs` |
-| AUR RPC + cgit (`PKGBUILD` fetch) | `lib/index/aur.rs` |
-| LX community index git repo | `lib/index/lx_community.rs` |
+| Repology API (`--distro`, `index update/outdated/coverage`) | `lib/plugins/package_index/repology.rs` |
+| AUR RPC + cgit (`PKGBUILD` fetch) | `lib/plugins/package_index/aur.rs` |
+| LX community index git repo | `lib/plugins/package_index/lx_community.rs` |
 | Sigstore / Rekor | via `cosign` |
 | Anonymous telemetry POST (GitHub Action only) | `action.yml` (curl), `lib/telemetry.rs` writes local metrics only |
 
@@ -358,7 +358,7 @@ keeps fail-closed checksum verification instead.
 and builds it through the normal source path — so an AUR package becomes a
 native `.deb`/`.rpm`/`.pkg.tar.zst` without `makepkg`. Deliberate
 difference from makedeb: recipes are **never executed** — PKGBUILD shell
-becomes comments, not code (`lib/wizard.rs`, `lib/index/aur.rs`). Arch
+becomes comments, not code (`lib/wizard.rs`, `lib/plugins/package_index/aur.rs`). Arch
 dependency names are kept verbatim for downstream mapping.
 
 ### 2.10 `cargo-deb` / `cargo-dist` / `goreleaser` / `*2deb`

@@ -3,18 +3,14 @@
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 
-use super::{parse_key_value, IndexOptions, RepoIndexer};
+use super::{parse_key_value, Capabilities, IndexOptions, PackageIndex};
 
 /// Alpine apk repository: an `APKINDEX.tar.gz` archive containing the
 /// `APKINDEX` text plus a `DESCRIPTION`, built from each `.apk`'s `.PKGINFO`.
 pub struct ApkIndexer;
 
-impl RepoIndexer for ApkIndexer {
-    fn name(&self) -> &'static str {
-        "apk"
-    }
-
-    fn format(&self) -> &'static str {
+impl PackageIndex for ApkIndexer {
+    fn id(&self) -> &'static str {
         "apk"
     }
 
@@ -22,8 +18,12 @@ impl RepoIndexer for ApkIndexer {
         "Alpine repository (APKINDEX.tar.gz from .PKGINFO)"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "apk"
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::WRITE
+    }
+
+    fn file_extension(&self) -> Option<&'static str> {
+        Some("apk")
     }
 
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], opts: &IndexOptions) -> Result<()> {

@@ -18,8 +18,9 @@ use regex::Regex;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use super::{Capabilities, PackageIndex};
 use crate::debs::{detect_dist, detect_dpkg_arch};
-use crate::index::{IndexHit, IndexSource, InstallOpts};
+use crate::index::{IndexHit, InstallOpts};
 
 const API_BASE: &str = "https://repology.org/api/v1";
 const PROJECTS_PAGE: &str = "projects/";
@@ -353,8 +354,20 @@ impl RepologySource {
     }
 }
 
-impl IndexSource for RepologySource {
-    fn name(&self) -> &str {
+impl PackageIndex for RepologySource {
+    fn id(&self) -> &'static str {
+        "repology"
+    }
+
+    fn description(&self) -> &'static str {
+        "Repology cross-distro metadata (read-only)"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::READ
+    }
+
+    fn instance_name(&self) -> &str {
         &self.name
     }
 

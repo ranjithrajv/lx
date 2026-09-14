@@ -60,35 +60,45 @@ pub fn run(args: RepoArgs) -> Result<()> {
     }
 
     // Multi-suite mode is apt-specific; every other case routes through the
-    // RepoIndexer plugin registry (build + sign).
+    // PackageIndex plugin registry (write role: build + sign).
     if args.multi_suite && args.format.eq_ignore_ascii_case("deb") {
         return run_multi_suite(&args);
     }
     run_format(&args)
 }
 
-/// Route a non-apt `--format` through the `RepoIndexer` plugin registry.
+/// Route a `--format` through the [`package_index`](crate::plugins::package_index)
+/// plugin registry's write role. Multi-suite apt is handled separately.
 fn run_format(args: &RepoArgs) -> Result<()> {
-    let indexer = crate::plugins::repo::get_repo_indexer(&args.format).ok_or_else(|| {
+    use crate::plugins::package_index::{self, FORMAT_ALIASES};
+
+    let backend = package_index::get_index_backend(&args.format).ok_or_else(|| {
         anyhow::anyhow!(
             "unsupported --format '{}' (expected one of: {})",
             args.format,
-            crate::plugins::repo::all_repo_indexers()
+            FORMAT_ALIASES
                 .iter()
-                .map(|i| i.format())
+                .map(|(alias, _)| *alias)
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     })?;
-    let artifacts = crate::plugins::repo::artifacts_with_ext(&args.dir, indexer.file_extension())?;
-    if artifacts.is_empty() {
+    if !backend.capabilities.can_write() {
         bail!(
-            "no .{} files in '{}'",
-            indexer.file_extension(),
-            args.dir.display()
+            "--format '{}' resolves to '{}', which cannot publish a repository index",
+            args.format,
+            backend.id
         );
     }
-    let opts = crate::plugins::repo::IndexOptions {
+    let indexer = backend.make(&args.format);
+    let ext = indexer
+        .file_extension()
+        .ok_or_else(|| anyhow::anyhow!("'{}' has no artifact extension", backend.id))?;
+    let artifacts = package_index::artifacts_with_ext(&args.dir, ext)?;
+    if artifacts.is_empty() {
+        bail!("no .{ext} files in '{}'", args.dir.display());
+    }
+    let opts = package_index::IndexOptions {
         suite: &args.suite,
         origin: &args.origin,
         components: &args.components,

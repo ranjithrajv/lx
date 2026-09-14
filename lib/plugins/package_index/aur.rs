@@ -7,7 +7,8 @@
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-use crate::index::{IndexHit, IndexSource, InstallOpts};
+use super::{Capabilities, PackageIndex};
+use crate::index::{IndexHit, InstallOpts};
 
 const AUR_RPC: &str = "https://aur.archlinux.org/rpc/?v=5";
 
@@ -70,8 +71,20 @@ struct RpcMulti {
     results: Vec<RpcResult>,
 }
 
-impl IndexSource for AurSource {
-    fn name(&self) -> &str {
+impl PackageIndex for AurSource {
+    fn id(&self) -> &'static str {
+        "aur"
+    }
+
+    fn description(&self) -> &'static str {
+        "Arch User Repository (PKGBUILD → native build)"
+    }
+
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::READ
+    }
+
+    fn instance_name(&self) -> &str {
         &self.name
     }
 
@@ -139,7 +152,7 @@ impl IndexSource for AurSource {
             bail!("aborted");
         }
         println!("building AUR '{package}' from PKGBUILD …");
-        crate::index::lx_community::build_from_recipe(&yaml, package, &opts)
+        super::lx_community::build_from_recipe(&yaml, package, &opts)
     }
 
     fn update(&self) -> Result<bool> {

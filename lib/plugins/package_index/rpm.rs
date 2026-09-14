@@ -4,19 +4,15 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use super::{IndexOptions, RepoIndexer};
+use super::{Capabilities, IndexOptions, PackageIndex};
 
 /// RPM (dnf/yum/zypper) repository: a `repodata/repomd.xml` plus a gzipped
 /// `primary.xml`. Package metadata is read with `rpm -qp` (the same host-tool
 /// fallback `convert.rs` uses for RPM input).
 pub struct RpmIndexer;
 
-impl RepoIndexer for RpmIndexer {
-    fn name(&self) -> &'static str {
-        "rpm"
-    }
-
-    fn format(&self) -> &'static str {
+impl PackageIndex for RpmIndexer {
+    fn id(&self) -> &'static str {
         "rpm"
     }
 
@@ -24,8 +20,12 @@ impl RepoIndexer for RpmIndexer {
         "RPM repository (repodata/repomd.xml + primary.xml.gz)"
     }
 
-    fn file_extension(&self) -> &'static str {
-        "rpm"
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::WRITE
+    }
+
+    fn file_extension(&self) -> Option<&'static str> {
+        Some("rpm")
     }
 
     fn build_index(&self, dir: &Path, artifacts: &[PathBuf], _opts: &IndexOptions) -> Result<()> {

@@ -1,6 +1,6 @@
 # Packager Architecture
 
-**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource; 2026-09-14: +5 Packagers/Sources/BuildSystems; 2026-09-14: +4 cross-cutting dimensions)
+**Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource; 2026-09-14: +5 Packagers/Sources/BuildSystems; 2026-09-14: +4 cross-cutting dimensions; 2026-09-14: +IndexSource; 2026-09-14: merged RepoIndexer + IndexSource into PackageIndex)
 **Status:** Implemented — 8 independent plugin dimensions:
 * **5× Packager:** `deb` + `rpm` + `arch` + `apk` + `ipk`
 * **8× ForgeSource:** `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit` + `gitee` + `sourceforge`
@@ -9,16 +9,17 @@
 * **6× ArtifactFormat:** `tar.gz` + `tar.xz` + `tar.zst` + `tar` + `zip` + `raw`
 * **3× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign`
 * **5× DependencyMapper:** `debian` + `rpm` + `pacman` + `alpine` + `openwrt`
-* **5× RepoIndexer:** `apt` + `opkg` + `pacman` + `apk` + `rpm`
+* **8× PackageIndex:** 5 write (`apt` + `opkg` + `pacman` + `apk` + `rpm`) + 3 read (`lx-community` + `aur` + `repology`)
 
 `lx` builds Linux packages from many kinds of upstream. The original
-implementation only produced Debian `.deb`s from GitHub. To support RPM/Arc,
-multiple forges, source compilation, and language package managers without
-forking the core pipeline, the build was refactored into a **format-agnostic
-core + four-dimensional pluggable system**.
+implementation only produced Debian `.deb`s from GitHub. To support RPM/Arch,
+multiple forges, source compilation, language package managers, and
+pluggable package indexes without forking the core pipeline, the build (and
+the `lx index` fan-out) was refactored into a **format-agnostic core +
+multi-dimensional pluggable system**.
 
 This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at
-repo root, but adds three more dimensions:
+repo root, but adds more dimensions:
 
 * **Packager plugins** (`lib/plugins/{deb,rpm,arch,apk,ipk}.rs` + `lib/{deb,rpm,arch,apk,ipk}archive.rs`) → produce installable artifact
 * **ForgeSource plugins** (`lib/plugins/forge/{github,gitlab,gitee,sourceforge}.rs` + `lib/{github,gitlab,gitee,sourceforge}.rs`) → discover **what** is available (releases, assets, versions)
@@ -94,7 +95,8 @@ files are already on disk). Both feed into the same `Package` plugins.
 
 `lib/plugins/mod.rs`, `lib/plugins/forge/mod.rs`, `lib/plugins/build_system/mod.rs`, `lib/plugins/registry/mod.rs`
 
-Four independent plugin dimensions, each with its own trait and registry:
+The four core dimensions, each with its own trait and registry (the
+cross-cutting dimensions added later are in §12):
 
 ```rust
 // Packager — lib/plugins/mod.rs
@@ -498,7 +500,7 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `RepoIndexer` traits — 5 + 8 + 7 + 11 + 6 + 3 + 5 + 5 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `PackageIndex` traits — 5 + 8 + 7 + 11 + 6 + 3 + 5 + 8 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |
@@ -508,15 +510,15 @@ See `docs/decisions/2026-08-20-nfpm-adoptions.md` and `README.md` for the `nfpm`
 ## 12. Cross-cutting plugin dimensions
 
 The original four dimensions answer *"where does the payload come from /
-what does it become."* Four more cover lifecycles that used to be hardcoded
-`match format` branches in the core:
+what does it become."* Four more cover cross-cutting lifecycles and the
+`lx index` fan-out that used to be hardcoded `match` branches in the core:
 
 | Dimension | Trait / registry | Impls | Selected by | Replaces |
 |---|---|---|---|---|
 | **ArtifactFormat** | `lib/plugins/artifact/mod.rs` | `tar.gz` `tar.xz` `tar.zst` `tar` `zip` `raw` | `artifact_format:` / auto-detect | `build.rs::extract` + `discovery::guess_format` match |
 | **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
 | **DependencyMapper** | `lib/plugins/depmap/mod.rs` | `debian` `rpm` `pacman` `alpine` `openwrt` | target `package_format` | per-format `match` inside `depmap.rs` |
-| **RepoIndexer** | `lib/plugins/repo/mod.rs` | `apt` `opkg` `pacman` `apk` `rpm` | `lx repo --format` | apt-only `lib/repo.rs` |
+| **PackageIndex** | `lib/plugins/package_index/mod.rs` | 5 write (`apt` `opkg` `pacman` `apk` `rpm`) + 3 read (`lx-community` `aur` `repology`) | `lx repo --format` / `indexes.yaml` | apt-only `lib/repo.rs` + `SourceKind` match in `index/registry.rs` |
 
 * **ArtifactFormat** — `artifact_format:` (or filename auto-detection)
   selects how an upstream archive is unpacked. `tar.xz`/`tar.zst` are new;
@@ -530,13 +532,29 @@ what does it become."* Four more cover lifecycles that used to be hardcoded
   ecosystem→Debian tables in `depmap.rs`; Alpine renders `name>=ver` and
   translates libc/runtime names; OpenWrt translates names but keeps opkg's
   Debian-style syntax.
-* **RepoIndexer** — `lx repo --format deb|ipk|arch|apk|rpm` writes the
-  format's index (`Packages`/`Release`, `Packages`, `<repo>.db.tar.gz`,
-  `APKINDEX.tar.gz`, `repodata/`). The apt indexer delegates to the original
-  `repo.rs` implementation; the others read each artifact's metadata
-  (`.ipk` control, `.PKGINFO`, `rpm -qp`) in-process. Index **signing** is
-  also per-format (`RepoIndexer::sign_index`, run after `build_index`):
-  apt `InRelease` (inline-clearsigned) + `Release.gpg`, opkg `Packages.sig`,
-  pacman `<repo>.db.tar.gz.sig`, rpm `repodata/repomd.xml.asc`. Alpine's
-  RSA-key scheme has no OpenPGP equivalent, so `apk` reports unsupported.
+* **PackageIndex** — one trait ([`PackageIndex`]) covering both sides of an
+  index, with per-role defaults so a backend implements only the half it
+  needs (`Capabilities::{READ, WRITE}`). **Write** (`lx repo --format
+  deb|ipk|arch|apk|rpm`): writes the format's index (`Packages`/`Release`,
+  `Packages`, `<repo>.db.tar.gz`, `APKINDEX.tar.gz`, `repodata/`); the apt
+  backend delegates to the original `repo.rs`, the others read each
+  artifact's metadata (`.ipk` control, `.PKGINFO`, `rpm -qp`) in-process.
+  Index **signing** is per-format too (`sign_index`, run after
+  `build_index`): apt `InRelease` (inline-clearsigned) + `Release.gpg`, opkg
+  `Packages.sig`, pacman `<repo>.db.tar.gz.sig`, rpm
+  `repodata/repomd.xml.asc`; Alpine's RSA-key scheme has no OpenPGP
+  equivalent, so `apk` reports unsupported. **Read** (`lx index
+  search/info/install/update`): fans out over every enabled source, looked
+  up by canonical id in the registry (`get_index_backend`) rather than a
+  hardcoded `match`; the LX community index and the AUR build/install,
+  Repology is metadata-only and refuses `install`. Selection is by canonical
+  id (`apt`, `opkg`, `pacman`, `apk`, `rpm`, `lx-community`, `aur`,
+  `repology`); the `lx repo --format` vocabulary is an alias table
+  (`FORMAT_ALIASES`: `deb→apt`, `ipk→opkg`, `arch→pacman`), and read
+  backends expose the configured `indexes.yaml` name via `instance_name()`.
+  `SourceKind::plugin_kind()` maps the config kind to the registry id;
+  `Custom` is not yet a plugin. Adding a backend is implementing
+  `PackageIndex` and one line in `all_index_backends()`; the trait and impls
+  live in `lib/plugins/package_index/` and the read backends are re-exported
+  as `crate::index::<kind>` for the existing call sites.
 

@@ -4,7 +4,7 @@
 //! `InRelease`). Each test generates a throwaway gpg key and skips cleanly
 //! when gpg (or, for rpm, the `rpm` CLI) isn't available.
 
-use lx_lib::plugins::repo::{get_repo_indexer, IndexOptions};
+use lx_lib::plugins::package_index::{get_index_backend, IndexOptions};
 use lx_lib::repo::{run, RepoArgs};
 use std::path::{Path, PathBuf};
 
@@ -168,8 +168,9 @@ fn rpm_writes_repomd_asc() {
         sign_key: Some(&key),
         sign_key_id: "",
     };
-    get_repo_indexer("rpm")
+    get_index_backend("rpm")
         .unwrap()
+        .make("rpm")
         .sign_index(tmp.path(), &opts)
         .unwrap();
     let asc = std::fs::read_to_string(repodata.join("repomd.xml.asc")).unwrap();

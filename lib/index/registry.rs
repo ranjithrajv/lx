@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Index registry: the list of enabled [`IndexSource`]s, persisted to
-//! `~/.config/lx/indexes.yaml`.
+//! Index registry: the list of enabled package-index read backends,
+//! persisted to `~/.config/lx/indexes.yaml`.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-use super::aur::AurSource;
-use super::lx_community::LxCommunitySource;
-use super::repology::RepologySource;
+use crate::plugins::package_index::{get_index_backend, PackageIndex};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Registry {
@@ -35,6 +33,20 @@ pub enum SourceKind {
     Repology,
     /// A user-added custom index (git URL + format).
     Custom { url: String },
+}
+
+impl SourceKind {
+    /// Canonical backend id for this source, as registered in
+    /// [`crate::plugins::package_index`]. `Custom` is not yet a plugin
+    /// (future work) and yields `None`.
+    pub fn plugin_kind(&self) -> Option<&'static str> {
+        match self {
+            SourceKind::LxCommunity => Some("lx-community"),
+            SourceKind::Aur => Some("aur"),
+            SourceKind::Repology => Some("repology"),
+            SourceKind::Custom { .. } => None,
+        }
+    }
 }
 
 impl Registry {
@@ -126,25 +138,16 @@ impl Registry {
     }
 }
 
-/// Build the concrete source instances for every enabled entry.
-pub fn active_sources(reg: &Registry) -> Vec<Box<dyn super::IndexSource>> {
+/// Build the concrete source instances for every enabled entry by looking
+/// each one up in the [`crate::plugins::package_index`] registry. `Custom`
+/// backends are future work and are skipped.
+pub fn active_sources(reg: &Registry) -> Vec<Box<dyn PackageIndex>> {
     reg.sources
         .iter()
         .filter(|s| s.enabled)
-        .filter_map(|s| match &s.kind {
-            SourceKind::LxCommunity => {
-                Some(Box::new(LxCommunitySource::new(&s.name)) as Box<dyn super::IndexSource>)
-            }
-            SourceKind::Aur => {
-                Some(Box::new(AurSource::new(&s.name)) as Box<dyn super::IndexSource>)
-            }
-            SourceKind::Repology => {
-                Some(Box::new(RepologySource::new(&s.name)) as Box<dyn super::IndexSource>)
-            }
-            SourceKind::Custom { url: _ } => {
-                // Custom backends are future work; skip for now.
-                None
-            }
+        .filter_map(|s| {
+            let backend = get_index_backend(s.kind.plugin_kind()?)?;
+            Some(backend.make(&s.name))
         })
         .collect()
 }

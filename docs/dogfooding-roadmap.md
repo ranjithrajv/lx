@@ -322,7 +322,7 @@ installs it. No check that the host has the required shared libraries.
 ## Implementation phases
 
 ### Phase 1 (done)
-- Repology backend (`lib/index/repology.rs`) with API + JSON cache
+- Repology backend (`lib/plugins/package_index/repology.rs`) with API + JSON cache
 - `lx index update` refreshes repology data (5 pages, ~1000 projects)
 - `lx index status` shows host distro identity and cache state
 - `lx index outdated` lists packages where host distro lags upstream
