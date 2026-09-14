@@ -17,6 +17,44 @@ GitHub Action, usable as a local CLI (`lx`, with the `lx get` consumer
 subcommand), as a GitHub Action (`action.yml`, see below), and as a
 repo publisher (`lx repo`).
 
+It's also **host-aware**: `lx` auto-detects the OS, architecture, package
+manager, and native package format it's running on, then defaults each
+command to suit — one CLI, no per-distro runbook.
+
+## Host detection & smart defaults
+
+`lx` detects the machine it's running on and adapts, instead of making you
+configure per distro. `lx info` prints the whole picture — read-only and
+offline, nothing downloaded or installed:
+
+```
+$ lx info
+Host information
+  OS               Debian GNU/Linux 13 (trixie)
+  OS ID            debian 13
+  Codename         trixie
+  Kernel           6.12.6-amd64
+  Machine          x86_64
+  Architecture     amd64
+  Package manager  apt
+  Package format   deb
+  Asset dist       trixie
+```
+
+Anything that can vary uses that detection as its **default**, so the same
+command line adapts across Debian, Fedora, and Arch hosts:
+
+| Detected | From | Where it's used |
+|---|---|---|
+| Native package format (`deb`/`rpm`/`arch`/`apk`/`ipk`) | the host package manager | `lx repo --format` and `lx init`'s package format (deb/rpm/arch/apk); `lx convert --to` and the consumer `install`/`upgrade`/`remove`/`list` (deb/rpm/arch) |
+| Host package manager (`apt`/`dnf`/`zypper`/`pacman`/`apk`/`xbps`) | `PATH` probe | `--install-build-deps` installs missing build dependencies with the host's own manager |
+| Architecture, in Debian naming | `uname -m` | `lx build --host`, `lx scan-deps`'s host-only default scan |
+| Distro codename / RPM family | `/etc/os-release` | the release-asset "dist" token `lx install`/`upgrade` match prebuilt packages against |
+
+Every inferred default is announced and every flag still overrides it (`lx
+convert --to rpm`, `lx repo --format deb`, `lx build --format rpm`, …), and
+`lx info --json` exposes the same detection for scripts and CI.
+
 ## Packager architecture
 
 `lx` has eight independent plugin dimensions, each extensible without
@@ -245,33 +283,19 @@ Report what `lx` detects about this host — read-only and offline, nothing is
 downloaded or installed. It parses `/etc/os-release`, runs `uname`, and probes
 `PATH` for the host package manager, then prints the OS, kernel, architecture,
 package manager, native package format, and the distro token `lx install`/
-`lx upgrade` match prebuilt release assets against:
+`lx upgrade` match prebuilt release assets against (see [Host detection &
+smart defaults](#host-detection--smart-defaults) for the sample output):
 
 ```sh
 lx info            # human report
 lx info --json     # machine-readable, for scripts/CI
 ```
 
-```
-Host information
-  OS               Debian GNU/Linux 13 (trixie)
-  OS ID            debian 13
-  Codename         trixie
-  Kernel           6.12.6-amd64
-  Machine          x86_64
-  Architecture     amd64
-  Package manager  apt
-  Package format   deb
-  Asset dist       trixie
-```
-
 Useful when a package is missing from a release (the `Asset dist` token is
 what the consumer looks for) or to confirm which format `lx get` will pick on
-an rpm, pacman, or Alpine host.
-
-The same detection powers smart defaults elsewhere: `lx convert --to`,
-`lx repo --format`, and `lx init`'s `package_format` prompt all fall back to
-the host's native format unless you say otherwise.
+an rpm, pacman, or Alpine host. The same detection powers the smart defaults
+of `lx convert --to`, `lx repo --format`, and `lx init`'s `package_format`
+prompt.
 
 Run `lx <command> --help` for the full flag reference. A few worth calling
 out:
