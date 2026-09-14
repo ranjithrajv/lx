@@ -161,18 +161,23 @@ pub fn detect_architecture(ecosystem: &str, has_compiled_extensions: bool) -> &'
     }
 }
 
-/// True if the package directory contains compiled extensions (.so, .bundle, .node).
+/// True if `name` carries a compiled-extension suffix.
+fn has_compiled_ext(name: &str) -> bool {
+    name.ends_with(".so")
+        || name.ends_with(".bundle")
+        || name.ends_with(".node")
+        || name.ends_with(".dylib")
+}
+
+/// True if the package directory (or one of its immediate subdirectories)
+/// contains a compiled extension (`.so`, `.bundle`, `.node`, `.dylib`).
 pub fn has_compiled_extensions(dir: &std::path::Path) -> bool {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() {
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                if name.ends_with(".so")
-                    || name.ends_with(".bundle")
-                    || name.ends_with(".node")
-                    || name.ends_with(".dylib")
-                {
+                if has_compiled_ext(&name) {
                     return true;
                 }
             } else if let Ok(subdir) = std::fs::read_dir(&path) {
@@ -180,11 +185,7 @@ pub fn has_compiled_extensions(dir: &std::path::Path) -> bool {
                     let subpath = subentry.path();
                     if subpath.is_file() {
                         let subname = subpath.file_name().unwrap_or_default().to_string_lossy();
-                        if subname.ends_with(".so")
-                            || subname.ends_with(".bundle")
-                            || subname.ends_with(".node")
-                            || subname.ends_with(".dylib")
-                        {
+                        if has_compiled_ext(&subname) {
                             return true;
                         }
                     }
@@ -268,9 +269,23 @@ mod tests {
     }
 
     #[test]
-    fn has_compiled_detects_so() {
-        // This test would need a temp dir with a .so file.
-        // For now, test the function signature compiles.
-        let _ = has_compiled_extensions;
+    fn has_compiled_detects_so_flat_and_nested() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!has_compiled_extensions(dir.path()));
+
+        // Flat: a .so in the package root.
+        std::fs::write(dir.path().join("mod.so"), b"x").unwrap();
+        assert!(has_compiled_extensions(dir.path()));
+        std::fs::remove_file(dir.path().join("mod.so")).unwrap();
+
+        // Nested: a .node one level down.
+        let sub = dir.path().join("lib");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("native.node"), b"x").unwrap();
+        assert!(has_compiled_extensions(dir.path()));
+
+        // A non-compiled file and a missing dir are both false.
+        assert!(!has_compiled_ext("mod.rs"));
+        assert!(!has_compiled_extensions(&dir.path().join("does-not-exist")));
     }
 }
