@@ -4,18 +4,11 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::ArtifactFormat;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct PlainTar;
 
 impl ArtifactFormat for PlainTar {
-    fn name(&self) -> &'static str {
-        "tar"
-    }
-
-    fn description(&self) -> &'static str {
-        "uncompressed tarball (.tar)"
-    }
-
     fn recognizes(&self, file_name: &str) -> bool {
         file_name.ends_with(".tar")
     }
@@ -27,3 +20,5 @@ impl ArtifactFormat for PlainTar {
             .with_context(|| format!("failed to extract '{}'", archive.display()))
     }
 }
+
+plugin_identity!(PlainTar, "tar", "uncompressed tarball (.tar)");

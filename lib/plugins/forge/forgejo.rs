@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct ForgejoForgeSource;
 
+plugin_identity!(
+    ForgejoForgeSource,
+    "forgejo",
+    "Forgejo Releases (codeberg.org / self-hosted, Forgejo/Gitea API v1)"
+);
+
 impl ForgeSource for ForgejoForgeSource {
-    fn name(&self) -> &'static str {
-        "forgejo"
-    }
-
-    fn description(&self) -> &'static str {
-        "Forgejo Releases (codeberg.org / self-hosted, Forgejo/Gitea API v1)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("FORGEJO_TOKEN")
     }

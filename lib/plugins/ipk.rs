@@ -12,20 +12,19 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::{BuildContext, Packager};
+use crate::plugins::plugin::plugin_identity;
 
 pub struct IpkPackager;
 
-impl Packager for IpkPackager {
-    fn name(&self) -> &'static str {
-        "ipk"
-    }
+plugin_identity!(
+    IpkPackager,
+    "ipk",
+    "OpenWrt package (.ipk) — ar + control.tar.gz + data.tar.gz (opkg)"
+);
 
+impl Packager for IpkPackager {
     fn file_extension(&self) -> &'static str {
         "ipk"
-    }
-
-    fn description(&self) -> &'static str {
-        "OpenWrt package (.ipk) — ar + control.tar.gz + data.tar.gz (opkg)"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {

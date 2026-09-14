@@ -1,23 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::DependencyMapper;
+use crate::plugins::plugin::plugin_identity;
 
 /// OpenWrt (opkg) dependency syntax. opkg uses Debian-style
 /// `name (>= version)` rendering, so only the package-name translation
 /// differs from the deb mapper.
 pub struct OpenWrtDeps;
 
-impl DependencyMapper for OpenWrtDeps {
-    fn name(&self) -> &'static str {
-        "openwrt"
-    }
+plugin_identity!(
+    OpenWrtDeps,
+    "openwrt",
+    "OpenWrt (opkg) package names, Debian-style `name (>= version)` syntax"
+);
 
+impl DependencyMapper for OpenWrtDeps {
     fn format(&self) -> &'static str {
         "ipk"
-    }
-
-    fn description(&self) -> &'static str {
-        "OpenWrt (opkg) package names, Debian-style `name (>= version)` syntax"
     }
 
     fn map(&self, ecosystem: &str, dep_name: &str) -> Option<String> {

@@ -8,18 +8,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct CmakeBuildSystem;
 
+plugin_identity!(
+    CmakeBuildSystem,
+    "cmake",
+    "CMake + Ninja — cmake configure, build, DESTDIR install"
+);
+
 impl BuildSystem for CmakeBuildSystem {
-    fn name(&self) -> &'static str {
-        "cmake"
-    }
-
-    fn description(&self) -> &'static str {
-        "CMake + Ninja — cmake configure, build, DESTDIR install"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["cmake", "ninja"]
     }

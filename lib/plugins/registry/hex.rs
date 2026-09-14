@@ -19,19 +19,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct HexRegistrySource;
 
+plugin_identity!(
+    HexRegistrySource,
+    "hex",
+    "Hex (Elixir/Erlang) — mix deps.get + stage"
+);
+
 impl RegistrySource for HexRegistrySource {
-    fn name(&self) -> &'static str {
-        "hex"
-    }
-
-    fn description(&self) -> &'static str {
-        "Hex (Elixir/Erlang) — mix deps.get + stage"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["mix", "elixir"]
     }

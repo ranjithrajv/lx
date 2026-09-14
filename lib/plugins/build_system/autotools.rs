@@ -17,18 +17,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct AutotoolsBuildSystem;
 
+plugin_identity!(
+    AutotoolsBuildSystem,
+    "autotools",
+    "GNU Autotools — configure, make, DESTDIR make install"
+);
+
 impl BuildSystem for AutotoolsBuildSystem {
-    fn name(&self) -> &'static str {
-        "autotools"
-    }
-
-    fn description(&self) -> &'static str {
-        "GNU Autotools — configure, make, DESTDIR make install"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["make"]
     }

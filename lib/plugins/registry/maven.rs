@@ -13,19 +13,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct MavenRegistrySource;
 
+plugin_identity!(
+    MavenRegistrySource,
+    "maven",
+    "Maven Central (Java/Kotlin/Scala) — mvn dependency:copy + extract"
+);
+
 impl RegistrySource for MavenRegistrySource {
-    fn name(&self) -> &'static str {
-        "maven"
-    }
-
-    fn description(&self) -> &'static str {
-        "Maven Central (Java/Kotlin/Scala) — mvn dependency:copy + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["mvn"]
     }

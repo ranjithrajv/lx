@@ -24,16 +24,12 @@ pub mod zip;
 use anyhow::Result;
 use std::path::Path;
 
+use crate::plugins::plugin::{Plugin, PluginSet};
+
 /// A plugin that extracts one archive format into a directory.
 ///
 /// Implementors are stateless; registered once in [`all_artifact_formats`].
-pub trait ArtifactFormat: Send + Sync {
-    /// Canonical name used in `package.yaml` (`artifact_format:`).
-    fn name(&self) -> &'static str;
-
-    /// Human-readable description.
-    fn description(&self) -> &'static str;
-
+pub trait ArtifactFormat: Plugin {
     /// Alternative names accepted for `artifact_format:` (e.g. `tgz`).
     fn aliases(&self) -> &'static [&'static str] {
         &[]
@@ -67,26 +63,23 @@ pub fn get_artifact_format(name: &str) -> Option<Box<dyn ArtifactFormat>> {
     if lower.is_empty() {
         return None;
     }
-    all_artifact_formats()
-        .into_iter()
-        .find(|f| f.name() == lower || f.aliases().iter().any(|a| *a == lower))
+    PluginSet::new(all_artifact_formats())
+        .take_first(|f| f.name() == lower || f.aliases().iter().any(|a| *a == lower))
 }
 
 /// Auto-detect the format from a file name. Falls back to `raw` for
 /// anything unrecognized (matching the previous `guess_format` behavior).
 pub fn detect_artifact_format(file_name: &str) -> &'static str {
     let lower = file_name.to_ascii_lowercase();
-    for f in all_artifact_formats() {
-        if f.recognizes(&lower) {
-            return f.name();
-        }
-    }
-    "raw"
+    PluginSet::new(all_artifact_formats())
+        .first(|f| f.recognizes(&lower))
+        .map(|f| f.name())
+        .unwrap_or("raw")
 }
 
 /// Available format names (canonical only) for error messages / help.
 pub fn artifact_format_names() -> Vec<&'static str> {
-    all_artifact_formats().iter().map(|f| f.name()).collect()
+    PluginSet::new(all_artifact_formats()).names()
 }
 
 /// Extract `archive` into `dest` using the named format.

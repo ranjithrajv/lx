@@ -32,6 +32,8 @@ pub mod rpm_pgp;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
+use crate::plugins::plugin::{Plugin, PluginSet};
+
 /// Everything a signer needs, resolved from config + CLI by the caller.
 pub struct SignContext<'a> {
     pub key_file: &'a Path,
@@ -51,12 +53,7 @@ pub enum SignOutcome {
 }
 
 /// A signing backend.
-pub trait Signer: Send + Sync {
-    /// Canonical name (`--signer`), e.g. `gpg-detach`.
-    fn name(&self) -> &'static str;
-
-    fn description(&self) -> &'static str;
-
+pub trait Signer: Plugin {
     /// True when this backend can sign `format` under `method`.
     fn supports(&self, format: &str, method: &str) -> bool;
 
@@ -84,17 +81,14 @@ pub fn all_signers() -> Vec<Box<dyn Signer>> {
 
 /// Look up a signing backend by name (case-insensitive).
 pub fn get_signer(name: &str) -> Option<Box<dyn Signer>> {
-    let lower = name.trim().to_ascii_lowercase();
-    all_signers().into_iter().find(|s| s.name() == lower)
+    PluginSet::new(all_signers()).take(name)
 }
 
 /// Pick the backend for a `(format, method)` pair.
 pub fn signer_for(format: &str, method: &str) -> Option<Box<dyn Signer>> {
-    all_signers()
-        .into_iter()
-        .find(|s| s.supports(format, method))
+    PluginSet::new(all_signers()).take_first(|s| s.supports(format, method))
 }
 
 pub fn signer_names() -> Vec<&'static str> {
-    all_signers().iter().map(|s| s.name()).collect()
+    PluginSet::new(all_signers()).names()
 }

@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use super::{SignContext, SignOutcome, Signer};
+use crate::plugins::plugin::plugin_identity;
 
 /// Detached OpenPGP signature via `gpg --detach-sign`, written as a sibling
 /// `<artifact>.sig`. Format-agnostic: works for deb, rpm, arch, apk, and
@@ -11,14 +12,6 @@ use super::{SignContext, SignOutcome, Signer};
 pub struct GpgDetach;
 
 impl Signer for GpgDetach {
-    fn name(&self) -> &'static str {
-        "gpg-detach"
-    }
-
-    fn description(&self) -> &'static str {
-        "Detached OpenPGP signature (gpg --detach-sign → <artifact>.sig)"
-    }
-
     fn supports(&self, _format: &str, method: &str) -> bool {
         method.eq_ignore_ascii_case("detach")
     }
@@ -34,3 +27,9 @@ impl Signer for GpgDetach {
         )?))
     }
 }
+
+plugin_identity!(
+    GpgDetach,
+    "gpg-detach",
+    "Detached OpenPGP signature (gpg --detach-sign → <artifact>.sig)"
+);

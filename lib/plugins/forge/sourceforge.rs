@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct SourceForgeForgeSource;
 
+plugin_identity!(
+    SourceForgeForgeSource,
+    "sourceforge",
+    "SourceForge file releases (project RSS feed as pseudo-releases)"
+);
+
 impl ForgeSource for SourceForgeForgeSource {
-    fn name(&self) -> &'static str {
-        "sourceforge"
-    }
-
-    fn description(&self) -> &'static str {
-        "SourceForge file releases (project RSS feed as pseudo-releases)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         None
     }

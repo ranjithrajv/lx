@@ -14,19 +14,18 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct CpanRegistrySource;
 
+plugin_identity!(
+    CpanRegistrySource,
+    "cpan",
+    "CPAN (Perl) — cpanm + build install tree"
+);
+
 impl RegistrySource for CpanRegistrySource {
-    fn name(&self) -> &'static str {
-        "cpan"
-    }
-
-    fn description(&self) -> &'static str {
-        "CPAN (Perl) — cpanm + build install tree"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["cpanm", "perl"]
     }

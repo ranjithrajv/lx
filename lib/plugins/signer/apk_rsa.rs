@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use super::{SignContext, SignOutcome, Signer};
+use crate::plugins::plugin::plugin_identity;
 
 /// Alpine apk v2 signing: a DER PKCS#1 v1.5 RSA/SHA-1 signature over the
 /// package *control* segment, written as a `.SIGN.RSA.<keyname>` tar member.
@@ -16,14 +17,6 @@ use super::{SignContext, SignOutcome, Signer};
 pub struct ApkRsa;
 
 impl Signer for ApkRsa {
-    fn name(&self) -> &'static str {
-        "apk-rsa"
-    }
-
-    fn description(&self) -> &'static str {
-        "Alpine apk v2 RSA/SHA-1 signature (`.SIGN.RSA.<keyname>`, in-process)"
-    }
-
     fn supports(&self, format: &str, _method: &str) -> bool {
         format.eq_ignore_ascii_case("apk")
     }
@@ -36,3 +29,9 @@ impl Signer for ApkRsa {
         Ok(SignOutcome::Embedded)
     }
 }
+
+plugin_identity!(
+    ApkRsa,
+    "apk-rsa",
+    "Alpine apk v2 RSA/SHA-1 signature (`.SIGN.RSA.<keyname>`, in-process)"
+);

@@ -137,7 +137,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
             anyhow::anyhow!(
                 "unsupported build_system '{}' (expected one of: {})",
                 name,
-                build_system::packager_names().join(", ")
+                build_system::build_system_names().join(", ")
             )
         })?
     } else {

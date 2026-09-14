@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::DependencyMapper;
+use crate::plugins::plugin::plugin_identity;
 
 /// Alpine Linux (apk) dependency syntax.
 ///
@@ -10,17 +11,15 @@ use super::DependencyMapper;
 /// (`foo>=1.2`), which is why it overrides [`DependencyMapper::render`].
 pub struct AlpineDeps;
 
-impl DependencyMapper for AlpineDeps {
-    fn name(&self) -> &'static str {
-        "alpine"
-    }
+plugin_identity!(
+    AlpineDeps,
+    "alpine",
+    "Alpine (apk) package names and `name>=version` syntax"
+);
 
+impl DependencyMapper for AlpineDeps {
     fn format(&self) -> &'static str {
         "apk"
-    }
-
-    fn description(&self) -> &'static str {
-        "Alpine (apk) package names and `name>=version` syntax"
     }
 
     fn map(&self, ecosystem: &str, dep_name: &str) -> Option<String> {

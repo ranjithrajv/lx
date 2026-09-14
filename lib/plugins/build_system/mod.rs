@@ -23,17 +23,12 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::{Plugin, PluginSet};
 
 /// A build-system plugin: compiles a source tree and stages the install tree.
 ///
 /// Implementors are stateless; registered once in [`all_build_systems`].
-pub trait BuildSystem: Send + Sync {
-    /// Canonical name used in `package.yaml` (`build_system:`).
-    fn name(&self) -> &'static str;
-
-    /// Human-readable description.
-    fn description(&self) -> &'static str;
-
+pub trait BuildSystem: Plugin {
     /// Whether this build system recognizes the source tree. Plugins
     /// override this to detect their project files (e.g. `Cargo.toml`,
     /// `go.mod`, `CMakeLists.txt`). `custom` never auto-detects (returns
@@ -75,19 +70,16 @@ pub fn all_build_systems() -> Vec<Box<dyn BuildSystem>> {
 
 /// Look up a build system by name (case-insensitive). Returns `None` for unknown.
 pub fn get_build_system(name: &str) -> Option<Box<dyn BuildSystem>> {
-    let lower = name.to_ascii_lowercase();
-    all_build_systems().into_iter().find(|b| b.name() == lower)
+    PluginSet::new(all_build_systems()).take(name)
 }
 
 /// Available build-system names for error messages / help text.
-pub fn packager_names() -> Vec<&'static str> {
-    all_build_systems().iter().map(|b| b.name()).collect()
+pub fn build_system_names() -> Vec<&'static str> {
+    PluginSet::new(all_build_systems()).names()
 }
 
 /// Auto-detect the build system for a source tree. The first plugin whose
 /// [`BuildSystem::recognize`] returns true wins. `custom` never auto-detects.
 pub fn detect_build_system(src_dir: &Path) -> Option<Box<dyn BuildSystem>> {
-    all_build_systems()
-        .into_iter()
-        .find(|b| b.recognize(src_dir))
+    PluginSet::new(all_build_systems()).take_first(|b| b.recognize(src_dir))
 }

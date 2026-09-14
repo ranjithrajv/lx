@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::DependencyMapper;
+use crate::plugins::plugin::plugin_identity;
 
 /// RPM (Fedora/RHEL/SUSE) dependency syntax.
 pub struct RpmDeps;
 
-impl DependencyMapper for RpmDeps {
-    fn name(&self) -> &'static str {
-        "rpm"
-    }
+plugin_identity!(
+    RpmDeps,
+    "rpm",
+    "RPM package names and `name >= version` syntax"
+);
 
+impl DependencyMapper for RpmDeps {
     fn format(&self) -> &'static str {
         "rpm"
-    }
-
-    fn description(&self) -> &'static str {
-        "RPM package names and `name >= version` syntax"
     }
 
     fn repo_family(&self) -> Option<&'static str> {

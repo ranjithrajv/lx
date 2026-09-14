@@ -19,15 +19,12 @@ pub mod deb;
 pub mod ipk;
 pub mod rpm;
 
-/// A dependency-mapping backend for one target package format.
-pub trait DependencyMapper: Send + Sync {
-    /// Canonical backend name (`debian`, `rpm`, `pacman`, `alpine`, `openwrt`).
-    fn name(&self) -> &'static str;
+use crate::plugins::plugin::{Plugin, PluginSet};
 
+/// A dependency-mapping backend for one target package format.
+pub trait DependencyMapper: Plugin {
     /// The `package_format` this backend serves.
     fn format(&self) -> &'static str;
-
-    fn description(&self) -> &'static str;
 
     /// Repology distro family for the online fallback, when one exists.
     fn repo_family(&self) -> Option<&'static str> {
@@ -65,21 +62,16 @@ pub fn all_dependency_mappers() -> Vec<Box<dyn DependencyMapper>> {
 /// Look up a mapper by `package_format` (case-insensitive).
 pub fn get_dependency_mapper(format: &str) -> Option<Box<dyn DependencyMapper>> {
     let lower = format.trim().to_ascii_lowercase();
-    all_dependency_mappers()
-        .into_iter()
-        .find(|m| m.format() == lower)
+    PluginSet::new(all_dependency_mappers()).take_first(|m| m.format() == lower)
 }
 
 /// Look up a mapper by backend name.
 pub fn get_dependency_mapper_by_name(name: &str) -> Option<Box<dyn DependencyMapper>> {
-    let lower = name.trim().to_ascii_lowercase();
-    all_dependency_mappers()
-        .into_iter()
-        .find(|m| m.name() == lower)
+    PluginSet::new(all_dependency_mappers()).take(name)
 }
 
 pub fn dependency_mapper_names() -> Vec<&'static str> {
-    all_dependency_mappers().iter().map(|m| m.name()).collect()
+    PluginSet::new(all_dependency_mappers()).names()
 }
 
 /// Convenience: map `dep_name` for `format`, or `None` if unmapped/unknown.

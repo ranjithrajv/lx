@@ -17,18 +17,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct MakeBuildSystem;
 
+plugin_identity!(
+    MakeBuildSystem,
+    "make",
+    "GNU Make — make + DESTDIR make install (no configure)"
+);
+
 impl BuildSystem for MakeBuildSystem {
-    fn name(&self) -> &'static str {
-        "make"
-    }
-
-    fn description(&self) -> &'static str {
-        "GNU Make — make + DESTDIR make install (no configure)"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["make"]
     }

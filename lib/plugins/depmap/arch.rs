@@ -1,21 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::DependencyMapper;
+use crate::plugins::plugin::plugin_identity;
 
 /// Arch Linux (pacman) dependency syntax.
 pub struct ArchDeps;
 
-impl DependencyMapper for ArchDeps {
-    fn name(&self) -> &'static str {
-        "pacman"
-    }
+plugin_identity!(
+    ArchDeps,
+    "pacman",
+    "Arch package names and `name>=version` syntax"
+);
 
+impl DependencyMapper for ArchDeps {
     fn format(&self) -> &'static str {
         "arch"
-    }
-
-    fn description(&self) -> &'static str {
-        "Arch package names and `name>=version` syntax"
     }
 
     fn repo_family(&self) -> Option<&'static str> {

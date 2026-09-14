@@ -1,22 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::DependencyMapper;
+use crate::plugins::plugin::plugin_identity;
 
 /// Debian/Ubuntu dependency syntax. The shared ecosystem→Debian tables in
 /// `depmap.rs` are this mapper's native form, so it is the reference impl.
 pub struct DebianDeps;
 
-impl DependencyMapper for DebianDeps {
-    fn name(&self) -> &'static str {
-        "debian"
-    }
+plugin_identity!(
+    DebianDeps,
+    "debian",
+    "Debian/Ubuntu package names and `name (>= version)` syntax"
+);
 
+impl DependencyMapper for DebianDeps {
     fn format(&self) -> &'static str {
         "deb"
-    }
-
-    fn description(&self) -> &'static str {
-        "Debian/Ubuntu package names and `name (>= version)` syntax"
     }
 
     fn repo_family(&self) -> Option<&'static str> {

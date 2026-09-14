@@ -4,20 +4,13 @@ use anyhow::Result;
 use std::path::Path;
 
 use super::ArtifactFormat;
+use crate::plugins::plugin::plugin_identity;
 
 /// A single-file payload: copy the asset into the payload directory under
 /// its own name. This is the catch-all format and must be registered last.
 pub struct Raw;
 
 impl ArtifactFormat for Raw {
-    fn name(&self) -> &'static str {
-        "raw"
-    }
-
-    fn description(&self) -> &'static str {
-        "single binary/asset copied as-is (no archive)"
-    }
-
     fn recognizes(&self, _file_name: &str) -> bool {
         true
     }
@@ -31,3 +24,5 @@ impl ArtifactFormat for Raw {
         Ok(())
     }
 }
+
+plugin_identity!(Raw, "raw", "single binary/asset copied as-is (no archive)");

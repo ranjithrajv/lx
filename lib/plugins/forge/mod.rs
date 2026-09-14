@@ -20,17 +20,14 @@ pub mod sourceforge;
 use anyhow::Result;
 use std::path::Path;
 
+use crate::plugins::plugin::{Plugin, PluginSet};
 use lx_lib::github::{Release, ReleaseMeta, RepoLicense};
 
 /// A source/provider plugin (auto-discovery).
 ///
 /// Implementors are stateless; constructed per-call with the caller's
 /// `token` and `cache_dir` so the trait stays `Send+Sync` and testable.
-pub trait ForgeSource: Send + Sync {
-    /// Canonical name: "github" | "gitlab"
-    fn name(&self) -> &'static str;
-    fn description(&self) -> &'static str;
-
+pub trait ForgeSource: Plugin {
     /// Env var holding this provider's auth token (e.g. "GITLAB_TOKEN").
     /// `None` when the provider needs no token.
     /// Used by `resolve_forge_token` so config/build stay OCP — adding a
@@ -132,13 +129,12 @@ pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
 
 /// Lookup source plugin by name (case-insensitive).
 pub fn get_forge_source(name: &str) -> Option<Box<dyn ForgeSource>> {
-    let lower = name.to_ascii_lowercase();
-    all_forge_sources().into_iter().find(|p| p.name() == lower)
+    PluginSet::new(all_forge_sources()).take(name)
 }
 
 /// Available source names for error messages.
 pub fn forge_source_names() -> Vec<&'static str> {
-    all_forge_sources().iter().map(|p| p.name()).collect()
+    PluginSet::new(all_forge_sources()).names()
 }
 
 /// Apply the provider's host override from config to its env var, so

@@ -8,18 +8,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct CargoBuildSystem;
 
+plugin_identity!(
+    CargoBuildSystem,
+    "cargo",
+    "Cargo (Rust) — cargo build --release, install to DESTDIR"
+);
+
 impl BuildSystem for CargoBuildSystem {
-    fn name(&self) -> &'static str {
-        "cargo"
-    }
-
-    fn description(&self) -> &'static str {
-        "Cargo (Rust) — cargo build --release, install to DESTDIR"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["cargo"]
     }

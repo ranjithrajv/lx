@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use super::{SignContext, SignOutcome, Signer};
+use crate::plugins::plugin::plugin_identity;
 
 /// Embedded `.deb` signing (`_gpg{role}` ar member). The signature is
 /// written by the deb *packager* while it builds the ar container (the
@@ -13,14 +14,6 @@ use super::{SignContext, SignOutcome, Signer};
 pub struct DebDebsign;
 
 impl Signer for DebDebsign {
-    fn name(&self) -> &'static str {
-        "deb-debsign"
-    }
-
-    fn description(&self) -> &'static str {
-        "Embedded `.deb` signature (`_gpg{origin,maint,archive}` ar member)"
-    }
-
     fn supports(&self, format: &str, method: &str) -> bool {
         format.eq_ignore_ascii_case("deb") && method.eq_ignore_ascii_case("debsign")
     }
@@ -33,3 +26,9 @@ impl Signer for DebDebsign {
         Ok(SignOutcome::Embedded)
     }
 }
+
+plugin_identity!(
+    DebDebsign,
+    "deb-debsign",
+    "Embedded `.deb` signature (`_gpg{origin,maint,archive}` ar member)"
+);

@@ -8,18 +8,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct GoBuildSystem;
 
+plugin_identity!(
+    GoBuildSystem,
+    "go",
+    "Go — go build single binary, install to DESTDIR"
+);
+
 impl BuildSystem for GoBuildSystem {
-    fn name(&self) -> &'static str {
-        "go"
-    }
-
-    fn description(&self) -> &'static str {
-        "Go — go build single binary, install to DESTDIR"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["go"]
     }

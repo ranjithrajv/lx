@@ -10,20 +10,19 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::{BuildContext, Packager};
+use crate::plugins::plugin::plugin_identity;
 
 pub struct ArchPackager;
 
-impl Packager for ArchPackager {
-    fn name(&self) -> &'static str {
-        "arch"
-    }
+plugin_identity!(
+    ArchPackager,
+    "arch",
+    "Arch Linux pacman package (.pkg.tar.zst) — tar.zst via lx_lib::archarchive"
+);
 
+impl Packager for ArchPackager {
     fn file_extension(&self) -> &'static str {
         "pkg.tar.zst"
-    }
-
-    fn description(&self) -> &'static str {
-        "Arch Linux pacman package (.pkg.tar.zst) — tar.zst via lx_lib::archarchive"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {

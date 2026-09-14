@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct GitlabForgeSource;
 
+plugin_identity!(
+    GitlabForgeSource,
+    "gitlab",
+    "GitLab Releases (gitlab.com / self-hosted) — via GitLab API v4"
+);
+
 impl ForgeSource for GitlabForgeSource {
-    fn name(&self) -> &'static str {
-        "gitlab"
-    }
-
-    fn description(&self) -> &'static str {
-        "GitLab Releases (gitlab.com / self-hosted) — via GitLab API v4"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("GITLAB_TOKEN")
     }

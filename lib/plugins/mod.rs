@@ -20,6 +20,7 @@ pub mod depmap;
 pub mod forge;
 pub mod ipk;
 pub mod package_index;
+pub mod plugin;
 pub mod registry;
 pub mod rpm;
 pub mod signer;
@@ -29,6 +30,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::{Plugin, PluginSet};
 use lx_lib::github::RepoLicense;
 
 /// Context passed to a plugin's build method. Contains everything the plugin
@@ -112,16 +114,9 @@ pub fn output_dir(staging_root: &Path) -> anyhow::Result<PathBuf> {
 /// A package-format plugin.
 ///
 /// Implementors are stateless; they are registered once in [`registry`].
-pub trait Packager: Send + Sync {
-    /// Canonical name used in `package.yaml` (`package_format`) and
-    /// `--format` (`deb` / `rpm`).
-    fn name(&self) -> &'static str;
-
+pub trait Packager: Plugin {
     /// File extension without dot (e.g. `"deb"`, `"rpm"`).
     fn file_extension(&self) -> &'static str;
-
-    /// Human-readable description.
-    fn description(&self) -> &'static str;
 
     /// Default distributions when `debian_distributions` is empty and the
     /// plugin is selected. For `deb` this is Debian suites; for `rpm` this
@@ -156,13 +151,12 @@ pub fn all_packagers() -> Vec<Box<dyn Packager>> {
 
 /// Look up a plugin by name (case-insensitive). Returns `None` for unknown.
 pub fn get_packager(name: &str) -> Option<Box<dyn Packager>> {
-    let lower = name.to_ascii_lowercase();
-    all_packagers().into_iter().find(|p| p.name() == lower)
+    PluginSet::new(all_packagers()).take(name)
 }
 
 /// Available plugin names for error messages / help text.
 pub fn packager_names() -> Vec<&'static str> {
-    all_packagers().iter().map(|p| p.name()).collect()
+    PluginSet::new(all_packagers()).names()
 }
 
 /// Expand a user-supplied `--format` value into the concrete formats to

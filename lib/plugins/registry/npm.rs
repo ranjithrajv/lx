@@ -10,19 +10,18 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct NpmRegistrySource;
 
+plugin_identity!(
+    NpmRegistrySource,
+    "npm",
+    "npm (Node.js) — npm pack + extract"
+);
+
 impl RegistrySource for NpmRegistrySource {
-    fn name(&self) -> &'static str {
-        "npm"
-    }
-
-    fn description(&self) -> &'static str {
-        "npm (Node.js) — npm pack + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["npm"]
     }

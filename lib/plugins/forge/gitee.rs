@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct GiteeForgeSource;
 
+plugin_identity!(
+    GiteeForgeSource,
+    "gitee",
+    "Gitee Releases (gitee.com / self-hosted, API v5)"
+);
+
 impl ForgeSource for GiteeForgeSource {
-    fn name(&self) -> &'static str {
-        "gitee"
-    }
-
-    fn description(&self) -> &'static str {
-        "Gitee Releases (gitee.com / self-hosted, API v5)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("GITEE_TOKEN")
     }

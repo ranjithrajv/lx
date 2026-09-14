@@ -18,19 +18,18 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct GoRegistrySource;
 
+plugin_identity!(
+    GoRegistrySource,
+    "go",
+    "Go modules (pkg.go.dev) — go build static binary"
+);
+
 impl RegistrySource for GoRegistrySource {
-    fn name(&self) -> &'static str {
-        "go"
-    }
-
-    fn description(&self) -> &'static str {
-        "Go modules (pkg.go.dev) — go build static binary"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["go"]
     }

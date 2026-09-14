@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct GiteaForgeSource;
 
+plugin_identity!(
+    GiteaForgeSource,
+    "gitea",
+    "Gitea Releases (codeberg.org / self-hosted, Gitea API v1)"
+);
+
 impl ForgeSource for GiteaForgeSource {
-    fn name(&self) -> &'static str {
-        "gitea"
-    }
-
-    fn description(&self) -> &'static str {
-        "Gitea Releases (codeberg.org / self-hosted, Gitea API v1)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("GITEA_TOKEN")
     }

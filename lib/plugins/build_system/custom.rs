@@ -8,18 +8,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct CustomBuildSystem;
 
+plugin_identity!(
+    CustomBuildSystem,
+    "custom",
+    "Custom — user-supplied build_commands / install_commands"
+);
+
 impl BuildSystem for CustomBuildSystem {
-    fn name(&self) -> &'static str {
-        "custom"
-    }
-
-    fn description(&self) -> &'static str {
-        "Custom — user-supplied build_commands / install_commands"
-    }
-
     // `custom` never auto-detects — it's explicit-only. Inherits the default
     // `recognize` returning false.
 

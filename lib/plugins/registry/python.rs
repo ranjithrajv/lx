@@ -12,19 +12,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct PythonRegistrySource;
 
+plugin_identity!(
+    PythonRegistrySource,
+    "python",
+    "Python (pip) — pip download + extract"
+);
+
 impl RegistrySource for PythonRegistrySource {
-    fn name(&self) -> &'static str {
-        "python"
-    }
-
-    fn description(&self) -> &'static str {
-        "Python (pip) — pip download + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["pip", "python3"]
     }

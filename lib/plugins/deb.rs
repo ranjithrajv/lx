@@ -11,20 +11,19 @@ use std::path::{Path, PathBuf};
 
 use super::{BuildContext, Packager, PACKAGED_FROM_LINE};
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct DebPackager;
 
-impl Packager for DebPackager {
-    fn name(&self) -> &'static str {
-        "deb"
-    }
+plugin_identity!(
+    DebPackager,
+    "deb",
+    "Debian package (.deb) — ar + control.tar.gz + data.tar.gz"
+);
 
+impl Packager for DebPackager {
     fn file_extension(&self) -> &'static str {
         "deb"
-    }
-
-    fn description(&self) -> &'static str {
-        "Debian package (.deb) — ar + control.tar.gz + data.tar.gz"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {

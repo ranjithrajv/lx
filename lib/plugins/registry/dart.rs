@@ -16,19 +16,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct DartRegistrySource;
 
+plugin_identity!(
+    DartRegistrySource,
+    "dart",
+    "pub.dev (Dart/Flutter) — dart pub cache add + stage"
+);
+
 impl RegistrySource for DartRegistrySource {
-    fn name(&self) -> &'static str {
-        "dart"
-    }
-
-    fn description(&self) -> &'static str {
-        "pub.dev (Dart/Flutter) — dart pub cache add + stage"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["dart"]
     }

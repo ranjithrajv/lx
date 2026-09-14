@@ -10,20 +10,19 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::{BuildContext, Packager};
+use crate::plugins::plugin::plugin_identity;
 
 pub struct RpmPackager;
 
-impl Packager for RpmPackager {
-    fn name(&self) -> &'static str {
-        "rpm"
-    }
+plugin_identity!(
+    RpmPackager,
+    "rpm",
+    "RPM package (.rpm) — genuine RPM via lx_lib::rpmarchive"
+);
 
+impl Packager for RpmPackager {
     fn file_extension(&self) -> &'static str {
         "rpm"
-    }
-
-    fn description(&self) -> &'static str {
-        "RPM package (.rpm) — genuine RPM via lx_lib::rpmarchive"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {

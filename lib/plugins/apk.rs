@@ -14,20 +14,19 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 use super::{BuildContext, Packager};
+use crate::plugins::plugin::plugin_identity;
 
 pub struct ApkPackager;
 
-impl Packager for ApkPackager {
-    fn name(&self) -> &'static str {
-        "apk"
-    }
+plugin_identity!(
+    ApkPackager,
+    "apk",
+    "Alpine Linux package (.apk) — concatenated gzip members via lx_lib::apkarchive"
+);
 
+impl Packager for ApkPackager {
     fn file_extension(&self) -> &'static str {
         "apk"
-    }
-
-    fn description(&self) -> &'static str {
-        "Alpine Linux package (.apk) — concatenated gzip members via lx_lib::apkarchive"
     }
 
     fn default_distributions(&self) -> &'static [&'static str] {

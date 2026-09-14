@@ -14,19 +14,18 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct NugetRegistrySource;
 
+plugin_identity!(
+    NugetRegistrySource,
+    "nuget",
+    "NuGet (.NET) — nuget install + extract"
+);
+
 impl RegistrySource for NugetRegistrySource {
-    fn name(&self) -> &'static str {
-        "nuget"
-    }
-
-    fn description(&self) -> &'static str {
-        "NuGet (.NET) — nuget install + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["nuget"]
     }

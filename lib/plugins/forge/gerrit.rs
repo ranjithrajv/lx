@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct GerritForgeSource;
 
+plugin_identity!(
+    GerritForgeSource,
+    "gerrit",
+    "Gerrit Code Review (review.gerrithub.io / self-hosted, Gerrit API)"
+);
+
 impl ForgeSource for GerritForgeSource {
-    fn name(&self) -> &'static str {
-        "gerrit"
-    }
-
-    fn description(&self) -> &'static str {
-        "Gerrit Code Review (review.gerrithub.io / self-hosted, Gerrit API)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("GERRIT_TOKEN")
     }

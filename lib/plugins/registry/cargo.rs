@@ -14,19 +14,18 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct CargoRegistrySource;
 
+plugin_identity!(
+    CargoRegistrySource,
+    "cargo",
+    "crates.io (Rust) — download .crate + extract"
+);
+
 impl RegistrySource for CargoRegistrySource {
-    fn name(&self) -> &'static str {
-        "cargo"
-    }
-
-    fn description(&self) -> &'static str {
-        "crates.io (Rust) — download .crate + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["cargo"]
     }

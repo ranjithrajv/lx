@@ -10,19 +10,14 @@ use anyhow::{bail, Context, Result};
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct GemRegistrySource;
 
+plugin_identity!(GemRegistrySource, "gem", "Ruby gem — gem fetch + extract");
+
 impl RegistrySource for GemRegistrySource {
-    fn name(&self) -> &'static str {
-        "gem"
-    }
-
-    fn description(&self) -> &'static str {
-        "Ruby gem — gem fetch + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["gem"]
     }

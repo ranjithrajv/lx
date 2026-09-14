@@ -6,18 +6,17 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct BitbucketForgeSource;
 
+plugin_identity!(
+    BitbucketForgeSource,
+    "bitbucket",
+    "Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)"
+);
+
 impl ForgeSource for BitbucketForgeSource {
-    fn name(&self) -> &'static str {
-        "bitbucket"
-    }
-
-    fn description(&self) -> &'static str {
-        "Bitbucket Cloud downloads (api.bitbucket.org, downloads as pseudo-releases)"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         Some("BITBUCKET_TOKEN")
     }

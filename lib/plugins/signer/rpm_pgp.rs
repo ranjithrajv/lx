@@ -4,6 +4,7 @@ use anyhow::Result;
 use std::path::Path;
 
 use super::{SignContext, SignOutcome, Signer};
+use crate::plugins::plugin::plugin_identity;
 
 /// Embedded RPM PGP signature. The `rpm` crate writes the signature into the
 /// package header while `rpmarchive::build` assembles it, so this backend is
@@ -11,14 +12,6 @@ use super::{SignContext, SignOutcome, Signer};
 pub struct RpmPgp;
 
 impl Signer for RpmPgp {
-    fn name(&self) -> &'static str {
-        "rpm-pgp"
-    }
-
-    fn description(&self) -> &'static str {
-        "Embedded RPM PGP signature (written into the package header)"
-    }
-
     fn supports(&self, format: &str, _method: &str) -> bool {
         format.eq_ignore_ascii_case("rpm")
     }
@@ -31,3 +24,9 @@ impl Signer for RpmPgp {
         Ok(SignOutcome::Embedded)
     }
 }
+
+plugin_identity!(
+    RpmPgp,
+    "rpm-pgp",
+    "Embedded RPM PGP signature (written into the package header)"
+);

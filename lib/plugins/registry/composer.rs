@@ -11,19 +11,18 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::plugin_identity;
 use crate::plugins::registry::{RegistryPayload, RegistrySource};
 
 pub struct ComposerRegistrySource;
 
+plugin_identity!(
+    ComposerRegistrySource,
+    "composer",
+    "Composer (PHP) — composer install + extract"
+);
+
 impl RegistrySource for ComposerRegistrySource {
-    fn name(&self) -> &'static str {
-        "composer"
-    }
-
-    fn description(&self) -> &'static str {
-        "Composer (PHP) — composer install + extract"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["composer"]
     }

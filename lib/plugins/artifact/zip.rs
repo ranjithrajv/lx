@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use std::path::Path;
 
 use super::ArtifactFormat;
+use crate::plugins::plugin::plugin_identity;
 
 /// Zip archives (`.zip`), extracted with the pure-Rust `zip` crate
 /// (deflate only). Preserves unix modes when the archive records them and
@@ -11,14 +12,6 @@ use super::ArtifactFormat;
 pub struct Zip;
 
 impl ArtifactFormat for Zip {
-    fn name(&self) -> &'static str {
-        "zip"
-    }
-
-    fn description(&self) -> &'static str {
-        "zip archive (.zip)"
-    }
-
     fn recognizes(&self, file_name: &str) -> bool {
         file_name.ends_with(".zip")
     }
@@ -64,3 +57,5 @@ impl ArtifactFormat for Zip {
         Ok(())
     }
 }
+
+plugin_identity!(Zip, "zip", "zip archive (.zip)");

@@ -33,6 +33,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 
 use crate::config::PackageConfig;
+use crate::plugins::plugin::{Plugin, PluginSet};
 
 /// Output of a registry source plugin: a local directory ready for packaging.
 pub struct RegistryPayload {
@@ -49,13 +50,7 @@ pub struct RegistryPayload {
 /// and produces a local directory of files ready for packaging.
 ///
 /// Implementors are stateless; registered once in [`all_registry_sources`].
-pub trait RegistrySource: Send + Sync {
-    /// Canonical name used in `package.yaml` (`registry_source:`).
-    fn name(&self) -> &'static str;
-
-    /// Human-readable description.
-    fn description(&self) -> &'static str;
-
+pub trait RegistrySource: Plugin {
     /// Host tools this registry source requires on `PATH` (checked before
     /// fetch). E.g. `vec!["npm"]` for the npm source.
     fn required_tools(&self) -> Vec<&'static str> {
@@ -89,13 +84,10 @@ pub fn all_registry_sources() -> Vec<Box<dyn RegistrySource>> {
 
 /// Look up a registry source by name (case-insensitive). Returns `None` for unknown.
 pub fn get_registry_source(name: &str) -> Option<Box<dyn RegistrySource>> {
-    let lower = name.to_ascii_lowercase();
-    all_registry_sources()
-        .into_iter()
-        .find(|p| p.name() == lower)
+    PluginSet::new(all_registry_sources()).take(name)
 }
 
 /// Available registry source names for error messages / help text.
 pub fn registry_source_names() -> Vec<&'static str> {
-    all_registry_sources().iter().map(|p| p.name()).collect()
+    PluginSet::new(all_registry_sources()).names()
 }

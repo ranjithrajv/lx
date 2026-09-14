@@ -4,18 +4,11 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::ArtifactFormat;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct TarZst;
 
 impl ArtifactFormat for TarZst {
-    fn name(&self) -> &'static str {
-        "tar.zst"
-    }
-
-    fn description(&self) -> &'static str {
-        "zstd-compressed tarball (.tar.zst / .tzst)"
-    }
-
     fn aliases(&self) -> &'static [&'static str] {
         &["tzst", "zst", "tar.zstd"]
     }
@@ -35,3 +28,9 @@ impl ArtifactFormat for TarZst {
             .with_context(|| format!("failed to extract '{}'", archive.display()))
     }
 }
+
+plugin_identity!(
+    TarZst,
+    "tar.zst",
+    "zstd-compressed tarball (.tar.zst / .tzst)"
+);

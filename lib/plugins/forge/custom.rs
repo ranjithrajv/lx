@@ -6,6 +6,7 @@ use std::path::Path;
 use lx_lib::github::{Release, ReleaseMeta, RepoLicense};
 
 use super::ForgeSource;
+use crate::plugins::plugin::plugin_identity;
 
 /// Direct-URL provider (`source: custom`).
 ///
@@ -80,15 +81,13 @@ pub fn synthetic_release(
     }
 }
 
+plugin_identity!(
+    CustomForgeSource,
+    "custom",
+    "Direct URL template (upstream_url with {version}/{arch}) — no forge API"
+);
+
 impl ForgeSource for CustomForgeSource {
-    fn name(&self) -> &'static str {
-        "custom"
-    }
-
-    fn description(&self) -> &'static str {
-        "Direct URL template (upstream_url with {version}/{arch}) — no forge API"
-    }
-
     fn token_env(&self) -> Option<&'static str> {
         None
     }

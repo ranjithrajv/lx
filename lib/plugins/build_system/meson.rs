@@ -14,18 +14,17 @@ use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
+use crate::plugins::plugin::plugin_identity;
 
 pub struct MesonBuildSystem;
 
+plugin_identity!(
+    MesonBuildSystem,
+    "meson",
+    "Meson + Ninja — meson setup, compile, DESTDIR install"
+);
+
 impl BuildSystem for MesonBuildSystem {
-    fn name(&self) -> &'static str {
-        "meson"
-    }
-
-    fn description(&self) -> &'static str {
-        "Meson + Ninja — meson setup, compile, DESTDIR install"
-    }
-
     fn required_tools(&self) -> Vec<&'static str> {
         vec!["meson", "ninja"]
     }
