@@ -15,7 +15,7 @@ editing the core pipeline:
 | **ArtifactFormat** | Unpack a release asset | 6 (tar.gz, tar.xz, tar.zst, tar, zip, raw) | `artifact_format:` / filename |
 | **Signer** | Sign the artifact | 4 (gpg-detach, rpm-pgp, deb-debsign, apk-rsa) | `(package_format, sign_method)` |
 | **DependencyMapper** | Map deps to target names/syntax | 5 (debian, rpm, pacman, alpine, openwrt) | target `package_format` |
-| **PackageIndex** | Publish **or** read/discover a package index | 8 — 5 write (apt, opkg, pacman, apk, rpm) + 3 read (lx-community, aur, repology) | `lx repo --format` / `indexes.yaml` |
+| **PackageIndex** | Publish **or** read/discover a package index | 9 — 5 write (apt, opkg, pacman, apk, rpm) + 4 read (lx-community, aur, repology, custom) | `lx repo --format` / `indexes.yaml` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's
 available* (returns release metadata), RegistrySource fetches *specific

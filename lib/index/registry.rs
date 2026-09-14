@@ -37,14 +37,14 @@ pub enum SourceKind {
 
 impl SourceKind {
     /// Canonical backend id for this source, as registered in
-    /// [`crate::plugins::package_index`]. `Custom` is not yet a plugin
-    /// (future work) and yields `None`.
+    /// [`crate::plugins::package_index`]. A `custom` source is read by the
+    /// `custom` git-index backend.
     pub fn plugin_kind(&self) -> Option<&'static str> {
         match self {
             SourceKind::LxCommunity => Some("lx-community"),
             SourceKind::Aur => Some("aur"),
             SourceKind::Repology => Some("repology"),
-            SourceKind::Custom { .. } => None,
+            SourceKind::Custom { .. } => Some("custom"),
         }
     }
 }
@@ -139,15 +139,40 @@ impl Registry {
 }
 
 /// Build the concrete source instances for every enabled entry by looking
-/// each one up in the [`crate::plugins::package_index`] registry. `Custom`
-/// backends are future work and are skipped.
+/// each one up in the [`crate::plugins::package_index`] registry. A `custom`
+/// entry passes its configured git URL to the backend.
 pub fn active_sources(reg: &Registry) -> Vec<Box<dyn PackageIndex>> {
     reg.sources
         .iter()
         .filter(|s| s.enabled)
         .filter_map(|s| {
             let backend = get_index_backend(s.kind.plugin_kind()?)?;
-            Some(backend.make(&s.name))
+            let url = match &s.kind {
+                SourceKind::Custom { url } => Some(url.as_str()),
+                _ => None,
+            };
+            Some(backend.make_with(&s.name, url))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_kind_maps_to_the_custom_backend() {
+        let kind = SourceKind::Custom {
+            url: "https://example.com/index.git".into(),
+        };
+        assert_eq!(kind.plugin_kind(), Some("custom"));
+
+        let backend = get_index_backend("custom").expect("custom backend is registered");
+        assert!(backend.capabilities.can_read());
+        assert!(!backend.capabilities.can_write());
+
+        let src = backend.make_with("my-index", Some("https://example.com/index.git"));
+        assert_eq!(src.name(), "custom");
+        assert_eq!(src.instance_name(), "my-index");
+    }
 }

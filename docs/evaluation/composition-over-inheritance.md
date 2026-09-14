@@ -272,9 +272,6 @@ Collected, so the ✅ rows above are not read as universal:
   says so directly). The composition happens at compile time.
 - **The trait set is an internal contract**, not a semver'd public
   extension API (see [composability](composability.md) C2/C6).
-- **`SourceKind::Custom` is not a plugin yet.** `lib/index/registry.rs`
-  maps the enum to a backend id and returns `None` for `Custom`, so a custom
-  read index still needs code.
 - **`SourceKind` is an enum in the config/registry layer** whose
   `plugin_kind()` is a small `match`; the plugin side is composed, but the
   persisted-config vocabulary is still an enum.

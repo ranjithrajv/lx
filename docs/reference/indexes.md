@@ -6,7 +6,8 @@ A unified index manager: one command, many upstream indexes. `lx index` fans
 out across every *enabled* source — the
 [LX community index](https://github.com/ranjithrajv/lx-index) (recipes +
 prebuilt binaries), the [AUR](https://aur.archlinux.org/) (builds PKGBUILDs
-into native packages), and any custom index you register. New sources are
+into native packages), and any custom index you register (a git repository
+of recipes in the same format as the LX community index). New sources are
 **plugins**: implement the `PackageIndex` read role and add one line to the
 registry — no fork, no recompile of core.
 
@@ -24,7 +25,8 @@ lx index remove copr          # drop it
 The registry lives in `~/.config/lx/indexes.yaml` and ships with the LX
 community index, AUR, and the repology metadata source enabled by default.
 The LX community index caches to `~/.cache/lx/index/` (a shallow git clone,
-auto-refreshed; works offline on a stale cache with a warning). The repology
+auto-refreshed; works offline on a stale cache with a warning); a custom
+index caches under `~/.cache/lx/index/<name>/`. The repology
 source caches to `~/.cache/lx/repology/` (JSON files refreshed via the
 repology API on `lx index update`). `lx search` merges index results with the
 `latest-debs` org and embedded templates; `--local` keeps it offline-only.

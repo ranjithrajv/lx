@@ -442,7 +442,7 @@ fn golden_deb_multi_suite() {
 fn union_registry_covers_all_backends() {
     let ids: Vec<&str> = all_index_backends().iter().map(|b| b.id).collect();
     assert_eq!(ids, BACKEND_IDS, "registry order drifted from BACKEND_IDS");
-    assert_eq!(ids.len(), 8, "expected 5 write + 3 read backends");
+    assert_eq!(ids.len(), 9, "expected 5 write + 4 read backends");
     assert_eq!(
         get_index_backend("deb").unwrap().capabilities,
         Capabilities::WRITE
@@ -459,7 +459,7 @@ fn union_registry_covers_all_backends() {
         .iter()
         .filter(|b| b.capabilities.can_read())
         .count();
-    assert_eq!((write, read), (5, 3), "capability split changed");
+    assert_eq!((write, read), (5, 4), "capability split changed");
 }
 
 #[test]
@@ -467,7 +467,7 @@ fn union_registry_reports_capabilities() {
     for backend in all_index_backends() {
         let (want_read, want_write) = match backend.id {
             "apt" | "opkg" | "pacman" | "apk" | "rpm" => (false, true),
-            "lx-community" | "aur" | "repology" => (true, false),
+            "lx-community" | "aur" | "repology" | "custom" => (true, false),
             other => panic!("unexpected backend '{other}'"),
         };
         assert_eq!(

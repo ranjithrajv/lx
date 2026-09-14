@@ -11,7 +11,7 @@ Part of the [lx docs](../README.md).
 * **6× ArtifactFormat:** `tar.gz` + `tar.xz` + `tar.zst` + `tar` + `zip` + `raw`
 * **6× Signer:** `gpg-detach` + `rpm-pgp` + `deb-debsign` + `apk-rsa` + `msix-p7x` + `pkg-xar`
 * **5× DependencyMapper:** `debian` + `rpm` + `pacman` + `alpine` + `openwrt`
-* **8× PackageIndex:** 5 write (`apt` + `opkg` + `pacman` + `apk` + `rpm`) + 3 read (`lx-community` + `aur` + `repology`)
+* **9× PackageIndex:** 5 write (`apt` + `opkg` + `pacman` + `apk` + `rpm`) + 4 read (`lx-community` + `aur` + `repology` + `custom`)
 
 **Per-plugin detail:** the trait definitions and the individual packagers,
 build systems, sources, and cross-cutting plugins live in
@@ -208,7 +208,7 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `PackageIndex` traits — 5 + 9 + 7 + 11 + 6 + 4 + 5 + 8 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` + `ForgeSource` + `BuildSystem` + `RegistrySource` + `ArtifactFormat` + `Signer` + `DependencyMapper` + `PackageIndex` traits — 5 + 9 + 7 + 11 + 6 + 4 + 5 + 9 impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | `Signer` plugins: detached `gpg-detach` for any format + embedded `rpm-pgp`/`deb-debsign`/`apk-rsa`/`msix-p7x` + post-build `pkg-xar`; `check_sidecar` provider-agnostic via `RawGetter` |
 | No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |

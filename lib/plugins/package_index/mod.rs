@@ -9,7 +9,8 @@
 //!   servable repository index (`lx repo`) — `apt`, `opkg`, `pacman`, `apk`,
 //!   `rpm`.
 //! * the **read** side (formerly `IndexSource`): fan out across upstream
-//!   package indexes (`lx index`) — `lx-community`, `aur`, `repology`.
+//!   package indexes (`lx index`) — `lx-community`, `aur`, `repology`,
+//!   `custom`.
 //!
 //! Both are a [`PackageIndex`]. Every role method has a default, so a backend
 //! overrides only the half it implements; the other half fails with an
@@ -23,7 +24,7 @@
 //!
 //! Selection is by canonical [`id`](PackageIndex::id)
 //! ([`BACKEND_IDS`]): `apt`, `opkg`, `pacman`, `apk`, `rpm`,
-//! `lx-community`, `aur`, `repology`. The user-facing `lx repo --format`
+//! `lx-community`, `aur`, `repology`, `custom`. The user-facing `lx repo --format`
 //! vocabulary (`deb`/`ipk`/`arch`/…) is an alias mapped through
 //! [`FORMAT_ALIASES`]/[`resolve_format`]; [`get_index_backend`] accepts either.
 //!
@@ -216,13 +217,19 @@ pub struct IndexBackend {
     pub id: &'static str,
     /// Roles this backend implements.
     pub capabilities: Capabilities,
-    make: fn(name: &str) -> Box<dyn PackageIndex>,
+    make: fn(name: &str, url: Option<&str>) -> Box<dyn PackageIndex>,
 }
 
 impl IndexBackend {
     /// Instantiate this backend, labelling the instance with `name`.
     pub fn make(&self, name: &str) -> Box<dyn PackageIndex> {
-        (self.make)(name)
+        (self.make)(name, None)
+    }
+
+    /// Instantiate this backend, passing a configured source URL (used by
+    /// `custom`; ignored by the built-in backends).
+    pub fn make_with(&self, name: &str, url: Option<&str>) -> Box<dyn PackageIndex> {
+        (self.make)(name, url)
     }
 
     /// Human-readable description, taken from the backend instance so the
@@ -232,38 +239,46 @@ impl IndexBackend {
     }
 }
 
-// Write-side factories. Repo indexers are stateless, so `name` is ignored.
-fn make_apt(_name: &str) -> Box<dyn PackageIndex> {
+// Write-side factories. Repo indexers are stateless, so the arguments are ignored.
+fn make_apt(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(apt::AptIndexer)
 }
 
-fn make_opkg(_name: &str) -> Box<dyn PackageIndex> {
+fn make_opkg(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(opkg::OpkgIndexer)
 }
 
-fn make_pacman(_name: &str) -> Box<dyn PackageIndex> {
+fn make_pacman(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(pacman::PacmanIndexer)
 }
 
-fn make_apk(_name: &str) -> Box<dyn PackageIndex> {
+fn make_apk(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(apk::ApkIndexer)
 }
 
-fn make_rpm(_name: &str) -> Box<dyn PackageIndex> {
+fn make_rpm(_name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(rpm::RpmIndexer)
 }
 
-// Read-side factories. `name` is the configured `indexes.yaml` source name.
-fn make_lx_community(name: &str) -> Box<dyn PackageIndex> {
-    Box::new(lx_community::LxCommunitySource::new(name))
+// Read-side factories. `name` is the configured `indexes.yaml` source name;
+// `url` is the configured git URL (`custom`), or the built-in default.
+fn make_lx_community(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
+    Box::new(lx_community::GitIndexSource::lx_community(name))
 }
 
-fn make_aur(name: &str) -> Box<dyn PackageIndex> {
+fn make_aur(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(aur::AurSource::new(name))
 }
 
-fn make_repology(name: &str) -> Box<dyn PackageIndex> {
+fn make_repology(name: &str, _url: Option<&str>) -> Box<dyn PackageIndex> {
     Box::new(repology::RepologySource::new(name))
+}
+
+fn make_custom(name: &str, url: Option<&str>) -> Box<dyn PackageIndex> {
+    Box::new(lx_community::GitIndexSource::custom(
+        name,
+        url.unwrap_or(lx_community::GitIndexSource::DEFAULT_URL),
+    ))
 }
 
 /// All known backends, in [`BACKEND_IDS`] order.
@@ -309,6 +324,11 @@ pub fn all_index_backends() -> Vec<IndexBackend> {
             capabilities: Capabilities::READ,
             make: make_repology,
         },
+        IndexBackend {
+            id: "custom",
+            capabilities: Capabilities::READ,
+            make: make_custom,
+        },
     ]
 }
 
@@ -336,6 +356,7 @@ pub const BACKEND_IDS: &[&str] = &[
     "lx-community",
     "aur",
     "repology",
+    "custom",
 ];
 
 /// User-facing `package_format` aliases (`lx repo --format`,

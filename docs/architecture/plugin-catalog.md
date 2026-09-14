@@ -335,7 +335,7 @@ what does it become."* Four more cover cross-cutting lifecycles and the
 | **ArtifactFormat** | `lib/plugins/artifact/mod.rs` | `tar.gz` `tar.xz` `tar.zst` `tar` `zip` `raw` | `artifact_format:` / auto-detect | `build.rs::extract` + `discovery::guess_format` match |
 | **Signer** | `lib/plugins/signer/mod.rs` | `gpg-detach` `rpm-pgp` `deb-debsign` `apk-rsa` `msix-p7x` `pkg-xar` | `(package_format, sign_method)` | `if format == "deb"` signing branches |
 | **DependencyMapper** | `lib/plugins/depmap/mod.rs` | `debian` `rpm` `pacman` `alpine` `openwrt` | target `package_format` | per-format `match` inside `depmap.rs` |
-| **PackageIndex** | `lib/plugins/package_index/mod.rs` | 5 write (`apt` `opkg` `pacman` `apk` `rpm`) + 3 read (`lx-community` `aur` `repology`) | `lx repo --format` / `indexes.yaml` | apt-only `lib/repo.rs` + `SourceKind` match in `index/registry.rs` |
+| **PackageIndex** | `lib/plugins/package_index/mod.rs` | 5 write (`apt` `opkg` `pacman` `apk` `rpm`) + 4 read (`lx-community` `aur` `repology` `custom`) | `lx repo --format` / `indexes.yaml` | apt-only `lib/repo.rs` + `SourceKind` match in `index/registry.rs` |
 
 * **ArtifactFormat** — `artifact_format:` (or filename auto-detection)
   selects how an upstream archive is unpacked. `tar.gz`/`tar.xz`/`tar.zst`/
@@ -374,8 +374,8 @@ what does it become."* Four more cover cross-cutting lifecycles and the
   `repology`); the `lx repo --format` vocabulary is an alias table
   (`FORMAT_ALIASES`: `deb→apt`, `ipk→opkg`, `arch→pacman`), and read
   backends expose the configured `indexes.yaml` name via `instance_name()`.
-  `SourceKind::plugin_kind()` maps the config kind to the registry id;
-  `Custom` is not yet a plugin. Adding a backend is implementing
+  `SourceKind::plugin_kind()` maps the config kind to the registry id
+  (`custom` → the `GitIndexSource` git-recipe backend). Adding a backend is implementing
   `PackageIndex` and one line in `all_index_backends()`; the trait and impls
   live in `lib/plugins/package_index/` and the read backends are re-exported
   as `crate::index::<kind>` for the existing call sites.

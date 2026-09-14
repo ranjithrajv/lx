@@ -48,7 +48,7 @@ dimensions**, each with its own registry and selection mechanism
 | ArtifactFormat | 6 (tar.gz, tar.xz, tar.zst, tar, zip, raw) | `artifact_format:` / filename |
 | Signer | 4 (gpg-detach, rpm-pgp, deb-debsign, apk-rsa) | `(package_format, sign_method)` |
 | DependencyMapper | 5 (debian, rpm, pacman, alpine, openwrt) | target `package_format` |
-| PackageIndex | 8 — 5 write + 3 read | `lx repo --format` / `indexes.yaml` |
+| PackageIndex | 9 — 5 write + 4 read | `lx repo --format` / `indexes.yaml` |
 
 The dimensions are genuinely orthogonal, not a menu of presets: a project
 can fetch from npm (`registry_source:`) instead of a forge, compile with
@@ -83,9 +83,9 @@ This is 🟡 rather than ✅ because "open" has limits:
 - **The trait set is an internal contract, not a published API.** It is
   stable enough to add to, but it is not semver'd for third parties.
 - **The new capability still has to be reachable.** A new `PackageIndex`
-  backend is one registration line, but a *custom* read-index source is
-  not yet a plugin at all (`SourceKind::Custom` returns `None` from
-  `plugin_kind()`, `lib/index/registry.rs`).
+  backend is one registration line, and a *custom* read-index source now
+  resolves through it too (`SourceKind::Custom` → the `custom` git-index
+  backend, `lib/index/registry.rs`).
 
 ## C3 — A shared substrate, not eight copies
 
@@ -223,11 +223,7 @@ Collected, so the ✅ rows above are not read as universal:
 - **`RegistrySource` is single-arch** — it returns one payload and does not
   compose with the multi-arch release-asset model
   (`docs/architecture/plugins.md`).
-- **`SourceKind::Custom` is not a plugin yet** (`lib/index/registry.rs`).
-- **`rpm.defines` accepted, not applied; `default_distributions()`** on
-  `Packager` is present but "not yet called by the live
-  distribution-resolution path" (`lib/plugins/mod.rs`), which still reads
-  the `DEFAULT_*_DISTRIBUTIONS` constants.
+- **`rpm.defines` accepted, not applied.**
 - **`custom` build system is a shell escape hatch**, not a trait-level
   plugin with `recognize()`/`required_tools()`.
 - **Index backends are less uniform than packagers:** the apt write backend

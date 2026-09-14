@@ -635,7 +635,7 @@ fn run_coverage(opts: CoverageOpts) -> Result<()> {
     }
 
     // Community recipe index.
-    let comm = lx_community::LxCommunitySource::new("lx-community");
+    let comm = lx_community::GitIndexSource::lx_community("lx-community");
     if let Ok(recipes) = comm.recipes() {
         for name in recipes.keys() {
             covered.insert(name.to_ascii_lowercase());

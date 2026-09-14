@@ -11,23 +11,49 @@ use super::{Capabilities, PackageIndex};
 use crate::debs::{confirm, detect_dist};
 use crate::index::{detect_host_format, IndexHit, InstallOpts};
 use crate::install_pkg::{detect_arch, install_prebuilt};
-use crate::plugins::plugin::plugin_identity;
 
-const REPO_URL: &str = "https://github.com/ranjithrajv/lx-index.git";
 const RECIPES_DIR: &str = "recipes";
 const STALE_HOURS: u64 = 24;
 
-pub struct LxCommunitySource {
+/// A read backend over a git repository of lx recipes with per-release
+/// prebuilts. Backs both the built-in LX community index and a user-added
+/// `custom` index (`SourceKind::Custom { url }`); they differ only in URL,
+/// identity, and cache location.
+pub struct GitIndexSource {
+    kind: &'static str,
+    description: &'static str,
     name: String,
+    repo_url: String,
     cache: PathBuf,
 }
 
-impl LxCommunitySource {
-    pub fn new(name: &str) -> Self {
+impl GitIndexSource {
+    /// The built-in LX community index.
+    pub const DEFAULT_URL: &'static str = "https://github.com/ranjithrajv/lx-index.git";
+
+    pub fn lx_community(name: &str) -> Self {
         let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
         Self {
+            kind: "lx-community",
+            description: "LX community index (recipes + per-release prebuilts)",
             name: name.to_string(),
+            repo_url: Self::DEFAULT_URL.to_string(),
+            // Keep the historical cache location for the built-in index.
             cache: base.join("lx").join("index"),
+        }
+    }
+
+    /// A user-added custom index at `url`.
+    pub fn custom(name: &str, url: &str) -> Self {
+        let base = dirs::cache_dir().unwrap_or_else(|| PathBuf::from("/tmp"));
+        Self {
+            kind: "custom",
+            description: "Custom git index (recipes + per-release prebuilts)",
+            name: name.to_string(),
+            repo_url: url.to_string(),
+            // Per-name cache dir so a custom source does not share (and
+            // overwrite) the built-in index's checkout.
+            cache: base.join("lx").join("index").join(name),
         }
     }
 
@@ -154,13 +180,17 @@ pub struct RecipeEntry {
     pub readme: Option<String>,
 }
 
-plugin_identity!(
-    LxCommunitySource,
-    "lx-community",
-    "LX community index (recipes + per-release prebuilts)"
-);
+impl crate::plugins::plugin::Plugin for GitIndexSource {
+    fn name(&self) -> &'static str {
+        self.kind
+    }
 
-impl PackageIndex for LxCommunitySource {
+    fn description(&self) -> &'static str {
+        self.description
+    }
+}
+
+impl PackageIndex for GitIndexSource {
     fn capabilities(&self) -> Capabilities {
         Capabilities::READ
     }
@@ -295,7 +325,7 @@ impl PackageIndex for LxCommunitySource {
     fn update(&self) -> Result<bool> {
         if !self.cache.join(".git").is_dir() {
             std::fs::create_dir_all(&self.cache)?;
-            self.run_git(&["clone", "--depth", "1", REPO_URL, "."])?;
+            self.run_git(&["clone", "--depth", "1", self.repo_url.as_str(), "."])?;
             return Ok(true);
         }
         let before = self.run_git(&["rev-parse", "HEAD"])?;

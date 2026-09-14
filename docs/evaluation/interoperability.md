@@ -207,8 +207,6 @@ Collected, so the ✅ rows above are not read as universal:
 - **Windows/macOS output is signed in-process** (`msix` p7x, xar
   `Signature`) from a PEM key + certificate; notarization is a separate
   Apple service and `.pkg` has no `Bom`.
-- **`SourceKind::Custom` is not yet a plugin** (`lib/index/registry.rs`),
-  so a custom read index needs code.
 - **Gated checks are gated.** The rpm/apk/ipk client tests only run when
   `LX_DNF`/`LX_APK_STATIC`/`LX_OPKG` name a binary.
 
