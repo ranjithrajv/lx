@@ -270,7 +270,7 @@ pub fn build_with_options(
 ) -> Result<()> {
     let rpm_arch = to_rpm_arch(arch);
 
-    let mut builder = rpm::PackageBuilder::new(
+    let builder = rpm::PackageBuilder::new(
         meta.name,
         meta.version,
         meta.license,
@@ -281,149 +281,16 @@ pub fn build_with_options(
     .release(meta.release)
     .source_date(mtime.max(0) as u32);
 
-    // Apply the epoch header tag when the config pins one.
-    if let Some(e) = opts.epoch {
-        builder = builder.epoch(e);
-    }
+    let builder = apply_meta_options(builder, opts);
+    let builder = apply_scriptlets(builder, opts);
+    let builder = apply_relations(builder, &opts.relations);
+    let builder = apply_auto_relations(builder, root, opts);
+    warn_ignored_defines(opts);
+    let builder = apply_triggers(builder, opts);
+    let mut builder = apply_vendor_packager(builder, meta);
 
-    // rpm.buildhost (nfpm parity). `rpm.group` is *not* applied here: the
-    // `rpm` crate hardcodes RPMTAG_GROUP to "Unspecified" and ignores
-    // `PackageBuilder::group`; the plugin reports it.
-    if !opts.buildhost.trim().is_empty() {
-        builder = builder.build_host(opts.buildhost.clone());
-    }
-
-    // Apply payload compression if specified (mirrors fpm's --rpm-compression).
-    if !opts.compression.is_empty() {
-        if let Ok(comp) = opts.compression.parse::<rpm::CompressionType>() {
-            builder = builder.compression(comp);
-        }
-    }
-
-    if let Some(s) = opts.pre_install.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.pre_install_script(s);
-    }
-    if let Some(s) = opts.post_install.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.post_install_script(s);
-    }
-    if let Some(s) = opts.pre_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.pre_uninstall_script(s);
-    }
-    if let Some(s) = opts.post_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.post_uninstall_script(s);
-    }
-    if let Some(s) = opts.pre_trans.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.pre_trans_script(s);
-    }
-    if let Some(s) = opts.post_trans.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.post_trans_script(s);
-    }
-    if let Some(s) = opts.verify_script.map(str::trim).filter(|s| !s.is_empty()) {
-        builder = builder.verify_script(s);
-    }
-
-    // Apply relation fields (requires, provides, conflicts, obsoletes,
-    // recommends, suggests). `rpm::Dependency` does not implement `Clone`,
-    // so rebuild each from its public fields.
-    for dep in &opts.relations.requires {
-        builder = builder.requires(RpmRelations::rebuild(dep));
-    }
-    for dep in &opts.relations.provides {
-        builder = builder.provides(RpmRelations::rebuild(dep));
-    }
-    for dep in &opts.relations.conflicts {
-        builder = builder.conflicts(RpmRelations::rebuild(dep));
-    }
-    for dep in &opts.relations.obsoletes {
-        builder = builder.obsoletes(RpmRelations::rebuild(dep));
-    }
-    for dep in &opts.relations.recommends {
-        builder = builder.recommends(RpmRelations::rebuild(dep));
-    }
-    for dep in &opts.relations.suggests {
-        builder = builder.suggests(RpmRelations::rebuild(dep));
-    }
-
-    // Best-effort `--auto-requires` / `--auto-provides` (find-requires /
-    // find-provides analogues over the staged ELF payload).
-    if opts.auto_provides || opts.auto_requires {
-        let (auto_requires, auto_provides) = auto_elf_relations(root);
-        if opts.auto_requires {
-            // A package never needs to require a soname it provides itself.
-            let explicit: std::collections::HashSet<&str> = opts
-                .relations
-                .provides
-                .iter()
-                .map(|d| d.name.as_str())
-                .collect();
-            let mut seen: std::collections::HashSet<String> = opts
-                .relations
-                .requires
-                .iter()
-                .map(|d| d.name.clone())
-                .collect();
-            for name in auto_requires {
-                if !explicit.contains(name.as_str()) && seen.insert(name.clone()) {
-                    builder = builder.requires(rpm::Dependency::any(name));
-                }
-            }
-        }
-        if opts.auto_provides {
-            let mut seen: std::collections::HashSet<String> = opts
-                .relations
-                .provides
-                .iter()
-                .map(|d| d.name.clone())
-                .collect();
-            for name in auto_provides {
-                if seen.insert(name.clone()) {
-                    builder = builder.provides(rpm::Dependency::any(name));
-                }
-            }
-        }
-    }
-
-    // `rpm.defines` needs an rpmbuild macro engine; the in-process builder
-    // has none. Report it instead of silently dropping it.
-    if !opts.defines.is_empty() {
-        eprintln!(
-            "  ⚠ rpm.defines is ignored: the in-process builder has no rpmbuild macro engine"
-        );
-    }
-
-    // Apply RPM triggers as dependencies with trigger flags. The trigger
-    // dependency (the condition) is always emitted. The associated script
-    // is emitted alongside as a best-effort scriptlet (true RPM triggers
-    // need %triggerin/%triggerun scriptlets which the rpm crate doesn't
-    // yet expose natively).
-    for (trigger, flags) in opts.triggers.iter().zip(opts.trigger_flags.iter()) {
-        let dep = rpm::Dependency {
-            name: trigger.package.clone(),
-            flags: *flags,
-            version: String::new(),
-        };
-        builder = builder.requires(dep);
-        // Best-effort: emit the trigger script as a post-install scriptlet.
-        // A full implementation would use %triggerin/%triggerun scriptlets
-        // via rpmbuild or a future rpm-crate version.
-        if !trigger.script.trim().is_empty() {
-            builder = builder.post_install_script(trigger.script.trim());
-        }
-    }
-
-    // Apply vendor and packager header tags when present.
-    if let Some(v) = meta.vendor.filter(|v| !v.trim().is_empty()) {
-        builder = builder.vendor(v);
-    }
-    if let Some(p) = meta.packager.filter(|p| !p.trim().is_empty()) {
-        builder = builder.packager(p);
-    }
-
-    // Walk staged tree in sorted order for reproducibility, adding each
-    // regular file and symlink as an RPM file entry.
-    // We need a temp empty file for symlink entries (rpm crate reads a real
-    // file; for symlinks the content is irrelevant and the link target is
-    // stored in the header).
+    // Symlink entries need a real (empty) backing file; the link target goes
+    // in the header.
     let empty_file = tempfile::NamedTempFile::new()?;
     std::fs::write(empty_file.path(), b"")?;
 
@@ -445,31 +312,201 @@ pub fn build_with_options(
         file_meta,
     )?;
 
-    // Sign during the same build pass when configured — `build_and_sign`
-    // embeds the PGP signature header before anything is written.
-    let signer;
-    if let Some(key_file) = opts.sign_key_file {
-        let key_bytes = crate::sign::SignRequest {
-            key_file,
-            key_id: "",
-            passphrase: opts.sign_passphrase,
-        }
-        .key_bytes()?;
-        let mut s = rpm::signature::pgp::Signer::load_from_asc_bytes(&key_bytes)
-            .context("failed to load RPM signing key")?;
-        if let Some(pass) = opts.sign_passphrase.filter(|p| !p.is_empty()) {
-            s = s.with_key_passphrase(pass);
-        }
-        signer = Some(s);
-    } else {
-        signer = None;
-    }
+    let signer = load_signer(opts)?;
+    finalize_package(builder, signer, file_meta, mtime, rpm_path)
+}
 
-    // Build unsigned first, then inject `file_info.lang` (the crate hardcodes
-    // every FILELANGS slot to empty), then apply any configured signature over
-    // the final header. With no languages to inject this is exactly
-    // `build()` followed by an optional `sign_with_timestamp`, i.e. the same
-    // output as the previous `build_and_sign` path.
+/// Epoch / buildhost / compression header tags.
+///
+/// `rpm.group` is *not* applied here: the `rpm` crate hardcodes RPMTAG_GROUP
+/// to "Unspecified" and ignores `PackageBuilder::group`; the plugin reports it.
+fn apply_meta_options(
+    mut builder: rpm::PackageBuilder,
+    opts: &BuildOptions,
+) -> rpm::PackageBuilder {
+    if let Some(e) = opts.epoch {
+        builder = builder.epoch(e);
+    }
+    if !opts.buildhost.trim().is_empty() {
+        builder = builder.build_host(opts.buildhost.clone());
+    }
+    if !opts.compression.is_empty() {
+        if let Ok(comp) = opts.compression.parse::<rpm::CompressionType>() {
+            builder = builder.compression(comp);
+        }
+    }
+    builder
+}
+
+/// The seven RPM scriptlets (`%pre`/`%post`/…), each skipped when blank.
+fn apply_scriptlets(mut builder: rpm::PackageBuilder, opts: &BuildOptions) -> rpm::PackageBuilder {
+    if let Some(s) = opts.pre_install.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_install_script(s);
+    }
+    if let Some(s) = opts.post_install.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_install_script(s);
+    }
+    if let Some(s) = opts.pre_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_uninstall_script(s);
+    }
+    if let Some(s) = opts.post_uninstall.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_uninstall_script(s);
+    }
+    if let Some(s) = opts.pre_trans.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.pre_trans_script(s);
+    }
+    if let Some(s) = opts.post_trans.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.post_trans_script(s);
+    }
+    if let Some(s) = opts.verify_script.map(str::trim).filter(|s| !s.is_empty()) {
+        builder = builder.verify_script(s);
+    }
+    builder
+}
+
+/// Relation fields (requires, provides, conflicts, obsoletes, recommends,
+/// suggests). `rpm::Dependency` is not `Clone`, so each is rebuilt.
+fn apply_relations(mut builder: rpm::PackageBuilder, rel: &RpmRelations) -> rpm::PackageBuilder {
+    for dep in &rel.requires {
+        builder = builder.requires(RpmRelations::rebuild(dep));
+    }
+    for dep in &rel.provides {
+        builder = builder.provides(RpmRelations::rebuild(dep));
+    }
+    for dep in &rel.conflicts {
+        builder = builder.conflicts(RpmRelations::rebuild(dep));
+    }
+    for dep in &rel.obsoletes {
+        builder = builder.obsoletes(RpmRelations::rebuild(dep));
+    }
+    for dep in &rel.recommends {
+        builder = builder.recommends(RpmRelations::rebuild(dep));
+    }
+    for dep in &rel.suggests {
+        builder = builder.suggests(RpmRelations::rebuild(dep));
+    }
+    builder
+}
+
+/// Best-effort `--auto-requires` / `--auto-provides` (find-requires /
+/// find-provides analogues over the staged ELF payload).
+fn apply_auto_relations(
+    mut builder: rpm::PackageBuilder,
+    root: &Path,
+    opts: &BuildOptions,
+) -> rpm::PackageBuilder {
+    if !(opts.auto_provides || opts.auto_requires) {
+        return builder;
+    }
+    let (auto_requires, auto_provides) = auto_elf_relations(root);
+    if opts.auto_requires {
+        // A package never needs to require a soname it provides itself.
+        let explicit: std::collections::HashSet<&str> = opts
+            .relations
+            .provides
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect();
+        let mut seen: std::collections::HashSet<String> = opts
+            .relations
+            .requires
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        for name in auto_requires {
+            if !explicit.contains(name.as_str()) && seen.insert(name.clone()) {
+                builder = builder.requires(rpm::Dependency::any(name));
+            }
+        }
+    }
+    if opts.auto_provides {
+        let mut seen: std::collections::HashSet<String> = opts
+            .relations
+            .provides
+            .iter()
+            .map(|d| d.name.clone())
+            .collect();
+        for name in auto_provides {
+            if seen.insert(name.clone()) {
+                builder = builder.provides(rpm::Dependency::any(name));
+            }
+        }
+    }
+    builder
+}
+
+/// `rpm.defines` needs an rpmbuild macro engine the in-process builder lacks;
+/// report it instead of silently dropping it.
+fn warn_ignored_defines(opts: &BuildOptions) {
+    if !opts.defines.is_empty() {
+        eprintln!(
+            "  ⚠ rpm.defines is ignored: the in-process builder has no rpmbuild macro engine"
+        );
+    }
+}
+
+/// Trigger dependencies are always emitted; the script is a best-effort
+/// post-install scriptlet (true `%triggerin` needs rpmbuild).
+fn apply_triggers(mut builder: rpm::PackageBuilder, opts: &BuildOptions) -> rpm::PackageBuilder {
+    for (trigger, flags) in opts.triggers.iter().zip(opts.trigger_flags.iter()) {
+        let dep = rpm::Dependency {
+            name: trigger.package.clone(),
+            flags: *flags,
+            version: String::new(),
+        };
+        builder = builder.requires(dep);
+        if !trigger.script.trim().is_empty() {
+            builder = builder.post_install_script(trigger.script.trim());
+        }
+    }
+    builder
+}
+
+/// Vendor and packager header tags when present.
+fn apply_vendor_packager(
+    mut builder: rpm::PackageBuilder,
+    meta: &PackageMeta,
+) -> rpm::PackageBuilder {
+    if let Some(v) = meta.vendor.filter(|v| !v.trim().is_empty()) {
+        builder = builder.vendor(v);
+    }
+    if let Some(p) = meta.packager.filter(|p| !p.trim().is_empty()) {
+        builder = builder.packager(p);
+    }
+    builder
+}
+
+/// Load the native PGP signer when a key is configured.
+fn load_signer(opts: &BuildOptions) -> Result<Option<rpm::signature::pgp::Signer>> {
+    let Some(key_file) = opts.sign_key_file else {
+        return Ok(None);
+    };
+    let key_bytes = crate::sign::SignRequest {
+        key_file,
+        key_id: "",
+        passphrase: opts.sign_passphrase,
+    }
+    .key_bytes()?;
+    let mut s = rpm::signature::pgp::Signer::load_from_asc_bytes(&key_bytes)
+        .context("failed to load RPM signing key")?;
+    if let Some(pass) = opts.sign_passphrase.filter(|p| !p.is_empty()) {
+        s = s.with_key_passphrase(pass);
+    }
+    Ok(Some(s))
+}
+
+/// Build, inject `file_info.lang` (the crate hardcodes every FILELANGS slot to
+/// empty), apply any signature over the final header, and write the file.
+///
+/// With no languages to inject this is exactly `build()` followed by an
+/// optional `sign_with_timestamp`, i.e. the same output as `build_and_sign`.
+fn finalize_package(
+    builder: rpm::PackageBuilder,
+    signer: Option<rpm::signature::pgp::Signer>,
+    file_meta: &FileMetaMap,
+    mtime: i64,
+    rpm_path: &Path,
+) -> Result<()> {
     let mut pkg = builder.build().context("failed to build rpm package")?;
     let mut bytes = Vec::new();
     pkg.write(&mut bytes).context("failed to serialize .rpm")?;
@@ -478,9 +515,8 @@ pub fn build_with_options(
         let (patched, header_sha256) = inject_file_langs(bytes, &langs)?;
         pkg =
             rpm::Package::parse(&mut &patched[..]).context("failed to re-read the patched .rpm")?;
-        // Unsigned: the builder emits a digest-only signature header (SHA256
-        // over the main header); refresh it for the rewritten header. When a
-        // key is present the signature below covers the new header instead.
+        // Unsigned: refresh the digest-only signature header for the rewritten
+        // header. When a key is present the signature below covers it.
         if signer.is_none() {
             pkg.metadata.signature = rpm::Header::<rpm::IndexSignatureTag>::builder()
                 .add_digest(&header_sha256)
