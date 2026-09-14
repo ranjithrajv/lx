@@ -633,3 +633,77 @@ fn from_dir_rejects_relative_prefix() {
         "expected prefix error, got: {err}"
     );
 }
+
+/// Regression: a real (non-dry-run) `--from-dir` build must package locally
+/// and never fall through to the forge-source lookup. Before the fix, the
+/// worker thread resolved `source_name` to an unknown forge plugin and
+/// panicked with "unknown source plugin" for every `--from-dir`/`--from-file`
+/// build (only the `--dry-run` tests covered the path, and they return
+/// before the workers start).
+#[test]
+fn from_dir_builds_a_deb_without_a_forge_source() {
+    let payload = tempfile::tempdir().unwrap();
+    // A real ELF keeps the staging/dep-scan path honest; /bin/true is small
+    // and present on every Linux CI image, with the test binary as a fallback.
+    let dest = payload.path().join("mybinary");
+    if std::fs::copy("/bin/true", &dest).is_err() {
+        std::fs::copy(std::env::current_exe().unwrap(), &dest).unwrap();
+    }
+
+    let out = tempfile::tempdir().unwrap();
+    let args = BuildArgs {
+        config: out.path().join("nonexistent.yaml"),
+        all: None,
+        version: Some("1.0.0".into()),
+        build_version: "1".into(),
+        architectures: Some("amd64".into()),
+        host: false,
+        distributions: Some("trixie".into()),
+        output: out.path().join("dist"),
+        format: Some("deb".into()),
+        provider: None,
+        no_verify: false,
+        allow_unverified: false,
+        lintian: false,
+        lintian_fail_on_warnings: false,
+        lintian_pedantic: false,
+        lintian_suppress: None,
+        dry_run: false,
+        max_parallel: 1,
+        pinned_metadata: None,
+        cache_dir: None,
+        api_cache_dir: None,
+        source: false,
+        summary: false,
+        telemetry: false,
+        save_baseline: false,
+        sandbox: false,
+        install_build_deps: false,
+        sbom: false,
+        cosign: false,
+        cross_target: None,
+        bindep: true,
+        progress: false,
+        progress_path: None,
+        keep: false,
+        sign_key: None,
+        sign_key_id: None,
+        sign_method: None,
+        local: false,
+        from_dir: Some(payload.path().to_path_buf()),
+        from_file: None,
+        package_name: Some("myapp".into()),
+        prefix: None,
+        overlay: None,
+        update_lock: false,
+        artifact_cache_dir: None,
+        verify: false,
+    };
+    run(args, None).expect("--from-dir build should package locally");
+
+    let built = std::fs::read_dir(out.path().join("dist"))
+        .expect("output dir should exist")
+        .filter_map(Result::ok)
+        .any(|e| e.path().extension().is_some_and(|ext| ext == "deb"));
+    assert!(built, "expected a .deb in the output directory");
+}

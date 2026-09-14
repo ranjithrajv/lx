@@ -1541,7 +1541,7 @@ fn build_jobs(
         let telemetry = telemetry.clone();
         let source_name = source_name.clone();
         handles.push(std::thread::spawn(move || {
-            let source = if args.local {
+            let source = if args.local || args.from_dir.is_some() || args.from_file.is_some() {
                 None
             } else {
                 Some(
