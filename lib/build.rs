@@ -289,6 +289,61 @@ pub struct BuildArgs {
     pub bindep: bool,
 }
 
+/// Mirrors clap's defaults so callers (e.g. `lx publish`) can build a
+/// `BuildArgs` with `..Default::default()` instead of restating every field.
+impl Default for BuildArgs {
+    fn default() -> Self {
+        Self {
+            config: PathBuf::from(lx_lib::constants::DEFAULT_CONFIG_FILENAME),
+            all: None,
+            version: None,
+            build_version: "1".to_string(),
+            architectures: None,
+            host: false,
+            distributions: None,
+            output: PathBuf::from("dist"),
+            format: None,
+            provider: None,
+            no_verify: false,
+            allow_unverified: false,
+            lintian: false,
+            lintian_fail_on_warnings: false,
+            lintian_pedantic: false,
+            lintian_suppress: None,
+            dry_run: false,
+            max_parallel: 0,
+            pinned_metadata: None,
+            cache_dir: None,
+            api_cache_dir: None,
+            source: false,
+            summary: false,
+            telemetry: false,
+            save_baseline: false,
+            progress: false,
+            progress_path: None,
+            keep: false,
+            sign_key: None,
+            sign_key_id: None,
+            sign_method: None,
+            local: false,
+            from_dir: None,
+            from_file: None,
+            package_name: None,
+            prefix: None,
+            overlay: None,
+            update_lock: false,
+            artifact_cache_dir: None,
+            sandbox: false,
+            install_build_deps: false,
+            sbom: false,
+            verify: false,
+            cosign: false,
+            cross_target: None,
+            bindep: true,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedJob {
     pub dist: String,

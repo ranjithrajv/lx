@@ -201,16 +201,10 @@ fn migrate_distro_package(package: &str, token: Option<&str>) -> Result<bool> {
     match crate::install::run(
         crate::install::InstallArgs {
             package: package.to_string(),
-            format: None,
-            version: None,
-            arch: None,
-            distribution: None,
-            download_only: None,
-            no_verify: false,
             allow_unverified: true,
             reinstall: true,
             yes: true,
-            source: None,
+            ..Default::default()
         },
         token,
     ) {

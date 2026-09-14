@@ -68,6 +68,25 @@ pub struct InstallArgs {
     pub source: Option<String>,
 }
 
+/// Mirrors clap's defaults so callers can use `..Default::default()`.
+impl Default for InstallArgs {
+    fn default() -> Self {
+        Self {
+            package: String::new(),
+            format: None,
+            version: None,
+            arch: None,
+            distribution: None,
+            download_only: None,
+            no_verify: false,
+            allow_unverified: false,
+            reinstall: false,
+            yes: false,
+            source: None,
+        }
+    }
+}
+
 /// `--reinstall` without an explicit `--version` re-installs the version lx
 /// recorded for this package (the former top-level `lx reinstall` behavior):
 /// fill in the manifest's version/format/arch/distribution unless the user

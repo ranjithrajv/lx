@@ -1051,15 +1051,9 @@ fn install_native_package(package: &str, format: &str, token: Option<&str>) -> R
             InstallArgs {
                 package: package.to_string(),
                 format: Some(format.to_string()),
-                version: None,
-                arch: None,
-                distribution: None,
-                download_only: None,
-                no_verify: false,
                 allow_unverified: true,
-                reinstall: false,
                 yes: true,
-                source: None,
+                ..Default::default()
             },
             token,
         ),

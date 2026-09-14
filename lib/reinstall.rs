@@ -48,12 +48,11 @@ pub fn run(args: ReinstallArgs, token: Option<&str>) -> Result<()> {
             version: Some(entry.version.clone()),
             arch: Some(entry.arch.clone()),
             distribution: Some(entry.distribution.clone()),
-            download_only: None,
             no_verify: args.no_verify,
             allow_unverified: args.allow_unverified,
             reinstall: true,
             yes: args.yes,
-            source: None,
+            ..Default::default()
         },
         token,
     )
