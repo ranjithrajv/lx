@@ -16,6 +16,12 @@
   re-registered in the target. RPM's auto-generated `Provides` (self-provide,
   sonames, file/capability provides) are filtered out while real virtual
   provides are kept.
+- Maintainer triggers carry where the models overlap: an RPM `%triggerin`
+  becomes a deb `interest` (plus a `triggered` postinst branch when it has a
+  scriptlet), and a declarative deb `interest` becomes an RPM `%triggerin`
+  condition. RPM `triggerun`/`triggerpostun`/`triggerprein`, deb `activate*`,
+  and Arch's absent trigger mechanism are reported, never dropped silently;
+  trigger-flagged RPM `Requires` no longer leak into the converted `Depends`.
 - Fixed the built artifact being written into a `TempDir` that was dropped
   before the output was copied, which made a real conversion fail to produce
   a file (only dry-run paths were exercised before).

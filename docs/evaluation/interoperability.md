@@ -121,10 +121,12 @@ general converter:
   `osxpkg`, `freebsd`, or `snap`.
 - It rebuilds the target's model rather than copying raw bytes, carrying
   relation fields (`Provides`/`Recommends`/`Suggests`/`Conflicts`/
-  `Replaces`/`Breaks`/`Pre-Depends`), `Section`/`Priority`, epoch, and
-  conffile/`%config` semantics, and rewriting dependency syntax and names
-  across formats. Anything the target model doesn't express is still
-  dropped: capabilities, xattrs, RPM triggers, debconf, and signatures.
+  `Replaces`/`Breaks`/`Pre-Depends`), `Section`/`Priority`, epoch,
+  conffile/`%config` semantics, and maintainer triggers where the target has
+  an equivalent (RPM `%triggerin` ↔ deb `interest`; the rest are reported),
+  while rewriting dependency syntax and names across formats. Anything the
+  target model doesn't express is still dropped: capabilities, xattrs,
+  debconf, and signatures.
 - It converts **packages `lx` itself can produce**, not arbitrary fpm
   outputs with richer per-file metadata.
 
@@ -207,8 +209,10 @@ Collected, so the ✅ rows above are not read as universal:
   `-e`/`-T`/`-O`/`-d`/`-p`/`-l` parity are not covered
   (`docs/architecture/replacements.md` §2.6).
 - **Conversion is a subset.** deb↔rpm↔arch only, with in-process readers for
-  all three, but the target model can't express capabilities, xattrs, RPM
-  triggers, debconf, or signatures, so those are dropped.
+  all three. Triggers carry only where the models overlap; RPM
+  `triggerun`/`triggerpostun`/`triggerprein`, deb `activate*`, and Arch's
+  absent trigger mechanism are reported rather than carried, and
+  capabilities, xattrs, debconf, and signatures are inherently dropped.
 - **No upstream attestation consumption** (see I7).
 - **`dpkg-sig` is not implemented**, and a live `debsig-verify` test does
   not exist.
