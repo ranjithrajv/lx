@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Missing `package.yaml` shows the command's help
+
+- Commands whose input defaults to `package.yaml` (`build`, `publish`,
+  `validate`, `deps scan`) now print their own help when invoked bare with no
+  such file, instead of a bare "failed to read config file" error. An
+  explicitly named config that is missing still errors, so scripts and CI
+  can't silently pass on a typo.
+
 ### `lx convert` metadata interoperability
 
 - RPM metadata, scriptlets, and payload are read in-process via the `rpm`

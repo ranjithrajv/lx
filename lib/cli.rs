@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use std::path::Path;
 
 #[derive(Parser)]
 #[command(
@@ -170,6 +171,15 @@ pub enum GetCommands {
 }
 
 pub fn run(cli: Cli) -> Result<()> {
+    // A command whose only input is `package.yaml` was invoked with the
+    // implicit default path and no such file exists: show that command's help
+    // instead of a bare "failed to read config file" error. An explicitly
+    // named config that is missing still errors, so scripts/CI can't pass on a
+    // typo.
+    if let Some(path) = help_path_for_bare_invocation(&cli.command) {
+        return print_help_for(&path);
+    }
+
     match cli.command {
         Commands::Build(args) => run_build(args, cli.token.as_deref()),
         Commands::Publish(args) => crate::publish::run(args, cli.token.as_deref()),
@@ -238,5 +248,58 @@ fn run_build(args: crate::build::BuildArgs, token: Option<&str>) -> Result<()> {
         per.format = Some(format);
         crate::build::run(per, token).inspect_err(log)?;
     }
+    Ok(())
+}
+
+/// The clap path to the command whose help should be shown for a bare
+/// invocation with no default `package.yaml`, or `None` if this invocation
+/// isn't that case. Covers every command whose input defaults to
+/// `package.yaml`: `build`, `publish`, `validate`, and `deps scan` (plus the
+/// hidden `scan-deps` shim).
+fn help_path_for_bare_invocation(command: &Commands) -> Option<Vec<&'static str>> {
+    match command {
+        Commands::Build(a) if is_bare_build_without_config(a) => Some(vec!["build"]),
+        Commands::Publish(a) if is_implicit_missing_default(&a.config) => Some(vec!["publish"]),
+        Commands::Validate(a) if is_implicit_missing_default(&a.config) => Some(vec!["validate"]),
+        Commands::Deps(d) => match &d.command {
+            DepsCommands::Scan(a) if is_implicit_missing_default(&a.config) => {
+                Some(vec!["deps", "scan"])
+            }
+            _ => None,
+        },
+        Commands::ScanDeps(a) if is_implicit_missing_default(&a.config) => Some(vec!["scan-deps"]),
+        _ => None,
+    }
+}
+
+/// True for the implicit `lx build` invocation — the default `package.yaml`
+/// path was used but that file is absent, and no alternative input was given
+/// (`--all`, `--from-dir`/`--from-file`, or a forge URL passed in place of the
+/// config, which the filename equality check also excludes).
+fn is_bare_build_without_config(args: &crate::build::BuildArgs) -> bool {
+    args.all.is_none()
+        && args.from_dir.is_none()
+        && args.from_file.is_none()
+        && is_implicit_missing_default(&args.config)
+}
+
+/// True when `config` is the implicit `package.yaml` default and that file
+/// does not exist. An explicitly named path never matches, so a missing file
+/// the user asked for by name is still a real error.
+fn is_implicit_missing_default(config: &Path) -> bool {
+    config == Path::new(lx_lib::constants::DEFAULT_CONFIG_FILENAME) && !config.exists()
+}
+
+/// Print the help of the subcommand at `path` (e.g. `["deps", "scan"]`) exactly
+/// as `<path> --help` would (through clap, so the usage line keeps its full
+/// `lx …` prefix).
+fn print_help_for(path: &[&str]) -> Result<()> {
+    let mut argv = vec!["lx"];
+    argv.extend_from_slice(path);
+    argv.push("--help");
+    let help = Cli::command()
+        .try_get_matches_from(argv)
+        .expect_err("`--help` always yields a clap DisplayHelp error");
+    help.print()?;
     Ok(())
 }
