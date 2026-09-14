@@ -18,50 +18,55 @@ pub struct BuildArgs {
     /// Build every package.yaml listed in a fleet manifest instead of a
     /// single config (YAML: `packages: [path, ...]`, paths relative to the
     /// manifest's own directory). Every other flag applies to each build.
-    #[arg(long, value_name = "PACKAGES_YAML", conflicts_with = "config")]
+    #[arg(
+        long,
+        value_name = "PACKAGES_YAML",
+        conflicts_with = "config",
+        help_heading = "Input"
+    )]
     pub all: Option<PathBuf>,
 
     /// Version of the software to build (overrides any version in config).
-    #[arg(short = 'v', long)]
+    #[arg(short = 'v', long, help_heading = "Input")]
     pub version: Option<String>,
 
     /// Debian build version/revision (defaults to "1").
-    #[arg(long, default_value = "1")]
+    #[arg(long, default_value = "1", help_heading = "Input")]
     pub build_version: String,
 
     /// Restrict to specific architectures (comma-separated).
-    #[arg(long)]
+    #[arg(long, help_heading = "Target")]
     pub architectures: Option<String>,
 
     /// Build only for this machine's own architecture (auto-detected via
     /// `uname -m`), host-native. Conflicts with
     /// --architectures; pass one or the other.
-    #[arg(long)]
+    #[arg(long, help_heading = "Target")]
     pub host: bool,
 
     /// Restrict to specific distributions (comma-separated).
-    #[arg(long)]
+    #[arg(long, help_heading = "Target")]
     pub distributions: Option<String>,
 
     /// Directory to write resulting package files into.
-    #[arg(long, default_value = "dist")]
+    #[arg(long, default_value = "dist", help_heading = "Output")]
     pub output: PathBuf,
 
     /// Package format plugin to use: deb, rpm, arch, apk, or ipk. `all`
     /// builds every registered format; a comma-separated list builds each.
     /// Overrides package.yaml's `package_format`. Defaults to the config
     /// file's value (or "deb").
-    #[arg(long)]
+    #[arg(long, help_heading = "Target")]
     pub format: Option<String>,
 
     /// Source provider plugin for auto-discovery (github or gitlab).
     /// Overrides `package.yaml`'s `source`. Defaults to the config's value
     /// (or "github").
-    #[arg(long, value_name = "PROVIDER")]
+    #[arg(long, value_name = "PROVIDER", help_heading = "Target")]
     pub provider: Option<String>,
 
     /// Skip checksum verification (not recommended).
-    #[arg(long)]
+    #[arg(long, help_heading = "Verification")]
     pub no_verify: bool,
 
     /// Proceed when an asset has no pinned or sidecar checksum to verify
@@ -69,89 +74,89 @@ pub struct BuildArgs {
     /// publish a checksum sidecar, so without either this or
     /// --pinned-metadata, the default is to refuse to build from an
     /// unverified download rather than silently warn and continue.
-    #[arg(long)]
+    #[arg(long, help_heading = "Verification")]
     pub allow_unverified: bool,
 
     /// Run lintian on each built .deb (fails on errors by default).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub lintian: bool,
 
     /// Fail the build on lintian warnings too (implies --lintian).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub lintian_fail_on_warnings: bool,
 
     /// Enable pedantic lintian checks (implies --lintian).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub lintian_pedantic: bool,
 
     /// Comma-separated lintian tags to suppress (implies --lintian).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub lintian_suppress: Option<String>,
 
     /// Print what would be built and exit.
-    #[arg(long)]
+    #[arg(long, help_heading = "Other")]
     pub dry_run: bool,
 
     /// Maximum concurrent architecture builds. Default (0) auto-tunes from
     /// system resources, mirroring the action's ci-optimization.sh
     /// (resource-based dynamic parallelism). Distributions for an
     /// architecture are always built sequentially within its worker.
-    #[arg(long, default_value_t = 0)]
+    #[arg(long, default_value_t = 0, help_heading = "Performance")]
     pub max_parallel: usize,
 
     /// Path to release-metadata.json (the action's vet-time provenance pin).
     /// When present, every downloaded asset is verified against the pinned
     /// SHA-256 for that asset + version instead of the live sidecar file.
-    #[arg(long)]
+    #[arg(long, help_heading = "Verification")]
     pub pinned_metadata: Option<PathBuf>,
 
     /// Persistent download cache directory (default: disabled). Reuses
     /// downloads across runs for 24h, keyed by url + expected checksum.
-    #[arg(long)]
+    #[arg(long, help_heading = "Performance")]
     pub cache_dir: Option<PathBuf>,
 
     /// JSON API cache directory (mirrors the action's /tmp/github_api_cache).
     /// GitHub release/license responses are cached for 5 minutes to avoid
     /// rate limits on repeated runs. Best-effort.
-    #[arg(long)]
+    #[arg(long, help_heading = "Performance")]
     pub api_cache_dir: Option<PathBuf>,
 
     /// Also generate Debian source packages (3.0 quilt: .dsc +
     /// .debian.tar.xz + .orig.tar.xz) for each distribution built,
     /// mirroring the action's build_source_packages. Built natively
     /// in-process -- no dpkg-source subprocess.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub source: bool,
 
     /// Write a build-summary.json into the output directory with the built
     /// packages, sizes, timing, and success rate (action's
     /// generate_build_summary parity).
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub summary: bool,
 
     /// Enable minimal telemetry (action's TELEMETRY_ENABLED): writes
     /// .telemetry/metrics.json + stages.log/failures.log and populates the
     /// `telemetry` object in build-summary.json.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub telemetry: bool,
 
     /// Save the current build metrics as performance baseline
     /// (.telemetry/baseline.json) for regression detection on future
     /// builds (action's save-baseline / save_as_baseline parity).
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub save_baseline: bool,
 
     /// Show a live inline progress bar while building (action's
     /// progress.sh). Only rendered on an interactive terminal.
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub progress: bool,
 
     /// Path for the build progress JSON (default: /tmp/build_progress.json).
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub progress_path: Option<PathBuf>,
 
     /// Keep intermediate files (downloaded assets, staging dirs).
-    #[arg(long)]
+    #[arg(long, help_heading = "Output")]
     pub keep: bool,
 
     /// Sign built packages: path to an ASCII-armored secret key. Overrides
@@ -160,24 +165,24 @@ pub struct BuildArgs {
     /// `debsign`, embeds `_gpgorigin` inside the `.deb`. For rpm, embeds
     /// the PGP signature natively (`rpm -K` verifiable). Passphrase comes
     /// from $LX_SIGN_PASSPHRASE, falling back to $NFPM_PASSPHRASE.
-    #[arg(long, value_name = "KEY_FILE")]
+    #[arg(long, value_name = "KEY_FILE", help_heading = "Signing")]
     pub sign_key: Option<PathBuf>,
 
     /// Signing key id / fingerprint (gpg --local-user for deb; ignored by
     /// rpm). Overrides package.yaml's `signature.key_id`.
-    #[arg(long, value_name = "KEY_ID")]
+    #[arg(long, value_name = "KEY_ID", help_heading = "Signing")]
     pub sign_key_id: Option<String>,
 
     /// Deb signing method: `detach` (sibling `.sig`, default) or `debsign`
     /// (embedded `_gpgorigin`). Overrides package.yaml's
     /// `signature.method`. Ignored for rpm/arch.
-    #[arg(long, value_name = "METHOD")]
+    #[arg(long, value_name = "METHOD", help_heading = "Signing")]
     pub sign_method: Option<String>,
 
     /// Build from a local payload (skip upstream download). Uses
     /// `local_payload` from package.yaml (archive or directory). Path
     /// existence is checked at build time.
-    #[arg(long)]
+    #[arg(long, help_heading = "Input")]
     pub local: bool,
 
     /// "You supply files" mode (fpm-style): build a package from a directory
@@ -185,30 +190,40 @@ pub struct BuildArgs {
     /// `--package-name` and `--version` if not given in package.yaml. The
     /// directory's files are staged into the package (ELF binaries →
     /// /usr/bin, or `--prefix`). Conflicts with `--local`.
-    #[arg(long, value_name = "PATH", conflicts_with = "local")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "local",
+        help_heading = "Input"
+    )]
     pub from_dir: Option<PathBuf>,
 
     /// Like `--from-dir` but for a single file. The file is installed to
     /// /usr/bin (or `--prefix`). Conflicts with `--from-dir`.
-    #[arg(long, value_name = "PATH", conflicts_with = "from_dir")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "from_dir",
+        help_heading = "Input"
+    )]
     pub from_file: Option<PathBuf>,
 
     /// Package name for `--from-dir`/`--from-file` builds (overrides
     /// package.yaml). Required if no package.yaml is present.
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", help_heading = "Input")]
     pub package_name: Option<String>,
 
     /// Install prefix inside the package for `--from-dir`/`--from-file`
     /// (e.g. "/usr/local/bin", "/opt/myapp"). Files are staged under this
     /// absolute path instead of the default /usr/bin. Must start with '/'.
-    #[arg(long, value_name = "PATH")]
+    #[arg(long, value_name = "PATH", help_heading = "Input")]
     pub prefix: Option<String>,
 
     /// Apply a delta package.yaml over the base config before building: its
     /// top-level keys replace the base's. Lets an org share one base
     /// package.yaml and fork only what differs per target instead of
     /// duplicating the whole template.
-    #[arg(long)]
+    #[arg(long, help_heading = "Input")]
     pub overlay: Option<PathBuf>,
 
     /// Write/refresh `package.lock` next to the config after a successful
@@ -216,7 +231,7 @@ pub struct BuildArgs {
     /// a `package.lock` already exists and this flag is absent, every
     /// resolved asset is instead verified against it and the build fails on
     /// drift (a different tag or asset than what's pinned).
-    #[arg(long)]
+    #[arg(long, help_heading = "Verification")]
     pub update_lock: bool,
 
     /// Cache built package artifacts, keyed by config + build flags + asset
@@ -224,14 +239,14 @@ pub struct BuildArgs {
     /// rebuild copies the cached file instead of re-running the packaging
     /// pipeline. Skipped for jobs that produce a detached signature (the
     /// cache doesn't track the sibling `.sig` file).
-    #[arg(long)]
+    #[arg(long, help_heading = "Performance")]
     pub artifact_cache_dir: Option<PathBuf>,
 
     /// build_mode: source only — run compile steps under `unshare -n`
     /// (no network, private mounts) when the kernel permits, else run
     /// unsandboxed with a warning. Binary repacks never execute anything
     /// and ignore this flag.
-    #[arg(long)]
+    #[arg(long, help_heading = "Source build")]
     pub sandbox: bool,
 
     /// build_mode: source only — install the missing host build
@@ -239,13 +254,13 @@ pub struct BuildArgs {
     /// with the host package manager before compiling, instead of only
     /// reporting them. Uses `sudo` unless already root; combine with
     /// `--dry-run` to print the install command without running it.
-    #[arg(long)]
+    #[arg(long, help_heading = "Source build")]
     pub install_build_deps: bool,
 
     /// Emit supply-chain attestations into the output dir:
     /// `<pkg>_<ver>.spdx.json` (SPDX 2.3 SBOM) and `<pkg>_<ver>.slsa.json`
     /// (SLSA v1-style provenance over built artifacts + upstream materials).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub sbom: bool,
 
     /// Reproducibility check (nix build --check parity): force a real
@@ -254,23 +269,23 @@ pub struct BuildArgs {
     /// if they differ. Requires --artifact-cache-dir. The first build for
     /// a given recipe has nothing to compare against yet and just
     /// populates the cache as a baseline.
-    #[arg(long, requires = "artifact_cache_dir")]
+    #[arg(long, requires = "artifact_cache_dir", help_heading = "Quality")]
     pub verify: bool,
 
     /// Sign built packages with cosign (Sigstore keyless signing).
     /// Requires cosign on PATH and an OIDC token (e.g., in GitHub Actions).
-    #[arg(long)]
+    #[arg(long, help_heading = "Quality")]
     pub cosign: bool,
 
     /// Cross-compile target architecture (e.g., "arm64", "riscv64").
     /// Builds for this architecture even on a different host. Uses musl
     /// static linking when the build system supports it.
-    #[arg(long, value_name = "ARCH")]
+    #[arg(long, value_name = "ARCH", help_heading = "Target")]
     pub cross_target: Option<String>,
 
     /// Detect binary dependencies via ELF analysis + distro package lookup.
     /// Maps shared-library links (DT_NEEDED) to system packages. Default: true.
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, help_heading = "Source build")]
     pub bindep: bool,
 }
 

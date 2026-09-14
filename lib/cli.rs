@@ -7,6 +7,7 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "lx",
     version,
+    infer_subcommands = true,
     about = "lx: build (.deb/.rpm/Arch/.apk/.ipk) from forge releases or source, install, and distribute Linux packages — native bare-metal builds, no containers",
     long_about = "lx watches forge releases, fetches the release assets
 matching each architecture, verifies their checksums against pinned metadata, and
