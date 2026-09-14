@@ -7,7 +7,8 @@ use std::path::PathBuf;
 use crate::github::{Asset, Release, ReleaseMeta, RepoLicense};
 
 /// GitLab API client mirroring `GitHubClient`'s surface.
-/// Uses blocking `reqwest` (no tokio/octocrab) and the same 5-minute JSON cache.
+/// Uses blocking `reqwest` and the same 5-minute JSON cache as the other
+/// provider clients.
 pub struct GitlabClient {
     http: reqwest::blocking::Client,
     base_url: String,

@@ -14,7 +14,6 @@ pub mod gerrit;
 pub mod gitea;
 pub mod gitee;
 pub mod github;
-pub mod github_sync;
 pub mod gitlab;
 pub mod sourceforge;
 
@@ -120,7 +119,6 @@ pub trait ForgeSource: Send + Sync {
 pub fn all_forge_sources() -> Vec<Box<dyn ForgeSource>> {
     vec![
         Box::new(github::GithubForgeSource),
-        Box::new(github_sync::GithubSyncForgeSource),
         Box::new(gitlab::GitlabForgeSource),
         Box::new(gitea::GiteaForgeSource),
         Box::new(forgejo::ForgejoForgeSource),

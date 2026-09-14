@@ -9,7 +9,7 @@
 //!   entirely in-process, no `dpkg-deb` required.
 //! * [`elfdeps`] — read an ELF binary's `DT_NEEDED` shared-library
 //!   dependencies natively, no `ldd`/`objdump`/`readelf` required.
-//! * [`github`] — octocrab-backed GitHub Releases client with a local JSON
+//! * [`github`] — blocking-reqwest GitHub Releases client with a local JSON
 //!   API cache (releases, assets, license/copyright lookups).
 //! * [`lintian`] — run the host `lintian` binary against a `.deb` and parse
 //!   its output into a structured report.
@@ -37,7 +37,7 @@
 //! [`cli::run`]. Keeping it all in one crate lets `tests/` exercise the CLI's
 //! internals as ordinary integration tests.
 
-#![recursion_limit = "256"]
+#![recursion_limit = "512"]
 
 // Lets code written against the crate's own public API (originally as an
 // external dependency, back when `src/` was a separate binary crate) keep

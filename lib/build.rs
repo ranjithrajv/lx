@@ -48,7 +48,7 @@ pub struct BuildArgs {
     #[arg(long, default_value = "dist")]
     pub output: PathBuf,
 
-    /// Package format plugin to use (deb, rpm, or arch). Overrides
+    /// Package format plugin to use (deb, rpm, arch, apk, or ipk). Overrides
     /// package.yaml's `package_format`. Defaults to the config file's value
     /// (or "deb").
     #[arg(long)]

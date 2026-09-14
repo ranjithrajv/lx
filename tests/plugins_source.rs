@@ -11,9 +11,13 @@ fn registry_contains_github_and_gitlab() {
     assert!(names.contains(&"forgejo"));
     assert!(names.contains(&"bitbucket"));
     assert!(names.contains(&"gerrit"));
+    assert!(names.contains(&"gitee"));
+    assert!(names.contains(&"sourceforge"));
     assert!(get_forge_source("github").is_some());
     assert!(get_forge_source("gitlab").is_some());
     assert!(get_forge_source("gerrit").is_some());
+    assert!(get_forge_source("gitee").is_some());
+    assert!(get_forge_source("sourceforge").is_some());
     assert!(get_forge_source("unknown").is_none());
     assert!(get_forge_source("GitHub").is_some());
     assert!(get_forge_source("GERRIT").is_some());
@@ -28,6 +32,14 @@ fn parse_any_forge_url_dispatches_by_host() {
     assert_eq!(
         parse_any_forge_url("https://gitlab.com/gitlab-org/gitlab").unwrap(),
         ("gitlab".to_string(), "gitlab-org/gitlab".to_string())
+    );
+    assert_eq!(
+        parse_any_forge_url("https://gitee.com/owner/repo").unwrap(),
+        ("gitee".to_string(), "owner/repo".to_string())
+    );
+    assert_eq!(
+        parse_any_forge_url("https://sourceforge.net/projects/sevenzip/").unwrap(),
+        ("sourceforge".to_string(), "sevenzip".to_string())
     );
     assert!(parse_any_forge_url("package.yaml").is_none());
 }

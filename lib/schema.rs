@@ -132,7 +132,7 @@ pub fn generate_schema() -> serde_json::Value {
             },
             "build_system": {
                 "type": "string",
-                "enum": ["cmake", "custom"],
+                "enum": ["cmake", "cargo", "go", "meson", "autotools", "make", "custom"],
                 "description": "Source-mode build system (cmake default; custom uses build_commands/install_commands)"
             },
             "upstream_url": {
@@ -486,12 +486,12 @@ pub fn generate_schema() -> serde_json::Value {
             },
             "package_format": {
                 "type": "string",
-                "enum": ["deb", "rpm", "arch"],
+                "enum": ["deb", "rpm", "arch", "apk", "ipk"],
                 "description": "Package format plugin (default: deb)"
             },
             "source": {
                 "type": "string",
-                "enum": ["github", "github-sync", "gitlab", "gitea", "forgejo", "bitbucket", "gerrit", "custom"],
+                "enum": ["github", "gitlab", "gitea", "forgejo", "bitbucket", "gerrit", "gitee", "sourceforge", "custom"],
                 "description": "Source provider for auto-discovery (default: github)"
             },
             "source_provider": {
@@ -522,6 +522,10 @@ pub fn generate_schema() -> serde_json::Value {
             "gerrit_host": {
                 "type": "string",
                 "description": "Gerrit host (e.g. review.gerrithub.io or a self-hosted instance); falls back to $GERRIT_HOST"
+            },
+            "gitee_host": {
+                "type": "string",
+                "description": "Gitee host (default gitee.com); only used when source = gitee"
             },
             "template_scripts": {
                 "type": "boolean",

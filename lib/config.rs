@@ -381,7 +381,7 @@ pub struct PackageConfig {
     #[serde(default)]
     pub contents: Vec<ContentEntry>,
     /// Per-format relation-field overrides keyed by package format
-    /// ("deb"/"rpm"/"arch"). See [`FormatOverrides`].
+    /// ("deb"/"rpm"/"arch"/"apk"/"ipk"). See [`FormatOverrides`].
     #[serde(default)]
     pub overrides: HashMap<String, FormatOverrides>,
     /// Maintainer scripts. See [`Scripts`].
@@ -425,10 +425,13 @@ pub struct PackageConfig {
     /// (Debian policy excludes it there since `:` isn't filename-safe).
     #[serde(default)]
     pub epoch: String,
-    /// Package format plugin to use: "deb" (default) or "rpm".
+    /// Package format plugin to use: "deb" (default), "rpm", "arch",
+    /// "apk", or "ipk".
     #[serde(default = "default_package_format")]
     pub package_format: String,
-    /// Source provider plugin for auto-discovery: "github" (default) or "gitlab".
+    /// Source provider plugin for auto-discovery: "github" (default),
+    /// "gitlab", "gitea", "forgejo", "bitbucket", "gerrit", "gitee",
+    /// "sourceforge", or "custom".
     #[serde(default = "default_source")]
     #[serde(alias = "source_provider")]
     pub source: String,
@@ -880,10 +883,10 @@ impl PackageConfig {
         }
         if !self.source.trim().is_empty() {
             match self.source.trim().to_ascii_lowercase().as_str() {
-                "github" | "github-sync" | "gitlab" | "gitea" | "forgejo" | "bitbucket"
-                | "gerrit" | "gitee" | "sourceforge" | "custom" => {}
+                "github" | "gitlab" | "gitea" | "forgejo" | "bitbucket" | "gerrit" | "gitee"
+                | "sourceforge" | "custom" => {}
                 other => bail!(
-                    "unsupported source '{other}' (expected github, github-sync, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge, or custom)"
+                    "unsupported source '{other}' (expected github, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge, or custom)"
                 ),
             }
             if self.source.trim().eq_ignore_ascii_case("custom")

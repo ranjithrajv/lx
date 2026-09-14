@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Removed: duplicate GitHub source plugin and octocrab
+
+- The second GitHub source plugin (the synchronous client exposed
+  separately) is gone. `source: github` is the single GitHub
+  implementation, now backed by the blocking-`reqwest` client; the old
+  value is no longer accepted.
+- Dropped the `octocrab` and direct `tokio` dependencies. lx no longer
+  creates an async runtime just to talk to GitHub, and the
+  `aws-lc-rs`/`cmake` build requirement is gone. Every forge-source
+  client is now synchronous and shares one HTTP/cache path.
+
+### New packagers, forge sources, and build systems
+
+- **Alpine `.apk` packager** (`package_format: apk`): apk-tools v2
+  (concatenated gzip control/data members carrying `.PKGINFO` +
+  `datahash`). The natural output for `musl: true`; unsigned packages
+  install with `apk add --allow-untrusted`.
+- **OpenWrt `.ipk` packager** (`package_format: ipk`): opkg `ar`
+  container reusing the deb archiver, with an OpenWrt control dialect
+  (`Package`/`Version`/`Architecture`/`Installed-Size`/`License`).
+- **Gitee forge source** (`source: gitee`): API v5 release/assets,
+  `GITEE_TOKEN`/`GITEE_HOST`, zero-config
+  `lx build https://gitee.com/owner/repo`.
+- **SourceForge forge source** (`source: sourceforge`): the project file
+  RSS feed as pseudo-releases; projects use a bare name
+  (`github_repo: sevenzip`).
+- **Autotools build system** (`build_system: autotools`): `./configure &&
+  make && make install`, bootstrapping `configure` via `autogen.sh` /
+  `autoreconf -fi` when the tarball didn't ship one.
+- **Make build system** (`build_system: make`): plain-`Makefile` projects
+  (`make` + `DESTDIR`/`PREFIX` install), auto-detected last so the more
+  specific systems get first claim.
+
 ### fpm feature parity: pre/post-upgrade, RPM triggers, script templating
 
 - **Pre-/post-upgrade scripts**: `scripts.preupgrade_script` and

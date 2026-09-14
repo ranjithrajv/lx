@@ -13,9 +13,9 @@ Linux packagers, with specific flags, fields, and behaviors documented.
 |---|---|---|---|
 | deb | `-t deb` | ✅ `deb` | ✅ default |
 | rpm | `-t rpm` | ✅ `rpm` | ✅ `--format rpm` |
-| apk (Alpine) | `-t apk` | ✅ `apk` | ❌ |
+| apk (Alpine) | `-t apk` | ✅ `apk` | ✅ `--format apk` |
 | arch (`.pkg.tar.zst`) | `-t pacman` | ✅ `archlinux` | ✅ `--format arch` |
-| ipk (OpenWrt) | ❌ | ✅ `ipk` | ❌ |
+| ipk (OpenWrt) | ❌ | ✅ `ipk` | ✅ `--format ipk` |
 | msix (Windows) | ❌ | ✅ `msix` | ❌ |
 | osxpkg (macOS) | `-t osxpkg` | ❌ | ❌ |
 | freebsd | `-t freebsd` | ❌ | ❌ |
@@ -34,7 +34,7 @@ Linux packagers, with specific flags, fields, and behaviors documented.
 - **nfpm** covers the 7 major Linux formats + Windows msix. It has
   format-specific sub-config blocks (`deb:`, `rpm:`, `apk:`,
   `archlinux:`, `ipk:`, `msix:`).
-- **lx** focuses on deb/rpm/arch and uniquely produces *source*
+- **lx** focuses on deb/rpm/arch/apk/ipk and uniquely produces *source*
   packages (`.dsc` + `.orig.tar.xz` + `.debian.tar.xz`, `.src.rpm`,
   PKGBUILD). Format conversion is via `lx convert` (deb↔rpm↔arch) —
   reads source metadata + install tree, rebuilds natively in target

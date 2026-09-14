@@ -274,11 +274,17 @@ fn rejects_bad_overrides_key_and_contents() {
 package_name: foo
 github_repo: owner/foo
 overrides:
-  apk:
+  msix:
     depends: "x"
 "#;
     let cfg: PackageConfig = serde_yaml::from_str(bad_key).unwrap();
     assert!(cfg.validate().is_err());
+
+    // apk/ipk are now valid override targets too.
+    let apk_key =
+        "package_name: foo\ngithub_repo: owner/foo\noverrides:\n  apk:\n    depends: \"x\"\n";
+    let cfg: PackageConfig = serde_yaml::from_str(apk_key).unwrap();
+    assert!(cfg.validate().is_ok());
 
     let rel_dst = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: usr/bin/a\n";
     let cfg: PackageConfig = serde_yaml::from_str(rel_dst).unwrap();
@@ -604,8 +610,13 @@ contents:
     assert_eq!(cfg.contents[0].packager, "deb");
     assert_eq!(cfg.contents[1].packager, "rpm");
 
-    let bad = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: apk\n";
+    let bad = "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: msix\n";
     assert!(PackageConfig::parse_str(bad).is_err());
+
+    // apk/ipk are accepted contents filters now.
+    let apk =
+        "package_name: f\ngithub_repo: o/f\ncontents:\n  - src: a\n    dst: /a\n    packager: apk\n";
+    assert!(PackageConfig::parse_str(apk).is_ok());
 }
 
 #[test]
@@ -641,14 +652,26 @@ build_mode: source
 "#;
     assert!(PackageConfig::parse_str(no_arch).is_err());
 
-    let meson = r#"
+    // The dedicated build systems (meson/autotools/make included) are
+    // accepted; an unknown one is rejected.
+    for ok_system in ["meson", "autotools", "make"] {
+        let yaml = format!(
+            "package_name: quickshell\ngithub_repo: quickshell-mirror/quickshell\nbuild_mode: source\nbuild_system: {ok_system}\narchitectures: [amd64]\n"
+        );
+        assert!(
+            PackageConfig::parse_str(&yaml).is_ok(),
+            "build_system {ok_system} should be accepted"
+        );
+    }
+
+    let qmake = r#"
 package_name: quickshell
 github_repo: quickshell-mirror/quickshell
 build_mode: source
-build_system: meson
+build_system: qmake
 architectures: [amd64]
 "#;
-    assert!(PackageConfig::parse_str(meson).is_err());
+    assert!(PackageConfig::parse_str(qmake).is_err());
 
     let bogus = r#"
 package_name: quickshell

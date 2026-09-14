@@ -207,9 +207,13 @@ fn registry_contains_deb_and_rpm() {
     assert!(names.contains(&"deb"));
     assert!(names.contains(&"rpm"));
     assert!(names.contains(&"arch"));
+    assert!(names.contains(&"apk"));
+    assert!(names.contains(&"ipk"));
     assert!(get_packager("deb").is_some());
     assert!(get_packager("rpm").is_some());
     assert!(get_packager("arch").is_some());
+    assert!(get_packager("apk").is_some());
+    assert!(get_packager("ipk").is_some());
     assert!(get_packager("unknown").is_none());
     assert!(get_packager("DEB").is_some()); // case-insensitive
 }
@@ -222,11 +226,13 @@ fn plugin_file_extensions() {
         get_packager("arch").unwrap().file_extension(),
         "pkg.tar.zst"
     );
+    assert_eq!(get_packager("apk").unwrap().file_extension(), "apk");
+    assert_eq!(get_packager("ipk").unwrap().file_extension(), "ipk");
 }
 
 #[test]
 fn deb_and_rpm_plugins_build_valid_archives() {
-    for format in ["deb", "rpm", "arch"] {
+    for format in ["deb", "rpm", "arch", "apk", "ipk"] {
         let plugin = get_packager(format).unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let binary_dir = tmp.path().join("binary");
@@ -258,6 +264,8 @@ fn deb_and_rpm_plugins_build_valid_archives() {
             dist: match format {
                 "deb" => "trixie".into(),
                 "arch" => "arch".into(),
+                "apk" => "alpine".into(),
+                "ipk" => "openwrt".into(),
                 _ => "fedora".into(),
             },
             arch: "amd64".into(),
@@ -289,6 +297,14 @@ fn deb_and_rpm_plugins_build_valid_archives() {
         } else if format == "rpm" {
             assert_eq!(&bytes[0..4], &[0xED, 0xAB, 0xEE, 0xDB], "rpm magic missing");
             assert_eq!(out.extension().unwrap(), "rpm");
+        } else if format == "apk" {
+            // apk is a concatenation of gzip members.
+            assert_eq!(&bytes[0..2], &[0x1F, 0x8B], "apk gzip magic missing");
+            assert_eq!(out.extension().unwrap(), "apk");
+        } else if format == "ipk" {
+            // ipk reuses the deb ar container.
+            assert!(bytes.starts_with(b"!<arch>\n"), "ipk ar magic missing");
+            assert_eq!(out.extension().unwrap(), "ipk");
         } else {
             // arch: .pkg.tar.zst is zstd-compressed tar, magic 0x28B52FFD
             assert_eq!(
@@ -306,9 +322,13 @@ fn default_distributions_differ_by_format() {
     let deb = get_packager("deb").unwrap();
     let rpm = get_packager("rpm").unwrap();
     let arch = get_packager("arch").unwrap();
+    let apk = get_packager("apk").unwrap();
+    let ipk = get_packager("ipk").unwrap();
     assert!(deb.default_distributions().contains(&"bookworm"));
     assert!(rpm.default_distributions().contains(&"fedora"));
     assert!(arch.default_distributions().contains(&"arch"));
+    assert!(apk.default_distributions().contains(&"alpine"));
+    assert!(ipk.default_distributions().contains(&"openwrt"));
     assert_ne!(deb.default_distributions(), rpm.default_distributions());
     assert_ne!(deb.default_distributions(), arch.default_distributions());
 }

@@ -2,9 +2,9 @@
 
 **Date:** 2026-08-24 (updated 2026-08-26: +5 Source; 2026-09-11: +BuildSystem; 2026-09-11: +RegistrySource; 2026-09-11: +5 RegistrySource; 2026-09-11: clarified ForgeSource vs RegistrySource)
 **Status:** Implemented — 4 independent plugin dimensions:
-* **3× Packager:** `deb` + `rpm` + `arch`
-* **7× ForgeSource:** `github` + `github-sync` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`
-* **5× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `custom`
+* **5× Packager:** `deb` + `rpm` + `arch` + `apk` + `ipk`
+* **8× ForgeSource:** `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit` + `gitee` + `sourceforge`
+* **7× BuildSystem:** `cmake` + `cargo` + `go` + `meson` + `autotools` + `make` + `custom`
 * **11× RegistrySource:** `npm` + `python` + `gem` + `cargo` + `go` + `hex` + `dart` + `nuget` + `maven` + `composer` + `cpan`
 
 `lx` builds Linux packages from many kinds of upstream. The original
@@ -16,9 +16,9 @@ core + four-dimensional pluggable system**.
 This matches `goreleaser/nfpm`'s Go `Packager` → `deb/`, `rpm/`, `apk/` at
 repo root, but adds three more dimensions:
 
-* **Packager plugins** (`lib/plugins/{deb,rpm,arch}.rs` + `lib/{deb,rpm,arch}archive.rs`) → produce installable artifact
-* **ForgeSource plugins** (`lib/plugins/forge/{github,gitlab}.rs` + `lib/{github,gitlab}.rs`) → discover **what** is available (releases, assets, versions)
-* **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,meson,custom}.rs`) → compile source tree into install tree
+* **Packager plugins** (`lib/plugins/{deb,rpm,arch,apk,ipk}.rs` + `lib/{deb,rpm,arch,apk,ipk}archive.rs`) → produce installable artifact
+* **ForgeSource plugins** (`lib/plugins/forge/{github,gitlab,gitee,sourceforge}.rs` + `lib/{github,gitlab,gitee,sourceforge}.rs`) → discover **what** is available (releases, assets, versions)
+* **BuildSystem plugins** (`lib/plugins/build_system/{cmake,cargo,go,meson,autotools,make,custom}.rs`) → compile source tree into install tree
 * **RegistrySource plugins** (`lib/plugins/registry/{npm,python,gem,cargo,go,hex,dart,nuget,maven,composer,cpan}.rs`) → fetch **specific files** from language package registries
 
 All are stateless, registered statically, and share the same
@@ -119,7 +119,7 @@ pub trait ForgeSource: Send + Sync {
 
 // BuildSystem — lib/plugins/build_system/mod.rs
 pub trait BuildSystem: Send + Sync {
-    fn name(&self) -> &'static str;              // "cmake" | "cargo" | "go" | "custom"
+    fn name(&self) -> &'static str;              // "cmake" | "cargo" | "go" | "meson" | "autotools" | "make" | "custom"
     fn description(&self) -> &'static str;
     fn recognize(&self, src_dir: &Path) -> bool; // auto-detect from source tree
     fn build(&self, cfg: &PackageConfig, src_dir: &Path, workdir: &Path) -> Result<PathBuf>;
@@ -259,7 +259,7 @@ RegistrySource selection in `lib/build.rs`:
 registry_source: in package.yaml  >  empty (forge release mode)
 ```
 
-Auto-detection checks `recognize()` in registry order: `CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go. `custom` never auto-detects (explicit-only).
+Auto-detection checks `recognize()` in registry order: `CMakeLists.txt` → cmake, `Cargo.toml` → cargo, `go.mod` → go, `meson.build` → meson, `configure`/`configure.ac`/`autogen.sh` → autotools, `Makefile` → make. `make` is last among the auto-detecting systems so more specific systems win; `custom` never auto-detects (explicit-only).
 
 `cfg.effective_package_format()`, `cfg.effective_source()`, and `cfg.effective_registry_source()` normalise; `cfg.effective_distributions_for(format)` picks per-plugin defaults.
 
@@ -276,7 +276,7 @@ This preserves the nfpm-inspired ancillary handling (`docs/decisions/2026-08-20-
 
 ## 6. Package Plugins
 
-### deb — `lib/plugins/deb.rs` + `lib/debarchive.rs` *(3 total: deb + rpm + arch)*
+### deb — `lib/plugins/deb.rs` + `lib/debarchive.rs` *(5 total: deb + rpm + arch + apk + ipk)*
 
 *Extension* `deb`, *defaults* `bookworm/trixie/forky/sid`, *matrix* → `PackageConfig::arch_supported_for_dist()` (universal + distro-gated `i386/armel/riscv64/loong64`).
 
@@ -298,9 +298,21 @@ Valid RPM magic `ED AB EE DB`, tested with `rpm -qip` equivalent.
 
 Stages same tree, renders `.PKGINFO` (`pkgname/pkgver/pkgdesc/url/builddate/packager/size/arch/license`), `.MTREE` (`#mtree` + `time/mode/type/size/sha256digest` per entry), then `tar` + `zstd` level 19 (deterministic). Filename `name-version-release-arch.pkg.tar.zst` (e.g. `hello-1.0-1.arch-x86_64.pkg.tar.zst`), `zstd` magic `28 B5 2F FD`, verifiable `tar tz --use-compress-program=unzstd`.
 
+### apk — `lib/plugins/apk.rs` + `lib/apkarchive.rs`
+
+*Extension* `apk`, *defaults* `alpine` (rolling), permissive matrix.
+
+Alpine apk-tools v2 format: concatenated gzip members `[control.tar.gz][data.tar.gz]`, where the control member holds `.PKGINFO` and the data member holds the payload. `pkgver` is `{version}-r{build_version}` and `datahash` pins the SHA-256 of the compressed data member. Arch maps Debian → Alpine (`amd64→x86_64`, `armhf→armv7`, `i386→x86`). Because Alpine is musl-only, this is the natural output for `musl: true` builds. Signing (RSA via `abuild`) is not implemented; unsigned packages install with `apk add --allow-untrusted`.
+
+### ipk — `lib/plugins/ipk.rs` + `lib/ipkarchive.rs`
+
+*Extension* `ipk`, *defaults* `openwrt`, permissive matrix.
+
+OpenWrt/opkg `.ipk` shares the `.deb` `ar` layout (`debian-binary` + `control.tar.gz` + `data.tar.gz`), so archiving delegates to `debarchive` and only the control dialect (`Package/Version/Architecture/Installed-Size/License/Depends/Provides/Conflicts`) and filename (`name_version_arch.ipk`) differ. Gzip is pinned regardless of `compression:` since it is the only format opkg has always accepted.
+
 ## 7. BuildSystem Plugins (Compile Source)
 
-`lib/plugins/build_system/{cmake,cargo,go,custom}.rs` — 4 total. Used by `build_mode: source` to compile upstream source into a DESTDIR-style install tree.
+`lib/plugins/build_system/{cmake,cargo,go,meson,autotools,make,custom}.rs` — 7 total. Used by `build_mode: source` to compile upstream source into a DESTDIR-style install tree.
 
 Each plugin implements `BuildSystem`:
 * `name()` / `description()` — identity
@@ -326,19 +338,31 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 
 `go build -trimpath -ldflags "-s -w" -o <stage>/bin/<package_name> .` — single binary build. `-trimpath` strips host paths (reproducibility), `-ldflags "-s -w"` strips debug info. Produces a minimal FHS tree (`bin/<name>`).
 
+### autotools — `lib/plugins/build_system/autotools.rs`
+
+*Name* `autotools`, detects `configure` / `configure.ac` / `configure.in` / `autogen.sh`, requires `make`.
+
+Bootstraps `configure` via `autogen.sh` or `autoreconf -fi` when the release tarball didn't ship one, then `./configure --prefix=/usr` (with `cmake_flags:` passed through as extra configure flags), `make -jN`, and `make DESTDIR=<stage> install`. `musl: true` sets `CC=musl-gcc`/`CXX=musl-g++`/`LDFLAGS=-static`.
+
+### make — `lib/plugins/build_system/make.rs`
+
+*Name* `make`, detects `Makefile` / `makefile` / `GNUmakefile`, requires `make`.
+
+`make -jN PREFIX=/usr` then `make DESTDIR=<stage> PREFIX=/usr install`. Registered **last** among the auto-detecting systems so cmake/cargo/go/meson/autotools claim their trees first; `make` only handles plain-Makefile projects.
+
 ### custom — `lib/plugins/build_system/custom.rs`
 
-*Name* `custom`, never auto-detects (explicit-only). Runs user-supplied `build_commands` then `install_commands` (with `$DESTDIR` set to the stage dir). Universal escape hatch for build systems without a dedicated plugin (meson, make, npm, python, …).
+*Name* `custom`, never auto-detects (explicit-only). Runs user-supplied `build_commands` then `install_commands` (with `$DESTDIR` set to the stage dir). Universal escape hatch for build systems without a dedicated plugin (npm, python, waf, …).
 
 ## 8. Source Plugins (Auto-Discovery)
 
-6 total: `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit`.
+8 total: `github` + `gitlab` + `gitea` + `forgejo` + `bitbucket` + `gerrit` + `gitee` + `sourceforge`.
 
 ### github — `lib/plugins/forge/github.rs` + `lib/github.rs`
 
-*Name* `github`, *description* `GitHub Releases (api.github.com / octocrab)`.
+*Name* `github`, *description* `GitHub Releases (api.github.com, blocking reqwest)`.
 
-* Wraps `lx_lib::github::GitHubClient` (`octocrab` + `tokio` + 5-min JSON cache `api_cache_dir`).
+* Wraps `lx_lib::github::GitHubClient` (blocking `reqwest` + 5-min JSON cache `api_cache_dir`; same shape as every other forge client).
 * `parse_url` → `crate::build::parse_github_url` (`https://github.com/owner/repo(.git)?(/releases/…)?`).
 * `latest_release` → `GET /repos/{owner}/{repo}/releases/latest`, `release_by_tag` → `GET /repos/{owner}/{repo}/releases/tags/{tag}`.
 * `raw_get`/`releases`/`repo_license`/`repo_root`/`repo_file_text` map 1:1 to `GitHubClient` methods (dual-license `LICENSE-APACHE`+`LICENSE-MIT` detection uses `repo_root` + `repo_file_text`).
@@ -380,19 +404,38 @@ cmake `-S <src> -B <build> -G Ninja -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TY
 * `release_by_tag` → same as `latest_release` (tag ignored, `match_assets` filters by asset name).
 * `parse_url` → `parse_bitbucket_url` (`https://bitbucket.org/{workspace}/{repo}` or `https://api.bitbucket.org/2.0/repositories/{workspace}/{repo}`).
 
+### gitee — `lib/plugins/forge/gitee.rs` + `lib/gitee.rs`
+
+*Name* `gitee`, `Gitee Releases (gitee.com / self-hosted, API v5)`, default `https://gitee.com/api/v5` (`DEFAULT_GITEE_API_URL`).
+
+* Wraps `GiteeClient` (`GITEE_TOKEN`/`GITEE_HOST`/`GITEE_API_URL` env).
+* `parse_url` → `parse_gitee_url` (`https://gitee.com/owner/repo`).
+* `latest_release` → `GET /repos/{owner}/{repo}/releases?per_page=1`; `release_by_tag` → `GET /repos/{owner}/{repo}/releases/tags/{tag}` (falls back to scanning the list); `releases` → list endpoint.
+* Mapping: `GiteeReleaseRaw {tag_name, created_at, assets[]}` → `Release`; `assets[]` carry `name` + `browser_download_url` (falls back to `attach_files[]`).
+
+### sourceforge — `lib/plugins/forge/sourceforge.rs` + `lib/sourceforge.rs`
+
+*Name* `sourceforge`, `SourceForge file releases (project RSS feed as pseudo-releases)`, default `https://sourceforge.net` (`DEFAULT_SOURCEFORGE_API_URL`).
+
+* Wraps `SourceForgeClient` (no auth).
+* Projects are identified by a **bare name** (`github_repo: sevenzip`), not `owner/repo`; `parse_url` accepts `https://sourceforge.net/projects/{project}/…` and `https://{project}.sourceforge.net/`.
+* `latest_release` → parse `GET /projects/{project}/rss?limit=100` into a pseudo-`Release {tag_name: "latest", assets}` (each `<item>` → asset named by the path basename, with `filesize`); `release_by_tag` returns the same file set tagged with the requested version and lets `match_assets` select by filename.
+* SourceForge publishes no `.sha256` sidecars, so builds from it are fail-closed unless `--allow-unverified` or a pinned `package.lock` is supplied.
+
 Both plugins share `lib/github::Release/Asset` types, so `match_assets`/`config_from_release`/`checksum`/`download` stay source-agnostic. `lx_lib::checksum::RawGetter` (`lib/checksum.rs:8`) is implemented for both `GitHubClient` and `GitlabClient`; `check_sidecar` (`lib/checksum.rs:108`) now takes `&dyn RawGetter`, and `src/build.rs:1141` provides `verify_sidecar_or_require_flag_source` adapter (`ForgeSource::raw_get` → `RawGetter`).
 
 Config `lib/config.rs`:
 
 ```yaml
-source: github          # github | gitlab | gitea | forgejo | bitbucket | gerrit; alias source_provider, default github
+source: github          # github | gitlab | gitea | forgejo | bitbucket | gerrit | gitee | sourceforge | custom; alias source_provider, default github
 gitlab_host: gitlab.example.com # optional self-hosted GitLab
 gitea_host: gitea.example.com   # optional self-hosted Gitea
 forgejo_host: codeberg.org      # optional self-hosted Forgejo
 bitbucket_host: bitbucket.example.com # optional self-hosted Bitbucket
 gerrit_host: review.gerrithub.io # optional self-hosted Gerrit
-package_format: deb     # deb | rpm | arch
-build_system: cmake     # cmake | cargo | go | custom (omit = auto-detect)
+gitee_host: gitee.example.com   # optional self-hosted Gitee
+package_format: deb     # deb | rpm | arch | apk | ipk
+build_system: cmake     # cmake | cargo | go | meson | autotools | make | custom (omit = auto-detect)
 github_repo: owner/repo # alias repo / gitlab_repo / gitea_repo – provider-agnostic identifier
 registry_source: npm        # npm | python | gem | cargo | nuget | maven | composer | cpan (uses github_repo as package name)
 ```
@@ -401,11 +444,11 @@ Zero-config `lx build https://gitlab.com/owner/repo` auto-sets `source=gitlab` +
 
 ## 9. Wiring
 
-* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|github-sync|gitlab|gitea|forgejo|bitbucket|gerrit|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem|cargo|nuget|maven|composer|cpan`.
+* `lib/config.rs` `source: String` (`#[serde(default)]` `"github"`, `alias = "source_provider"`) validated `github|gitlab|gitea|forgejo|bitbucket|gerrit|gitee|sourceforge|custom`, `gitlab_host/gitea_host/forgejo_host/bitbucket_host/gerrit_host/gitee_host: Option<String>`. `build_system: String` (`#[serde(default)]` `"cmake"`) validated `cmake|cargo|go|meson|autotools|make|custom`. `registry_source: String` (`#[serde(default)]` `""`, `alias = "registry_source"`) validated `npm|python|gem|cargo|nuget|maven|composer|cpan`.
 * `lib/build.rs` resolves `effective_source` → `get_forge_source`, prints `source: …`, sets `cfg.source` + provider host env vars, `resolve_source_token` (provider-specific `*_TOKEN` env > `cli --token`), then all release/license/download/sidecar paths use `source.*(repo, token, cache_dir)`. When `registry_source` is non-empty, resolves the input plugin → `fetch()` → routes through `run_local()` with the fetched payload.
 * `lib/sourcebuild.rs` resolves the build system plugin: explicit `build_system:` → `get_build_system()`, else `detect_build_system(src_dir)`, else error. Runs `prebuild_steps`, checks `required_tools()`, then calls `build_sys.build()`.
 * `lib/discovery.rs` (`lx discover --source …`), `lib/validate.rs`, `lib/scandeps.rs`, `lib/wizard.rs` all go through `get_forge_source`.
-* `lib/summary.rs` glob switches `*_*.deb` / `-*.rpm` / `-*.pkg.tar.*` and JSON includes `package_format`.
+* `lib/summary.rs` glob switches `*_*.deb` / `-*.rpm` / `-*.pkg.tar.*` / `-*.apk` / `*_*.ipk` and JSON includes `package_format`.
 * `lib/source.rs` generates deb source packages (`generate`), RPM source packages (`generate_rpm`), and Arch `PKGBUILD`s (`generate_arch`).
 * `lib/checksum.rs` generic over `RawGetter`; `lib/debs.rs` `download`/`verify_sidecar_or_require_flag` also generic (`&dyn RawGetter`).
 
@@ -451,9 +494,9 @@ No core pipeline changes – `build.rs` routes any non-empty `registry_source` t
 
 | nfpm | lx |
 |---|---|
-| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 3 Package + 7 Source + 4 BuildSystem + 3 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
+| Go `Packager` interface, 6 impls, `contents:` DSL + `overrides` | Rust `Packager` (Package) + `ForgeSource` (Source) + `BuildSystem` + `RegistrySource` traits — 5 Package + 9 Source + 7 BuildSystem + 11 RegistrySource impls, shared `stage_install_tree` + `match_assets` + `RawGetter` |
 | General-purpose: you supply files; `arch`/`overrides` per packager | Opinionated: we fetch releases (github/gitlab/gitea/forgejo/bitbucket/gerrit), verify, auto-install ancillaries; `source` selects provider, `package_format` selects packager, `build_system` selects compiler |
 | Signing per format (`deb.signature/rpm.signature`) | Only `lintian` for `deb`, reproducible `SOURCE_DATE_EPOCH` for all; `check_sidecar` provider-agnostic via `RawGetter` |
-| No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, custom) — compiles on host, wraps per-suite |
+| No source-build concept | `build_mode: source` with pluggable build systems (cmake, cargo, go, meson, autotools, make, custom) — compiles on host, wraps per-suite |
 
 See `docs/decisions/2026-08-20-nfpm-adoptions.md` and `README.md` for the `nfpm`-inspired `relations`/`ancillaries`/`epoch` already shared.

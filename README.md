@@ -24,9 +24,9 @@ editing the core pipeline:
 
 | Dimension | Purpose | Count | Selection |
 |---|---|---|---|
-| **Packager** | Produce installable artifact | 3 (deb, rpm, arch) | `--format` / `package_format:` |
-| **ForgeSource** | Discover forge releases/assets | 7 (github, gitlab, …) | `--source` / URL sniffing |
-| **BuildSystem** | Compile source tree | 5 (cmake, cargo, go, meson, custom) | `build_system:` |
+| **Packager** | Produce installable artifact | 5 (deb, rpm, arch, apk, ipk) | `--format` / `package_format:` |
+| **ForgeSource** | Discover forge releases/assets | 8 (github, gitlab, gitea, forgejo, bitbucket, gerrit, gitee, sourceforge) | `--source` / URL sniffing |
+| **BuildSystem** | Compile source tree | 7 (cmake, cargo, go, meson, autotools, make, custom) | `build_system:` |
 | **RegistrySource** | Fetch from language registries | 11 (npm, python, gem, cargo, go, hex, dart, nuget, maven, composer, cpan) | `registry_source:` |
 
 Source and RegistrySource are **not merged** — Source discovers *what's

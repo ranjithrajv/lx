@@ -22,15 +22,15 @@ adopted, what it deliberately rejects, and what remains to be done.
 |---|---|---|
 | **deb** | ✅ | ✅ |
 | **rpm** | ✅ | ✅ |
-| **apk** (Alpine) | ✅ | ❌ |
+| **apk** (Alpine) | ✅ | ✅ |
 | **arch** (`.pkg.tar.zst`) | ✅ (`archlinux`) | ✅ |
-| **ipk** (OpenWrt) | ✅ | ❌ |
+| **ipk** (OpenWrt) | ✅ | ✅ |
 | **msix** (Windows) | ✅ | ❌ |
 | **Source packages** (`.dsc` + tarballs) | ❌ | ✅ (deb, `.src.rpm`, PKGBUILD) |
 
-**nfpm wins on format breadth** — Alpine, OpenWrt, and Windows (msix) have
-no lx equivalent. **lx is the only one that produces proper source
-packages.**
+**nfpm still wins on Windows output** (msix has no lx equivalent), but lx
+now covers every Linux format nfpm does. **lx is the only one that
+produces proper source packages.**
 
 ---
 
@@ -197,7 +197,7 @@ and serving a repository.
 | You should use nfpm if… | You should use lx if… |
 |---|---|
 | You already have files and need max control over their placement, per-file metadata, and distro policy fields | You want to package an upstream forge release end-to-end with minimal config |
-| You need Alpine, OpenWrt, or Windows (msix) output | You care about supply-chain verification, SBOMs, and reproducible builds |
+| You need Windows (msix) output | You care about supply-chain verification, SBOMs, and reproducible builds |
 | You need maintainer scripts (pre/post-install, triggers, debconf) | You want a consumer-facing install/upgrade/rollback workflow with repo serving |
 | You need per-format dependency overrides, Suggests, Pre-Depends, etc. | You want zero-config URL builds, auto-discovery, and AUR import |
 | You're embedding it as a Go library in another tool | You want source packages (`.dsc`, `.src.rpm`, PKGBUILD) |

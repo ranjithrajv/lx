@@ -7,10 +7,10 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "lx",
     version,
-    about = "lx: build (.deb/.rpm/Arch) from forge releases or source, install, and distribute Linux packages — native bare-metal builds, no containers",
+    about = "lx: build (.deb/.rpm/Arch/.apk/.ipk) from forge releases or source, install, and distribute Linux packages — native bare-metal builds, no containers",
     long_about = "lx watches forge releases, fetches the release assets
 matching each architecture, verifies their checksums against pinned metadata, and
-builds .deb/.rpm/Arch packages natively on bare metal — no containers, no emulation. It also installs,
+builds .deb/.rpm/Arch/.apk/.ipk packages natively on bare metal — no containers, no emulation. It also installs,
 upgrades, and removes pre-built .deb packages published under the latest-debs
 GitHub org, tracking what it manages in a local install manifest -- an apt-like
 front end for software that only ships forge releases.",

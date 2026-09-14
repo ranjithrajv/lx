@@ -15,7 +15,7 @@ impl ForgeSource for GithubForgeSource {
     }
 
     fn description(&self) -> &'static str {
-        "GitHub Releases (api.github.com / octocrab) — github_repo: owner/repo"
+        "GitHub Releases (api.github.com, blocking reqwest) — github_repo: owner/repo"
     }
 
     fn token_env(&self) -> Option<&'static str> {
