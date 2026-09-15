@@ -99,7 +99,11 @@ fn artifacts(out: &std::path::Path, suffix: &str) -> Vec<PathBuf> {
     std::fs::read_dir(out)
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|e| e.path().file_name().is_some_and(|n| n.to_string_lossy().ends_with(suffix)))
+        .filter(|e| {
+            e.path()
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(suffix))
+        })
         .map(|e| e.path())
         .collect()
 }
@@ -290,7 +294,11 @@ fn build_is_reproducible_for_fixed_inputs() {
         let a_dir = build_one(payload.path(), a.path(), format, "trixie");
         let b_dir = build_one(payload.path(), b.path(), format, "trixie");
 
-        let suffix = if format == "arch" { "pkg.tar.zst" } else { format };
+        let suffix = if format == "arch" {
+            "pkg.tar.zst"
+        } else {
+            format
+        };
         let a_art = artifacts(&a_dir, suffix).pop().unwrap();
         let b_art = artifacts(&b_dir, suffix).pop().unwrap();
         assert_eq!(

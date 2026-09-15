@@ -1,0 +1,7 @@
+package_name: ft
+github_repo: example/ft
+version: 1.0.0
+description: functional test package
+maintainer: Test <t@e.example>
+license_spdx: MIT
+architectures: [amd64]

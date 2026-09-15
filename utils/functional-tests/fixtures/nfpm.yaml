@@ -1,0 +1,13 @@
+name: ft
+arch: amd64
+platform: linux
+version: 1.0.0
+section: default
+priority: extra
+maintainer: Test <t@e.example>
+description: functional test
+homepage: https://example.com
+license: MIT
+contents:
+  - src: ./payload/mybinary
+    dst: /usr/bin/ft
