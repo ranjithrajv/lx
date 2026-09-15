@@ -3,20 +3,23 @@
 //! `lx go-native` — migrate snap / flatpak / nix / `curl | sh` installs
 //! to native packages.
 //!
-//! Two-stage (plan first, apply with `--yes`):
+//! Applies by default; `--dry-run` plans without mutating:
 //! 1. **detect** installed non-native packages (`snap list`, `flatpak list`,
 //!    `nix profile list`, plus orphan binaries in `/usr/local/bin`,
 //!    `~/.local/bin`, `/opt` that no native package manager owns);
-//! 2. **map** each to an lx package name via a built-in table;
-//! 3. **plan** (default): print the migration plan + `missingnative` report;
-//!    **apply** (`--yes`): `lx install` each mapped package, then remove the
-//!    source (`snap remove` / `flatpak uninstall` / `nix profile remove`)
+//! 2. **map** each to an lx package name via a built-in table; `--all`
+//!    (or an explicit target) attempts the unmapped ones too, under their own
+//!    command name, marked as best-effort guesses;
+//! 3. **plan** (`--dry-run`): print the migration plan + `missingnative`
+//!    report (empty under `--all`) and change nothing;
+//!    **apply** (the default): `lx install` each mapped package, then remove
+//!    the source (`snap remove` / `flatpak uninstall` / `nix profile remove`)
 //!    unless `--keep-source`. `curl | sh` orphans are removed when
 //!    `--cleanup-sh` is passed (otherwise the plan prints manual cleanup
 //!    commands). Orphan removals are recorded in a side-manifest
 //!    (`~/.local/share/lx/sh_orphans.json`).
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use clap::Args;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -460,6 +463,9 @@ struct Detected {
 struct PlanEntry {
     detected: Detected,
     native: String,
+    /// True when `native` was guessed from the package/binary name because the
+    /// mapping table has no entry (the `--all`/targeted path).
+    guessed: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -474,10 +480,10 @@ pub struct GoNativeArgs {
     #[arg(long)]
     pub format: Option<String>,
 
-    /// Apply the migration (install native packages, remove sources).
-    /// Without it, only the plan is printed — nothing is mutated.
-    #[arg(short = 'y', long)]
-    pub yes: bool,
+    /// Plan only: detect, map, and print a detailed benefit report — install
+    /// and remove nothing. Applying is the default, so this is the opt-out.
+    #[arg(long)]
+    pub dry_run: bool,
 
     /// Keep the snap/flatpak/nix package installed after the native
     /// install succeeds (default: remove it).
@@ -499,6 +505,13 @@ pub struct GoNativeArgs {
     /// tracked and removed without a package database.
     #[arg(long)]
     pub cleanup_sh: bool,
+
+    /// Attempt **every** detected package, not just the curated mappings: an
+    /// unmapped snap/flatpak/nix/`curl | sh` finding is tried under its own
+    /// command name as the native package (best-effort, marked in the plan).
+    /// Plan-only with `--dry-run`.
+    #[arg(long)]
+    pub all: bool,
 
     /// Migrate only these packages (substring match on the id). Targeting a
     /// package makes it a full replacement: the native package is fetched by
@@ -540,17 +553,28 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
 
     let sh_urls = collect_sh_urls();
     let targeted = !args.filter.is_empty();
+    // `--all` (and an explicit target) attempts every finding, falling back to
+    // the package/binary name when the mapping table has no entry. The default
+    // bulk path stays curated-only and reports the rest as `missingnative`.
+    let attempt_all = args.all || targeted;
     let mut plan: Vec<PlanEntry> = Vec::new();
     let mut missing: Vec<&Detected> = Vec::new();
     for d in &detected {
-        match map_native(d, &sh_urls, targeted) {
+        let detected = Detected {
+            source: d.source,
+            id: d.id.clone(),
+            detail: d.detail.clone(),
+        };
+        match mapped_from_table(d, &sh_urls) {
             Some(native) => plan.push(PlanEntry {
-                detected: Detected {
-                    source: d.source,
-                    id: d.id.clone(),
-                    detail: d.detail.clone(),
-                },
+                detected,
                 native,
+                guessed: false,
+            }),
+            None if attempt_all => plan.push(PlanEntry {
+                native: command_name(d),
+                detected,
+                guessed: true,
             }),
             None => missing.push(d),
         }
@@ -561,18 +585,87 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         detected.len(),
         plan.len()
     );
+    // With `--dry-run`, each row gets a detailed benefit block: the space the
+    // redundant non-native copy occupies, whether the native package is
+    // already installed, and how many of its dependencies the host already
+    // has (so the switch pulls in nothing new). The apply path is unchanged
+    // and stays terse.
+    let verbose = args.dry_run;
+    let mut reclaim = 0u64;
+    let format_enum = crate::consumer::format_or_host(&format);
     for e in &plan {
         let extra = if e.detected.detail.is_empty() {
             String::new()
         } else {
             format!(" ({})", e.detected.detail)
         };
+        let guess = if e.guessed {
+            "   [best-effort: no curated mapping]"
+        } else {
+            ""
+        };
         println!(
-            "  [{}] {}{} → {}",
+            "  [{}] {}{} → {}{}",
             e.detected.source.name(),
             e.detected.id,
             extra,
-            e.native
+            e.native,
+            guess
+        );
+
+        if !verbose {
+            continue;
+        }
+        let benefit = native_benefit(e, format_enum);
+        reclaim += benefit.reclaim_bytes;
+        let already = crate::consumer::installed_version(&e.native, format_enum).is_some();
+        println!(
+            "      state      {}",
+            if already {
+                "native package already installed — only the redundant copy is removed"
+            } else {
+                "native package not installed yet"
+            }
+        );
+        if !benefit.size.is_empty() {
+            println!(
+                "      reclaims   ~{} from the non-native source",
+                benefit.size
+            );
+        }
+        if let Some((shared, total)) = benefit.deps_shared {
+            println!(
+                "      deps       {shared}/{total} already satisfied on this host \
+                 ({}/{} new)",
+                total.saturating_sub(shared),
+                total
+            );
+        }
+        if !benefit.provides_command {
+            println!(
+                "      keeps      native package does not provide `{}` yet — the \
+                 non-native copy is kept",
+                command_name(&e.detected)
+            );
+        }
+        println!(
+            "      why        native {} package: host-managed, signed repo/pinned \
+             checksum, no duplicated runtime",
+            format
+        );
+    }
+    if verbose {
+        println!(
+            "\nreclaimed when applied: ~{} across {} package(s)",
+            human_bytes(reclaim),
+            plan.len()
+        );
+    }
+    let guessed = plan.iter().filter(|e| e.guessed).count();
+    if guessed > 0 {
+        println!(
+            "  ({guessed} best-effort guess(es) — the native package name is the \
+             package's own name; verify before applying)"
         );
     }
     if !missing.is_empty() {
@@ -583,8 +676,8 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         println!("consider contributing mappings upstream");
     }
 
-    if !args.yes {
-        println!("\nplan only — nothing installed or removed. Re-run with --yes to apply.");
+    if args.dry_run {
+        println!("\n--dry-run: nothing installed or removed.");
         return Ok(());
     }
 
@@ -601,7 +694,7 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
             continue;
         }
         println!("  ↓ installing native package {} ({})", e.native, format);
-        let res = install_native_package(&e.native, &format, token);
+        let res = install_native_package(&e.native, args.format.as_deref(), token);
         match res {
             Ok(()) => installed.push(e),
             Err(err) => {
@@ -716,6 +809,111 @@ fn detect_format(flag: Option<&str>) -> String {
         return f.trim().to_ascii_lowercase();
     }
     crate::index::detect_host_format().name().to_string()
+}
+
+/// The measured benefit of switching one finding to its native package.
+struct Benefit {
+    /// Human-readable size reclaimed (`du -sh` of the non-native source).
+    size: String,
+    reclaim_bytes: u64,
+    /// (`shared`, `total`) of the native package's declared dependencies that
+    /// are already on the host; `None` when it reports none.
+    deps_shared: Option<(usize, usize)>,
+    /// Whether the native package actually provides the command, i.e. removing
+    /// the non-native copy is safe.
+    provides_command: bool,
+}
+
+/// Measure what a migration row actually buys: reclaimed space, dependency
+/// overlap, and whether the native package covers the command.
+///
+/// Reads only local state (no network): a file's size via `du -sh`, the
+/// installed native package's dependencies via the host manager. Every field
+/// is best-effort and degrades to "unknown" rather than guessing.
+fn native_benefit(e: &PlanEntry, format: crate::index::InstallFormat) -> Benefit {
+    let (size, reclaim_bytes) = match e.detected.source {
+        Source::Sh => du_size(std::path::Path::new(&e.detected.id)),
+        // A managed source's on-disk footprint is reported by its own manager,
+        // which is slow to query per-package; leave the size unknown rather
+        // than block the plan.
+        Source::Snap | Source::Flatpak | Source::Nix => (String::new(), 0),
+    };
+    let installed = crate::consumer::installed_version(&e.native, format).is_some();
+    let deps_shared = installed.then(|| deps_shared(&e.native)).flatten();
+    let provides_command = native_provides_command(&e.native, &command_name(&e.detected));
+    Benefit {
+        size,
+        reclaim_bytes,
+        deps_shared,
+        provides_command,
+    }
+}
+
+/// Human-readable size of a file or directory (`du -sh`), plus its byte count
+/// parsed from `du -sb` when available. Empty/zero when the path is gone or
+/// `du` is absent.
+fn du_size(path: &std::path::Path) -> (String, u64) {
+    if !path.exists() {
+        return (String::new(), 0);
+    }
+    let human = Command::new("du")
+        .args(["-sh"])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split('\t')
+                .next()
+                .map(|s| s.trim().to_string())
+        })
+        .unwrap_or_default();
+    let bytes = Command::new("du")
+        .args(["-sb"])
+        .arg(path)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split('\t')
+                .next()
+                .and_then(|s| s.trim().parse::<u64>().ok())
+        })
+        .unwrap_or(0);
+    (human, bytes)
+}
+
+/// `(shared, total)` of `pkg`'s declared dependencies already installed on the
+/// host. `None` when the package reports no dependencies.
+fn deps_shared(pkg: &str) -> Option<(usize, usize)> {
+    let deps = crate::scandeps::pkg_depends(pkg);
+    if deps.is_empty() {
+        return None;
+    }
+    let shared = deps
+        .iter()
+        .filter(|d| crate::scandeps::pkg_installed_version(d).is_some())
+        .count();
+    Some((shared, deps.len()))
+}
+
+/// Format a byte count as a human-readable size (`1.2 GB`), for the dry-run
+/// total. Kept local so the plan doesn't depend on a formatting crate.
+pub fn human_bytes(bytes: u64) -> String {
+    const UNITS: [(&str, u64); 4] = [
+        ("TB", 1_000_000_000_000),
+        ("GB", 1_000_000_000),
+        ("MB", 1_000_000),
+        ("KB", 1_000),
+    ];
+    for (unit, scale) in UNITS {
+        if bytes >= scale {
+            return format!("{:.1} {unit}", bytes as f64 / scale as f64);
+        }
+    }
+    format!("{bytes} B")
 }
 
 fn command_lines(bin: &str, args: &[&str]) -> Option<String> {
@@ -947,9 +1145,11 @@ pub fn parse_sh_urls(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn map_native(d: &Detected, sh_urls: &[String], same_name: bool) -> Option<String> {
+/// The curated-table mapping for one finding (`None` when the table has no
+/// entry for it).
+fn mapped_from_table(d: &Detected, sh_urls: &[String]) -> Option<String> {
     let lower = d.id.to_ascii_lowercase();
-    let mapped = match d.source {
+    match d.source {
         Source::Snap => MAPPINGS
             .iter()
             .find(|m| !m.snap.is_empty() && m.snap.eq_ignore_ascii_case(&d.id))
@@ -963,12 +1163,16 @@ fn map_native(d: &Detected, sh_urls: &[String], same_name: bool) -> Option<Strin
             .find(|m| !m.nix.is_empty() && m.nix.eq_ignore_ascii_case(&d.id))
             .map(|m| m.native.to_string()),
         Source::Sh => sh_native(d, sh_urls),
-    };
-    // When the user explicitly targeted a package (`lx go-native <pkg>`), fall
-    // back to its own name as the native package name — the mapping table
-    // can't cover every package, and the name is the right guess for a
-    // targeted request.
-    mapped.or_else(|| same_name.then(|| command_name(d)))
+    }
+}
+
+/// Map a finding to a native package name: the curated table first, then (for
+/// an explicit target or `--all`) the package/binary's own name. The table
+/// can't cover every package, and the name is the right guess for an
+/// explicit `--all`/targeted request; the caller marks such entries as
+/// best-effort guesses.
+fn map_native(d: &Detected, sh_urls: &[String], same_name: bool) -> Option<String> {
+    mapped_from_table(d, sh_urls).or_else(|| same_name.then(|| command_name(d)))
 }
 
 /// Map a `curl | sh` orphan to a table entry, first by binary name, then by
@@ -1126,23 +1330,25 @@ fn is_native_installed(package: &str, format: &str) -> bool {
     crate::consumer::installed_version(package, fmt).is_some()
 }
 
-/// Install a native package in the given format via the shared consumer
-/// (`lx install`), so rpm/arch get org resolution, sidecar verification,
-/// index fallback, and manifest recording — not a parallel installer.
-fn install_native_package(package: &str, format: &str, token: Option<&str>) -> Result<()> {
-    match format {
-        "deb" | "rpm" | "arch" => crate::install::run(
-            InstallArgs {
-                package: package.to_string(),
-                format: Some(format.to_string()),
-                allow_unverified: true,
-                yes: true,
-                ..Default::default()
-            },
-            token,
-        ),
-        _ => bail!("unsupported native format '{format}'"),
+/// Install a native package via the shared consumer (`lx install`), so
+/// rpm/arch get native-first repo resolution, index fallback, org fallback,
+/// sidecar verification, and manifest recording — not a parallel installer.
+///
+/// An explicit `--format` pins the target (and therefore the org asset);
+/// without one, `lx install` resolves the host format *and* gets to try the
+/// host repositories and enabled indexes first, which is what a migration
+/// wants.
+fn install_native_package(package: &str, format: Option<&str>, token: Option<&str>) -> Result<()> {
+    let mut args = InstallArgs {
+        package: package.to_string(),
+        allow_unverified: true,
+        yes: true,
+        ..Default::default()
+    };
+    if let Some(f) = format {
+        args.format = Some(f.to_string());
     }
+    crate::install::run(args, token)
 }
 
 /// Side-manifest tracking `curl | sh` orphans that have been removed.
@@ -1246,16 +1452,25 @@ fn confirm(prompt: &str) -> Result<bool> {
 /// Test probe: map one (`source`, `id`) pair through the mapping table.
 /// `source` is one of "snap", "flatpak", "nix", "sh".
 pub fn go_native_mapping_probe(source: &str, id: &str, sh_urls: &[String]) -> Option<String> {
+    map_native(&detected_from(source, id), sh_urls, false)
+}
+
+/// Test probe for the `--all`/targeted path: the curated table first, then
+/// the package/binary's own name.
+pub fn go_native_attempt_probe(source: &str, id: &str, sh_urls: &[String]) -> Option<String> {
+    map_native(&detected_from(source, id), sh_urls, true)
+}
+
+fn detected_from(source: &str, id: &str) -> Detected {
     let src = match source {
         "snap" => Source::Snap,
         "flatpak" => Source::Flatpak,
         "nix" => Source::Nix,
         _ => Source::Sh,
     };
-    let d = Detected {
+    Detected {
         source: src,
         id: id.to_string(),
         detail: String::new(),
-    };
-    map_native(&d, sh_urls, false)
+    }
 }

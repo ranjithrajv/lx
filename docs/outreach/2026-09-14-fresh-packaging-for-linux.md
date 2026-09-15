@@ -195,7 +195,7 @@ declared. No FUSE, no squashfs mount on startup, no sandbox flags that
 contradict what a TUI that "rampages around your machine and network"
 actually needs. Startup is the binary's own startup.
 
-For users already on a parallel install, `lx migrate native` plans — and only
+For users already on a parallel install, `lx go-native` plans — and only
 on `--yes` executes — migration of snap, Flatpak, nix, and `curl | sh`
 installs to the native package, with anything unmappable reported rather
 than dropped.

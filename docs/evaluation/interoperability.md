@@ -138,8 +138,7 @@ Two drop-in surfaces carry the "replace without edits" claim:
   same input names (`config-file`, `version`, `build-version`,
   `architecture`, `max-parallel`, `lintian-check`, `telemetry-enabled`,
   `save-baseline`, `pinned-metadata`, `output-dir`, `lx-version`) and output
-  names (`packages`, `source-packages`, `summary-path`). `lx migrate lpt`
-  rewrites existing workflows (`docs/guides/github-action.md`).
+  names (`packages`, `source-packages`, `summary-path`).
 - **`lx deps resolve`** is a command drop-in for `dpkg-shlibdeps`: same job,
   versioned relations, fail-closed without `--ignore-missing-info`
   (`lib/shlibdeps.rs`).
@@ -167,7 +166,7 @@ The host package manager stays the owner:
 - `musl: true` emits static binaries with no glibc symbol-version
   dependency, sidestepping the "built on new Ubuntu, unusable on old"
   incompatibility (`docs/decisions/2026-09-11-musl-static-builds.md`).
-- `lx migrate native` targets the host manager as the destination for
+- `lx go-native` targets the host manager as the destination for
   snap/flatpak/nix/`curl | sh` installs.
 
 ## I7 — Standards emission (partial)

@@ -19,12 +19,12 @@ fn deps_group_exposes_scan_and_resolve() {
 }
 
 #[test]
-fn migrate_group_exposes_lpt_and_native() {
-    lx().args(["migrate", "--help"])
+fn go_native_is_a_top_level_command() {
+    lx().args(["go-native", "--help"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("lpt"))
-        .stdout(predicate::str::contains("native"));
+        .stdout(predicate::str::contains("--dry-run"))
+        .stdout(predicate::str::contains("--all"));
 }
 
 #[test]
@@ -44,13 +44,7 @@ fn get_includes_rollback() {
 
 #[test]
 fn moved_names_still_work_as_hidden_shims() {
-    for name in [
-        "scan-deps",
-        "shlibdeps",
-        "go-native",
-        "reinstall",
-        "discover",
-    ] {
+    for name in ["scan-deps", "shlibdeps", "reinstall", "discover"] {
         lx().args([name, "--help"]).assert().success();
     }
 }
@@ -65,17 +59,18 @@ fn init_exposes_from_scaffold() {
 }
 
 #[test]
-fn top_level_help_does_not_advertise_moved_names() {
+fn top_level_help_does_not_advertise_hidden_shims() {
     lx().arg("--help")
         .assert()
         .success()
+        .stdout(predicate::str::contains("go-native"))
         .stdout(predicate::str::contains("deps"))
-        .stdout(predicate::str::contains("migrate"))
         .stdout(predicate::str::contains("schema"))
         // Command-list entries are indented two spaces; match those so the
         // descriptions (e.g. "dpkg-shlibdeps parity") don't false-positive.
-        .stdout(predicate::str::contains("  go-native").not())
         .stdout(predicate::str::contains("  scan-deps").not())
         .stdout(predicate::str::contains("  shlibdeps").not())
-        .stdout(predicate::str::contains("  discover").not());
+        .stdout(predicate::str::contains("  discover").not())
+        // The migrate group was dropped entirely.
+        .stdout(predicate::str::contains("  migrate").not());
 }

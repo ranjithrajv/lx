@@ -13,7 +13,7 @@ registry — no fork, no recompile of core.
 
 ```sh
 lx index search eza           # full-text across ALL enabled indexes
-lx index install eza          # prebuilt first (LX index), build if no match
+lx install eza          # prebuilt first (LX index), build if no match
 lx index info eza             # details from every index that has it
 lx index update               # pull latest recipes + prebuilts
 
@@ -31,10 +31,14 @@ source caches to `~/.cache/lx/repology/` (JSON files refreshed via the
 repology API on `lx index update`). `lx search` merges index results with the
 `latest-debs` org and embedded templates; `--index` includes the enabled
 indexes, `--index-only` searches them alone, and `--local` keeps it
-offline-only on the embedded templates. `lx install` falls back to the
-enabled indexes when the org doesn't carry the package (`--source <index>`
-forces one), recording the result as an lx-managed generation, and
-`lx upgrade`/`lx update` re-resolve those packages through the indexes.
+offline-only on the embedded templates. On a plain `lx install`, the host's
+own repositories are probed first (a repo package is installed by the host
+manager and left unmanaged — see
+[native-first](../decisions/2026-09-15-native-first-install.md)); otherwise
+the enabled indexes are tried and the `latest-debs` org is the fallback when
+none carries the package (`--source <index>` forces one index), recording the
+result as an lx-managed generation. `lx upgrade`/`lx update` re-resolve those
+packages through the indexes.
 
 ## Distro metadata (repology)
 
@@ -83,7 +87,7 @@ top gap-fillers by repo count (showing 10 of 30):
 
 ## Index enhancements
 
-Beyond the core search/install/info workflow, `lx index` supports several
+Beyond the core search/info workflow, `lx index` supports several
 output modes and query refinements:
 
 **JSON output** (`--json`) — machine-readable results for scripting, CI, and

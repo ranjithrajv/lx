@@ -86,7 +86,6 @@ pub mod lintian;
 pub mod list;
 pub mod lock;
 pub mod manifest;
-pub mod migrate;
 pub mod msixarchive;
 pub mod nfpm;
 pub mod optimize;

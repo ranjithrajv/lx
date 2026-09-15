@@ -41,3 +41,5 @@ renames. For current behavior, see the [documentation hub](../README.md).
 - [Native MSIX (`.p7x`) and macOS pkg (xar) signing](2026-09-14-msix-pkg-signing.md)
 - [Host build-dependency solving and installation (`--install-build-deps`)](2026-09-14-build-deps.md)
 - [`lx shlibdeps`: symbol-versioned dependency resolution (dpkg-shlibdeps parity)](2026-09-14-shlibdeps.md)
+- [Native-first `lx install`: the host repos are asked before any index](2026-09-15-native-first-install.md)
+- [`lx go-native`: `--all` and `--dry-run`](2026-09-15-go-native-all.md)

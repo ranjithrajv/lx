@@ -121,11 +121,103 @@ fn install_arch(path: &Path) -> Result<()> {
         .arg(path)
         .status()
         .context("failed to run `sudo pacman -U`")?;
+    if status.success() {
+        println!("✓ installed {}", path.display());
+        return Ok(());
+    }
+
+    // `pacman -U` failed. The recoverable case is a file the package wants to
+    // place that already exists on disk but is owned by no package — a stray
+    // binary from a `curl | sh` / Homebrew / mise install. pacman refuses to
+    // overwrite those by default; retry with `--overwrite` for exactly those
+    // paths. Files owned by *another* package are never handed to
+    // `--overwrite`, so this cannot force-replace a file the host manager is
+    // responsible for.
+    let unowned = arch_unowned_existing_paths(path)?;
+    if unowned.is_empty() {
+        bail!("failed to install {}", path.display());
+    }
+    println!(
+        "  {} path(s) already exist on disk unowned; retrying with `pacman -U --overwrite`",
+        unowned.len()
+    );
+    let mut cmd = Command::new("sudo");
+    cmd.args(["pacman", "-U", "--noconfirm"]);
+    for p in &unowned {
+        cmd.arg("--overwrite").arg(p);
+    }
+    cmd.arg(path);
+    let status = cmd
+        .status()
+        .context("failed to run `sudo pacman -U --overwrite`")?;
     if !status.success() {
         bail!("failed to install {}", path.display());
     }
     println!("✓ installed {}", path.display());
     Ok(())
+}
+
+/// The paths a package file would install that already exist on disk but are
+/// owned by no installed package — the `pacman -U` conflicts `--overwrite`
+/// can legitimately resolve.
+fn arch_unowned_existing_paths(pkg: &Path) -> Result<Vec<String>> {
+    let files = arch_package_files(pkg)?;
+    let existing: Vec<String> = files
+        .into_iter()
+        .filter(|p| Path::new(p).exists())
+        .collect();
+    if existing.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut unowned = Vec::new();
+    // `pacman -Qo` takes many paths but an unbounded argv would overflow
+    // ARG_MAX on a large package; normalizing per chunk keeps it bounded.
+    for chunk in existing.chunks(256) {
+        let out = Command::new("pacman")
+            .arg("-Qo")
+            .args(chunk)
+            .output()
+            .context("failed to run `pacman -Qo`")?;
+        // Exit 1 just means some path was unowned; the message is on stderr.
+        unowned.extend(parse_unowned_paths(&String::from_utf8_lossy(&out.stderr)));
+    }
+    unowned.sort();
+    unowned.dedup();
+    Ok(unowned)
+}
+
+/// `pacman -Qlpq <file>` → the package's file paths.
+fn arch_package_files(pkg: &Path) -> Result<Vec<String>> {
+    let out = Command::new("pacman")
+        .args(["-Qlpq"])
+        .arg(pkg)
+        .output()
+        .context("failed to run `pacman -Qlpq`")?;
+    if !out.status.success() {
+        bail!("failed to list the files in {}", pkg.display());
+    }
+    Ok(parse_arch_package_files(&String::from_utf8_lossy(
+        &out.stdout,
+    )))
+}
+
+/// Parse `pacman -Qlpq` output (one path per line, trailing `/` on dirs).
+fn parse_arch_package_files(out: &str) -> Vec<String> {
+    out.lines()
+        .map(|l| l.trim().trim_end_matches('/').to_string())
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// Parse the unowned paths out of `pacman -Qo`'s stderr
+/// (`error: No package owns <path>`).
+fn parse_unowned_paths(stderr: &str) -> Vec<String> {
+    stderr
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("error: No package owns "))
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty())
+        .collect()
 }
 
 fn install_apk(path: &Path) -> Result<()> {
@@ -247,4 +339,39 @@ fn confirm(prompt: &str, _default: bool) -> Result<bool> {
         answer.trim().to_ascii_lowercase().as_str(),
         "y" | "yes"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_pacman_qlpq_paths() {
+        let out = "/opt/\n/opt/1Password/\n/opt/1Password/1Password-BrowserSupport\n\n";
+        assert_eq!(
+            parse_arch_package_files(out),
+            vec![
+                "/opt",
+                "/opt/1Password",
+                "/opt/1Password/1Password-BrowserSupport",
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_only_the_unowned_paths() {
+        // `pacman -Qo` mixes owned (stdout) and unowned (stderr); only the
+        // stderr lines reach this parser.
+        let stderr = "error: No package owns /usr/bin/herdr\nerror: No package owns /usr/share/licenses/herdr\n";
+        assert_eq!(
+            parse_unowned_paths(stderr),
+            vec!["/usr/bin/herdr", "/usr/share/licenses/herdr"]
+        );
+    }
+
+    #[test]
+    fn owned_paths_are_not_recovery_candidates() {
+        assert!(parse_unowned_paths("").is_empty());
+        assert!(parse_unowned_paths("/usr/bin/bash is owned by bash 5.3.15-1\n").is_empty());
+    }
 }

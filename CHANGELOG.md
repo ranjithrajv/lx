@@ -2,6 +2,93 @@
 
 ## Unreleased
 
+### `lx go-native` applies by default; `--dry-run` reports benefits
+
+- The command now **applies by default** (installs natives, removes sources);
+  `--dry-run` plans. `--yes` is **removed entirely** — it was the old
+  opt-in, and with applying as the default it is no longer accepted.
+- `--dry-run` prints a detailed per-package benefit block instead of a bare
+  mapping list: whether the native package is already installed, the space
+  the redundant non-native copy reclaims (`du`), how much of the native
+  package's dependency set the host already satisfies (e.g. `5/5 already
+  satisfied (0/5 new)`), and a `keeps` line when the native package does not
+  provide the command. A total (`reclaimed when applied: ~60.9 MB across 3
+  package(s)`) closes the report. All measured from local state — no network.
+- Measured by `native_benefit()` / `deps_shared()` / `human_bytes()` in
+  `lib/go_native.rs`; the apply path stays terse.
+
+### `lx go-native --all` attempts every non-native finding
+
+- `--all` migrates beyond the curated mapping table: an unmapped
+  snap/flatpak/nix/`curl | sh` finding is attempted under its own command
+  name as the native package. The plan marks those rows
+  `[best-effort: no curated mapping]` and prints the count, so a guessed name
+  is never mistaken for a reviewed one; a curated mapping still wins (e.g.
+  `snap spotify` → `spotify-client`, not `spotify`).
+- `--all` alone does not delete `curl | sh` orphans — `--cleanup-sh` is still
+  required, with the existing "the native package must provide the command"
+  guard before any removal.
+- Without an explicit `--format`, a migration's native install now resolves
+  through `lx install` (host repositories → enabled indexes → latest-debs
+  org) instead of being pinned to the org. An explicit `--format` still pins
+  the target.
+
+### Recipe installs record one generation, in the host's version spelling
+
+- `build_from_recipe` recorded the install itself *and* returned an
+  `InstallOutcome` that `install_from_active` recorded again, so every
+  recipe/AUR install appended **two** identical manifest generations (the
+  `herdr` entry showed up twice, one tagged with its own version and one
+  untagged). Recording now happens once, in the caller; the source only
+  installs and returns the outcome.
+- The recorded version now comes from the host manager
+  (`consumer::installed_version`) instead of the recipe's bare `version:`
+  field. An Arch package records `0.9.0-1.arch` — what `pacman -Q` reports —
+  rather than `0.9.0`, so `lx list`/`system-check` no longer flag a spurious
+  `changed (manifest: 0.9.0)` for a package that is up to date.
+
+- `Manifest::record` now refreshes the current generation in place when the
+  new entry is indistinguishable from it (same version/format/arch) instead of
+  appending, so a repeated same-version install can't grow the history with
+  entries `rollback` cannot tell apart. Unit-tested in `lib/manifest.rs`.
+
+### `pacman -U` file conflicts recover instead of failing
+
+- When pacman refuses an Arch install because a file the package places
+  already exists on disk but is owned by no package (a stray binary from a
+  `curl | sh`, Homebrew, or mise install — `herdr: /usr/bin/herdr exists in
+  filesystem`), `lx` now lists the package's paths, keeps only the existing
+  unowned ones, and retries with `pacman -U --overwrite <path>…`. This
+  mirrors the deb path's `apt-get install -f` retry and the rpm path's
+  `--replacefiles --replacepkgs`.
+- Files owned by *another* package are never handed to `--overwrite`, so the
+  install still fails closed rather than force-replacing a file the host
+  manager is responsible for. Parsers (`parse_arch_package_files`,
+  `parse_unowned_paths`) are unit-tested.
+
+### `lx install` asks the host repos first (native-first)
+
+- A plain `lx install <pkg>` now queries the host's own repositories before
+  the enabled indexes / `latest-debs` org: `pacman -Si` (arch),
+  `apt-cache policy` (deb), `dnf repoquery` with a `yum` fallback (rpm), and
+  `apk search -x` (apk). A package the distro carries is installed by the
+  native manager (`pacman -S` / `apt-get install` / `dnf install` /
+  `apk add`) and is deliberately **not** recorded in the lx manifest — the
+  host manager owns repository packages, so `lx list`/`update`/`upgrade`/
+  `rollback` do not claim them.
+- The probe is skipped for an explicit `--source`, `--build`, `--version`,
+  `--download-only`, a `--format`/`--arch`/`--distribution` target, or a
+  package lx already manages (its recorded source wins), so native-first can
+  never hijack an explicit request.
+- When the host repositories don't carry the package, `lx install` says so
+  (`<pkg> is not in the host repositories; falling back to the enabled
+  package indexes, then the latest-debs org`) before it falls through, so the
+  source switch is never silent.
+- New `consumer::native_repo_version` / `install_native`, with a pure
+  per-host parser (`parse_native_repo_version`) unit-tested without that
+  host's package manager installed. Rationale:
+  `docs/decisions/2026-09-15-native-first-install.md`.
+
 ### `--verify` and the artifact cache now cover directory payloads
 
 - The artifact-cache key hashes a directory payload's tree (sorted,
@@ -126,9 +213,7 @@
 
 - New `lx deps` group: `lx deps scan` (was `lx scan-deps`) and
   `lx deps resolve` (was `lx shlibdeps`).
-- `lx go-native` is now `lx migrate native`; bare `lx migrate` (and
-  `lx migrate --repo DIR`) keeps the legacy `lpt` behavior, also reachable
-  as `lx migrate lpt`.
+- `lx deps resolve` (was `lx shlibdeps`).
 - Top-level `lx reinstall` is folded into `lx install --reinstall`: with no
   `--version`, it re-installs an lx-managed package's recorded version;
   otherwise it forces a reinstall of the resolved version.
@@ -514,10 +599,5 @@
   `LX_*` (`LX_MAINTAINER`, `LX_SIGN_PASSPHRASE`), caches live under
   `~/.cache/lx`, the manifest under `<data>/lx/installed.json`, and the
   GitHub repo moved to `ranjithrajv/lx` (the old URL redirects).
-- **Migration is one command:** `lx migrate` moves the manifest and caches
-  (never clobbers existing `lx` state; idempotent), and
-  `lx migrate --repo DIR` rewrites a packaging repo's workflows
-  (`ranjithrajv/lpt@` → `ranjithrajv/lx@`, `lpt build` → `lx build`,
-  cache keys/paths). Review the diff, then commit.
 - Action consumers: change `uses: ranjithrajv/lpt@…` to
   `uses: ranjithrajv/lx@…`. Inputs/outputs are unchanged.

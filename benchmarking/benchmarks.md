@@ -135,7 +135,7 @@ them as "orchestration overhead" with the download/install time subtracted.
 |---|---|---|---|---|---|
 | I1 | `lx index search <pkg>` | AUR RPC; repology API query | Feature parity | One fan-out query across enabled indexes | network |
 | I2 | `lx index update` | `git pull` of the recipe index | Feature parity | Refresh cached index data | network |
-| I3 | `lx migrate native` (plan) | manual `snap list` / `flatpak list` / `nix profile list` | Functional | Detect + map installed non-native software | planned |
+| I3 | `lx go-native --dry-run` | manual `snap list` / `flatpak list` / `nix profile list` | Functional | Detect + map installed non-native software | planned |
 | I4 | `lx init --from-aur <pkg>` | `makedeb`; reading the `PKGBUILD` by hand | Feature parity | Convert an AUR `PKGBUILD` to `package.yaml` | planned |
 
 ## Promoting a row to automated

@@ -19,7 +19,7 @@ repology index (what ships where, what's outdated)
         │
         ├─→ lx index outdated     → backlog for lx build / lx contribute
         ├─→ lx search --distro    → coverage dashboard (recipe gaps)
-        ├─→ lx migrate native          → migrate stale distro packages
+        ├─→ lx go-native          → migrate stale distro packages
         ├─→ lx init --from        → prefilled recipe scaffolds
         ├─→ lx upgrade --all      → system-wide freshness + migration targets
         └─→ lx validate            → gap-impact warnings on recipes
@@ -50,7 +50,7 @@ Remaining work, highest priority first. Completed work is summarized under
 | **P1** | `lx install` pre-flight missing-lib warning | todo | §1 |
 | **P2** | `lx init --from repology <name>` — scaffold from metadata | todo | §2 |
 | **P2** | `lx index contribute --from-outdated` / `lx build --from-outdated` | todo | §3 |
-| **P3** | `lx migrate native --from-outdated` — migrate stale distro packages | todo | §4 |
+| **P3** | `lx go-native --from-outdated` — migrate stale distro packages | todo | §4 |
 | **P3** | `lx validate` — repology gap-impact warnings | todo | §5 |
 | **P4** | Repology-scored recipe-index CI | todo (infra) | §6 |
 
@@ -157,26 +157,26 @@ would fill a real, detected gap.
 
 ---
 
-## 4. `lx migrate native --from-outdated` → migrate stale distro packages
+## 4. `lx go-native --from-outdated` → migrate stale distro packages
 
 **Priority: P3.** Bigger addressable set, builds on the shipped
 `lx upgrade --all`.
 
-**Status:** `lx migrate native` exists. `--from-outdated` integration is future
+**Status:** `lx go-native` exists. `--from-outdated` integration is future
 work.
 
-`lx migrate native` finds snap/flatpak/nix/`curl | sh` installs and plans
+`lx go-native` finds snap/flatpak/nix/`curl | sh` installs and plans
 native-package migrations. It currently starts from what's already on the
 machine. The repology data extends it to distro packages that are behind
 upstream:
 
 ```
-$ lx migrate native --from-outdated
+$ lx go-native --from-outdated
   plan: replace distro neovim 0.9.5 with lx-built neovim 0.11.0
   plan: replace distro ripgrep 14.1.0 with lx-built ripgrep 15.2.0
 ```
 
-Now `lx migrate native` handles **distro packages that are behind upstream**,
+Now `lx go-native` handles **distro packages that are behind upstream**,
 not just non-native formats. Same end state (native `.deb`/`.rpm`/Arch),
 bigger addressable set.
 
@@ -285,7 +285,7 @@ lx upgrade ── --all / --auto-migrate                              ✅
         │
         ▼
 todo: lx init --from repology / lx index contribute --from-outdated
-      lx migrate native --from-outdated / lx validate gap warnings
+      lx go-native --from-outdated / lx validate gap warnings
 
 ────────────────────────────────────────────────────────────────
 

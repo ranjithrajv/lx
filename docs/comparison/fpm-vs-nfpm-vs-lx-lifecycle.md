@@ -82,7 +82,7 @@ How it works per build system:
 | Rollback | ❌ | ❌ | ✅ `lx rollback` |
 | Repo generation | ❌ | ❌ | ✅ `lx repo` (deb/rpm/pacman/apk/opkg) + `lx publish` |
 | Search | ❌ | ❌ | ✅ `lx search` |
-| Migrate snap/flatpak/nix → native | ❌ | ❌ | ✅ `lx migrate native` |
+| Migrate snap/flatpak/nix → native | ❌ | ❌ | ✅ `lx go-native` |
 | AUR import | ❌ | ❌ | ✅ `lx init --from-aur` |
 | Lintian | ❌ | ❌ | ✅ `--lintian` |
 | GitHub Action | ❌ | ❌ | ✅ `action.yml` |

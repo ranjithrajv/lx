@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::Args;
 use std::path::PathBuf;
 
@@ -13,8 +13,9 @@ use lx_lib::github::GitHubClient;
 
 #[derive(Debug, Clone, Args)]
 pub struct InstallArgs {
-    /// Package name (e.g. "eza"), looked up as "<package>-debian" under the
-    /// configured org (`LX_INDEX_ORG`, default `latest-debs`).
+    /// Package name (e.g. "eza"). The host's own repositories are probed
+    /// first (native-first, unmanaged); otherwise the enabled indexes are
+    /// tried and the latest-debs org (`LX_INDEX_ORG`) is the fallback.
     pub package: String,
 
     /// Native package format to install: `deb`, `rpm`, or `arch`. Defaults
@@ -60,12 +61,23 @@ pub struct InstallArgs {
     #[arg(short = 'y', long)]
     pub yes: bool,
 
-    /// Resolve the package from this enabled index (see `lx index list`)
-    /// instead of the latest-debs org — prebuilt-first, with a
-    /// build-from-recipe fallback. Useful for packages the org doesn't
-    /// publish. Without it, an org miss falls back to the enabled indexes.
+    /// Resolve the package from this enabled index (see `lx index list`) —
+    /// prebuilt-first, with a build-from-recipe fallback. Without it, the
+    /// enabled indexes are tried first and the latest-debs org is the
+    /// fallback.
     #[arg(long)]
     pub source: Option<String>,
+
+    /// Build from an index recipe, skipping the org and any prebuilt asset
+    /// (index-only; always the host's native format).
+    #[arg(long)]
+    pub build: bool,
+
+    /// When building from a recipe (AUR/LX community), install its missing
+    /// host build dependencies before compiling, via the host package
+    /// manager.
+    #[arg(long)]
+    pub install_build_deps: bool,
 }
 
 /// Mirrors clap's defaults so callers can use `..Default::default()`.
@@ -83,6 +95,8 @@ impl Default for InstallArgs {
             reinstall: false,
             yes: false,
             source: None,
+            build: false,
+            install_build_deps: false,
         }
     }
 }
@@ -119,38 +133,133 @@ fn apply_reinstall_defaults(mut args: InstallArgs, manifest: &Manifest) -> Insta
 }
 
 pub fn run(args: InstallArgs, token: Option<&str>) -> Result<()> {
+    // Decide the source order from the *user's* flags, before `reinstall`
+    // fills format/arch/distribution from the manifest.
+    let prefer_indexes = prefer_indexes(&args);
+    if args.build && !prefer_indexes {
+        bail!(
+            "--build installs from a recipe, which is always the host's native \
+             format; drop --format/--arch/--distribution"
+        );
+    }
+    // Whether the user actually asked for a version, before `--reinstall`
+    // fills in the recorded one. Only an explicit `--version` is a meaningful
+    // tag for a build-from-recipe index (AUR has no tags).
+    let explicit_version = args.version.is_some();
+
     let manifest = Manifest::load().unwrap_or_default();
     let args = apply_reinstall_defaults(args, &manifest);
 
-    // `--source`: skip the org entirely and install from that index.
+    // `--source`: skip everything else and install from that index.
     if let Some(source) = args.source.clone() {
-        return crate::index::install_from_active(&args.package, Some(&source), index_opts(&args));
+        return crate::index::install_from_active(
+            &args.package,
+            Some(&source),
+            index_opts(&args, explicit_version),
+        );
     }
 
-    match install_from_org(&args, token) {
-        Ok(()) => Ok(()),
-        Err(org_err) => {
-            // The org has no such package/release — dogfood the enabled
-            // indexes (lx-community, AUR, custom) before giving up.
-            if crate::index::any_active_has(&args.package)? {
-                crate::index::install_from_active(&args.package, None, index_opts(&args))
-            } else {
-                Err(org_err)
+    // Native-first: a package the host's own repositories carry is installed
+    // by the host manager (`pacman -S`/`apt-get install`/`dnf install`/`apk
+    // add`), not fetched from a forge release or built from an AUR recipe.
+    // Such an install is deliberately *not* recorded in the lx manifest — the
+    // native manager owns repository packages. Skipped for an explicit
+    // source/build/target request or a download-only run, and for a package lx
+    // already manages (whose recorded source should win).
+    if native_first_applies(&args, &manifest, prefer_indexes) {
+        let format = detect_host_format();
+        if let Some(version) = consumer::native_repo_version(&args.package, format) {
+            println!(
+                "{} {version} is available from the host repositories",
+                args.package
+            );
+            return consumer::install_native(&args.package, format, args.yes);
+        }
+        println!(
+            "{} is not in the host repositories; falling back to the enabled \
+             package indexes, then the latest-debs org",
+            args.package
+        );
+    }
+
+    // Enabled indexes are the default source; the latest-debs org is the
+    // fallback. `--build` is index-only, so it never falls back to the org.
+    if args.build || prefer_indexes {
+        match crate::index::any_active_has(&args.package) {
+            Ok(true) => {
+                return crate::index::install_from_active(
+                    &args.package,
+                    None,
+                    index_opts(&args, explicit_version),
+                );
             }
+            Ok(false) if args.build => bail!(
+                "no enabled index has '{}'; --build needs a recipe \
+                 (`lx index search {}` to check)",
+                args.package,
+                args.package
+            ),
+            Ok(false) => {}
+            Err(e) if args.build => {
+                return Err(e).with_context(|| "index lookup failed for --build");
+            }
+            Err(e) => eprintln!(
+                "⚠ index lookup failed: {e:#}; trying {}",
+                consumer::index_org()
+            ),
         }
     }
+
+    install_from_org(&args, token)
+}
+
+/// True when the enabled indexes should be tried before the latest-debs org.
+///
+/// An explicit `--format`/`--arch`/`--distribution` is an org-only request
+/// (index installs are always the host's native format), so those go straight
+/// to the org. Reinstall-filled defaults do not count — this is evaluated
+/// before [`apply_reinstall_defaults`].
+fn prefer_indexes(args: &InstallArgs) -> bool {
+    args.format.is_none() && args.arch.is_none() && args.distribution.is_none()
+}
+
+/// True when `lx install` should probe the host's own repositories before the
+/// enabled indexes / latest-debs org.
+///
+/// Only the plain default path qualifies: an explicit `--source`, `--build`,
+/// `--format`/`--arch`/`--distribution`, `--version`, or `--download-only`
+/// all name a different source of truth. A package lx already manages keeps
+/// its recorded source rather than being silently handed to the host manager.
+/// `index_preferred` is [`prefer_indexes`] evaluated on the user's original
+/// flags (before `--reinstall` fills them from the manifest).
+fn native_first_applies(args: &InstallArgs, manifest: &Manifest, index_preferred: bool) -> bool {
+    index_preferred
+        && !args.build
+        && args.source.is_none()
+        && args.version.is_none()
+        && args.download_only.is_none()
+        && manifest.current(&args.package).is_none()
 }
 
 /// Map the consumer install flags onto the shared index install options.
-fn index_opts(args: &InstallArgs) -> crate::index::InstallOpts {
+///
+/// `explicit_version` distinguishes a user-supplied `--version` from one
+/// filled in by `--reinstall`. A build-from-recipe index (AUR) has no tags,
+/// so forwarding a reinstall-recorded version would make it refuse with
+/// "AUR has no prebuilt tags".
+fn index_opts(args: &InstallArgs, explicit_version: bool) -> crate::index::InstallOpts {
     crate::index::InstallOpts {
-        tag: args.version.clone(),
-        build: false,
+        tag: if explicit_version {
+            args.version.clone()
+        } else {
+            None
+        },
+        build: args.build,
         no_verify: args.no_verify,
         allow_unverified: args.allow_unverified,
         yes: args.yes,
         download_only: args.download_only.clone(),
-        install_build_deps: false,
+        install_build_deps: args.install_build_deps,
     }
 }
 
@@ -299,6 +408,8 @@ mod tests {
             reinstall,
             yes: true,
             source: None,
+            build: false,
+            install_build_deps: false,
         }
     }
 
@@ -339,5 +450,73 @@ mod tests {
     fn without_reinstall_flag_recorded_version_is_ignored() {
         let got = apply_reinstall_defaults(args(false), &manifest_with_eza());
         assert!(got.version.is_none());
+    }
+
+    #[test]
+    fn indexes_are_preferred_unless_a_format_target_is_given() {
+        assert!(prefer_indexes(&args(false)));
+
+        let mut by_format = args(false);
+        by_format.format = Some("rpm".into());
+        assert!(!prefer_indexes(&by_format));
+
+        let mut by_arch = args(false);
+        by_arch.arch = Some("arm64".into());
+        assert!(!prefer_indexes(&by_arch));
+
+        let mut by_dist = args(false);
+        by_dist.distribution = Some("trixie".into());
+        assert!(!prefer_indexes(&by_dist));
+    }
+
+    #[test]
+    fn build_stays_on_the_index_path() {
+        // `--build` does not itself disable index preference; it forces the
+        // index path in `run()` and never falls back to the org.
+        let mut build = args(false);
+        build.build = true;
+        assert!(prefer_indexes(&build));
+    }
+
+    #[test]
+    fn native_first_applies_to_the_plain_default_path() {
+        let m = Manifest::default();
+        assert!(native_first_applies(&args(false), &m, true));
+    }
+
+    #[test]
+    fn native_first_is_skipped_for_an_explicit_request() {
+        let m = Manifest::default();
+
+        let mut build = args(false);
+        build.build = true;
+        assert!(!native_first_applies(&build, &m, true));
+
+        let mut sourced = args(false);
+        sourced.source = Some("aur".into());
+        assert!(!native_first_applies(&sourced, &m, true));
+
+        let mut versioned = args(false);
+        versioned.version = Some("1.0".into());
+        assert!(!native_first_applies(&versioned, &m, true));
+
+        let mut download = args(false);
+        download.download_only = Some(std::env::temp_dir());
+        assert!(!native_first_applies(&download, &m, true));
+
+        // A format/arch/dist target disables index preference; native-first
+        // follows the same gate.
+        assert!(!native_first_applies(&args(false), &m, false));
+    }
+
+    #[test]
+    fn native_first_defers_to_an_lx_managed_package() {
+        // lx already owns this package from a recorded source, so a plain
+        // `lx install` must not silently hand it to the host manager.
+        assert!(!native_first_applies(
+            &args(false),
+            &manifest_with_eza(),
+            true
+        ));
     }
 }

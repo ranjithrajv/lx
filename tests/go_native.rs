@@ -5,7 +5,8 @@
 //! functions — no live snap/flatpak/nix required.
 
 use lx_lib::go_native::{
-    go_native_mapping_probe, parse_flatpak_list, parse_nix_profile, parse_sh_urls, parse_snap_list,
+    go_native_attempt_probe, go_native_mapping_probe, human_bytes, parse_flatpak_list,
+    parse_nix_profile, parse_sh_urls, parse_snap_list,
 };
 
 #[test]
@@ -102,4 +103,43 @@ fn unknown_packages_map_to_nothing() {
         go_native_mapping_probe("sh", "/usr/local/bin/my-own-tool", &[]),
         None
     );
+}
+
+#[test]
+fn all_attempts_unmapped_packages_by_their_own_name() {
+    for (source, id, native) in [
+        ("snap", "some-snap", "some-snap"),
+        ("nix", "mycli", "mycli"),
+        ("flatpak", "com.example.Nope", "Nope"),
+        ("sh", "/usr/local/bin/my-own-tool", "my-own-tool"),
+    ] {
+        assert_eq!(
+            go_native_attempt_probe(source, id, &[]),
+            Some(native.to_string()),
+            "source={source} id={id}"
+        );
+    }
+}
+
+#[test]
+fn all_still_prefers_a_curated_mapping_over_the_guess() {
+    // `spotify` must stay `spotify-client`, not the guessed `spotify`; the
+    // binary table must also win over the orphan's own name.
+    assert_eq!(
+        go_native_attempt_probe("snap", "spotify", &[]),
+        Some("spotify-client".to_string())
+    );
+    assert_eq!(
+        go_native_attempt_probe("sh", "/home/u/.local/bin/uv", &[]),
+        Some("uv".to_string())
+    );
+}
+
+#[test]
+fn human_bytes_scales_for_the_dry_run_total() {
+    assert_eq!(human_bytes(0), "0 B");
+    assert_eq!(human_bytes(512), "512 B");
+    assert_eq!(human_bytes(11_000_000), "11.0 MB");
+    assert_eq!(human_bytes(60_900_000), "60.9 MB");
+    assert_eq!(human_bytes(1_500_000_000), "1.5 GB");
 }

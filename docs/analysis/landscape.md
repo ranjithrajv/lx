@@ -37,16 +37,40 @@ software**, not any single format.
 
 | Stage | What happens | Representative tools | `lx` |
 |---|---|---|---|
-| 1. Acquire | Find and download the upstream artifact | GitHub/GitLab/Gitea release APIs, `deb-get`, Homebrew, language PMs | ✅ 8 forge sources + 11 registries |
+| 1. Acquire | Find and download the upstream artifact | GitHub/GitLab/Gitea release APIs, `deb-get`, Homebrew, language PMs | ✅ 8 forge sources + 11 registries + `lx index` (AUR/repology/custom) |
 | 2. Compile | Build from source when no binary is published | `dpkg-buildpackage`/`debhelper`, `rpmbuild`/`mock`, `makepkg`, `abuild`, `ebuild`, CMake/Cargo/Go/Meson themselves | ✅ `build_mode: source` + build-system plugins |
 | 3. Assemble | Turn a tree/files into a package | `fpm`, `nfpm`, `cargo-deb`, `cargo-generate-rpm`, `jdeb`, `checkinstall`, `alien` | ✅ deb/rpm/apk/arch/ipk + source packages, in-process |
 | 4. Verify & sign | Prove what went in, sign what came out | `gpg`/`debsign`, `cosign`, `lintian`, checksum sidecars | ✅ fail-closed checksums, `--sbom`, `--cosign`, GPG |
 | 5. Distribute | Make packages installable at scale | `reprepro`, `aptly`, `apt-ftparchive`, `dpkg-scanpackages`, `createrepo_c`, OBS, Cloudsmith/Gemfury/PackageCloud | ✅ `lx repo` (apt/rpm/pacman/apk/opkg, signable) + `lx publish` (build **and** index in one run) |
-| 6. Consume | Install, upgrade, remove, roll back | `apt`/`dpkg`, `dnf`/`rpm`, `pacman`, `nala`, `gdebi`, `deb-get` | ✅ `lx install`/`upgrade`/`remove`/`rollback`, `lx get` — host-native deb/rpm/arch |
-| 7. Migrate | Move off non-native installs | (mostly manual) | ✅ `lx migrate native` (snap/flatpak/nix/`curl \| sh`) |
+| 6. Consume | Install, upgrade, remove, roll back | `apt`/`dpkg`, `dnf`/`rpm`, `pacman`, `nala`, `gdebi`, `deb-get` | ✅ `lx install`/`update`/`upgrade`/`reinstall`/`rollback`/`remove`/`list`/`show`/`search`, `lx get` — host-native deb/rpm/arch; a plain `lx install` delegates repo packages to the host manager (native-first) |
+| 7. Migrate | Move off non-native installs | (mostly manual) | ✅ `lx go-native` (snap/flatpak/nix/`curl \| sh`) |
 
 Almost every tool in the ecosystem lives in exactly one row. The map
 below expands the crowded ones.
+
+---
+
+## The `lx` command surface, by stage
+
+`lx`'s CLI is what makes its span across stages 1–7 concrete — the same
+binary is a forge repackager, a repo builder, and a consumer client.
+
+| Stage | Commands |
+|---|---|
+| 1 Acquire | `lx init` (generate `package.yaml`), `lx discover` (auto-detect asset patterns), `lx validate`, `lx search`, `lx index search/info/install` (AUR, repology, custom indexes) |
+| 2–3 Compile + assemble | `lx build` (binary repack or `build_mode: source`), `lx convert` (deb↔rpm↔arch, interpreter-aware), `lx capture` (install-command → package, `checkinstall`-style) |
+| 4 Verify & sign | `lx build --sbom --cosign --sign-key`, `lx build --lintian`, `lx build --summary` (provenance audit) |
+| 5 Distribute | `lx repo` (`Packages`/`Release`/`InRelease`, multi-suite), `lx publish` (build + index in one run) |
+| 6 Consume | `lx install`, `lx update`, `lx upgrade --all --auto-migrate`, `lx reinstall`, `lx rollback`, `lx remove --purge`, `lx list`, `lx show`, `lx info`, `lx search`; `lx get install/upgrade/update/remove/show/reinstall/rollback/list/search` (thin client); `lx index outdated/coverage` (distro lag) |
+| 7 Migrate | `lx go-native` (snap/flatpak/nix/`curl \| sh` → native) |
+
+Cross-cutting: `lx scan-deps` / `lx deps scan` and `lx deps resolve` /
+`lx shlibdeps` (`dpkg-shlibdeps` drop-in), `lx schema`, `lx system-check`,
+`lx build --host` / `--architectures`.
+
+This is *not* a claim that competitors cover a whole row each — most
+competitors own one row. It is why, for an upstream-first user, `lx`
+replaces a larger toolbox than it looks like from the name.
 
 ---
 
@@ -68,11 +92,12 @@ closest peers to `lx build --from-dir`/`--from-file`.
 
 `lx` overlaps this layer at its edges (`--from-dir`/`--from-file`,
 `lx capture` for `checkinstall`-style install-command output,
-`build_mode: source`) but does not try to be a general file-driven
-packager. `--format all` emits every format from one config, and `lx
-publish` runs that plus the repository indexes in one command. For signed
-`msix`/`osxpkg`, `freebsd`/`solaris`/`snap`/`tar` output, or fpm's extra
-language inputs, `nfpm` and `fpm` still win — see the comparison docs.
+`build_mode: source`, `lx convert` for deb↔rpm↔arch) but does not try
+to be a general file-driven packager. `--format all` emits every format
+from one config, and `lx publish` runs that plus the repository indexes in
+one command. For signed `msix`/`osxpkg`, `freebsd`/`solaris`/`snap`/`tar`
+output, or fpm's extra language inputs, `nfpm` and `fpm` still win — see
+the comparison docs.
 
 ---
 
@@ -117,7 +142,7 @@ with `lx get` / `lx install`.
 This is the row where `lx` most clearly differs from the "install
 upstream binaries into a prefix" tools: `lx` produces **real distro
 packages** that the host package manager owns, rather than a parallel
-prefix or store. `lx migrate native` exists precisely to convert the parallel
+prefix or store. `lx go-native` exists precisely to convert the parallel
 installs (snap, flatpak, nix, `curl | sh`) into that native form.
 
 ---
@@ -267,7 +292,7 @@ are deliberately rated lower than the core:
 | Dimension | TRL | Rationale |
 |---|---|---|
 | deb/rpm/arch packagers | 6 | Verified against the reference tools and `lintian`; pre-release |
-| `lx convert` | 5 | Native rebuild across deb↔rpm↔arch; scripts/symlinks carried, system-library names translated via a curated cross-distro table, and an optional `--lint` gate (lintian / `rpm -K` / `namcap`) on the output; no field use yet |
+| `lx convert` | 5 | Native rebuild across deb↔rpm↔arch; ecosystem detection, payload relocation (python3/perl/cpan/ruby/npm), shebang rewrite, runtime dep + cross-format name mapping, and `--lint` gate (lintian / `rpm -K` / `namcap`); no field use yet |
 | apk/ipk packagers | 5 | Implemented and indexable; less reference-tool verification |
 | Consumer, Debian | 6 | The original path; exercised in tests and CI |
 | Consumer, rpm/arch | 5 | Format-aware client added recently; no field use yet |
@@ -315,12 +340,14 @@ Stated so the map does not imply ambitions that do not exist:
 - **Not a full distro build system.** No `debian/rules`, no patch-stack
   maintenance, no `dpkg-buildpackage`/`rpmbuild` orchestration.
 - **Not a runtime sandbox.** snap, Flatpak, and Nix solve isolation and
-  hermeticity; `lx` treats them as migration *sources* (`lx migrate native`),
+  hermeticity; `lx` treats them as migration *sources* (`lx go-native`),
   not as targets.
 - **Not a hosted repository or CDN.** `lx repo` is a generator, not a
   service.
 - **Not a universal converter.** `lx convert` handles deb↔rpm↔arch
-  only, by native rebuild, and only for the shapes `lx` itself produces.
+  only, by native rebuild (interpreter-aware: payload relocation,
+  shebang rewrite, cross-format dep names), and only for the shapes `lx`
+  itself produces.
 - **Not a package-manager replacement.** `dpkg`/`apt`/`rpm`/`pacman`/
   `dnf`/`zypper`/`apk`/`xbps` are consumed and orchestrated.
 - **Windows/macOS output is signed in-process** (`msix` p7x, xar

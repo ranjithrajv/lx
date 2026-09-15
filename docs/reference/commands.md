@@ -1,7 +1,7 @@
 # Commands
 
-Part of the [lx docs](../README.md). The [migrate](commands.md#lx-migrate-native),
-[convert](commands.md#lx-convert), and [info](commands.md#lx-info) command
+Part of the [lx docs](../README.md). The [convert](commands.md#lx-convert) and
+[info](commands.md#lx-info) command
 groups are covered below, plus the flags worth calling out.
 
 | Command | Purpose |
@@ -13,7 +13,7 @@ groups are covered below, plus the flags worth calling out.
 | `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
 | `lx init` | Interactively generate a `package.yaml`; `--from <owner/repo>` scaffolds one non-interactively by auto-discovering release assets (`package_format` pre-filled from the host); `--from-aur <pkg>` imports an AUR PKGBUILD; `--from-nfpm <nfpm.yaml>` converts an nfpm config |
-| `lx install <package>` | Fetch and install a pre-built native package (deb/rpm/arch, resolved from the host) from the `latest-debs` GitHub org, falling back to the enabled package indexes when the org has no repository/release; `--source <index>` forces one named index. Records an lx-managed generation. `--reinstall` re-installs (an lx-managed package's recorded version) |
+| `lx install <package>` | Install a native package (deb/rpm/arch, resolved from the host). The host's own repositories are checked first (`pacman -Si`/`apt-cache policy`/`dnf repoquery`): a package the distro carries is installed by the native manager (`pacman -S`/`apt-get install`/`dnf install`) and is **not** recorded in the lx manifest, since the host manager owns it. Otherwise (with a note that it is falling back) the enabled package indexes are tried next (prebuilt, then build-from-recipe), with the `latest-debs` GitHub org as the fallback; `--source <index>` forces one named index. An index/org install records an lx-managed generation. `--reinstall` re-installs (an lx-managed package's recorded version) |
 | `lx update [package]` | Check installed packages against their latest release, no install; packages the org doesn't carry are checked through the enabled indexes |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release; packages the org doesn't carry upgrade through the enabled indexes. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
@@ -24,15 +24,13 @@ groups are covered below, plus the flags worth calling out.
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--index`/`--index-only` merge the enabled package indexes; `--local` searches the offline starter-template index |
 | `lx repo <dir>` | Turn a directory of built packages into a servable repository (apt `Packages`/`Release`/`InRelease` by default). `--multi-suite` produces a multi-suite layout (`dists/<suite>/` + top-level `Release`); `--format` writes the rpm (`repodata/`), pacman (`<repo>.db.tar.gz`), apk (`APKINDEX.tar.gz`), or opkg index instead, and defaults to the host's native format |
 | `lx publish [config]` | Build every requested format and generate that format's repository index in one run (`--formats`, default `deb,rpm,arch`), each in its own `<output>/<format>/` subdirectory — the producer→distributor loop |
-| `lx migrate lpt [--repo DIR]` | Carry legacy `lpt` state (manifest, caches) and workflows to `lx`. Bare `lx migrate` is equivalent |
-| `lx migrate native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (plan by default, `--yes` to apply; works on deb/rpm/arch hosts) |
+| `lx go-native` | Migrate snap/flatpak/nix/`curl \| sh` installs to native packages (applies by default; `--dry-run` prints a detailed benefit report; works on deb/rpm/arch hosts). `--all` attempts every finding, unmapped ones under their own name (best-effort) |
 | `lx schema` | Generate the JSON schema for `package.yaml` (aliases: `json-schema`, `jsonschema`) |
-| `lx index <cmd>` | Unified package-index manager — AUR, LX community index, repology distro metadata, and custom indexes (search/install/info/update/coverage/outdated/status). `install` records the result as an lx-managed generation, so `lx upgrade`/`lx list` track it |
+| `lx index <cmd>` | Package-index management — AUR, LX community index, repology distro metadata, and custom indexes (search/info/update/coverage/outdated/status/list/add/remove). Installation goes through `lx install`, which records an lx-managed generation |
 
 Moved names keep working as hidden aliases so existing scripts don't break:
 `lx scan-deps` → `lx deps scan`, `lx shlibdeps` → `lx deps resolve`,
-`lx go-native` → `lx migrate native`, `lx reinstall` →
-`lx install --reinstall`, `lx discover` → `lx init --from`.
+`lx reinstall` → `lx install --reinstall`, `lx discover` → `lx init --from`.
 
 `lx get` is the consumer subcommand group —
 `install`/`upgrade`/`update`/`remove`/`show`/`reinstall`/`rollback`/`list`/`search`,
@@ -52,20 +50,22 @@ format's own ordering. `--format` overrides host detection, and
 
 ## Command details
 
-### `lx migrate native`
+### `lx go-native`
 
 Migrate snap, flatpak, nix, and `curl … | sh` installs to **native**
 packages (`.deb` on dpkg hosts, `.rpm` on rpm hosts, `.pkg.tar.zst` on Arch
-hosts). Plan by default — nothing is installed or removed until you pass
-`--yes`:
+hosts). **Applying is the default**; `--dry-run` prints the plan — with a
+detailed per-package benefit report — and changes nothing:
 
 ```sh
-lx migrate native                  # plan: detect + map, print only
-lx migrate native firefox          # plan, filtered to matching ids
-lx migrate native --yes            # apply: install natives, remove sources
-lx migrate native --yes --keep-source      # install natives, keep both
-lx migrate native --from flatpak,nix --skip-sh   # managed sources only
-lx migrate native --yes --cleanup-sh   # auto-delete curl|sh orphans after install
+lx go-native --dry-run        # plan + benefits: detect + map, print only
+lx go-native --dry-run --all  # plan for EVERY finding (unmapped → own name)
+lx go-native                  # apply: install natives, remove sources
+lx go-native firefox          # apply, filtered to matching ids
+lx go-native --all            # attempt everything, best-effort for unmapped
+lx go-native --keep-source    # install natives, keep both
+lx go-native --from flatpak,nix --skip-sh   # managed sources only
+lx go-native --cleanup-sh     # auto-delete curl|sh orphans after install
 ```
 
 How it works: `snap list` / `flatpak list --app` / `nix profile list` are
@@ -75,12 +75,36 @@ native equivalent), and `curl | sh` installs are found by scanning
 claims (`dpkg -S` / `rpm -qf` / `pacman -Qo`), with installer URLs
 attributed from shell history. Each finding is mapped through a built-in
 table to an `lx` package name; anything unmapped lands in a
-`missingnative` report instead of being silently dropped.
+`missingnative` report instead of being silently dropped — unless `--all`,
+which attempts it under the finding's own command name (the plan marks those
+rows `[best-effort: no curated mapping]`).
 
-Safety rules: `curl | sh` orphans are cleaned up with `--cleanup-sh`
-(recorded in `~/.local/share/lx/sh_orphans.json`); without it the plan
-prints manual `rm` commands for you to review. Applying works on all
-hosts — deb via `lx install`, rpm via `rpm -Uvh`, arch via `pacman -U`.
+`--dry-run` explains what each switch buys, from local state only (no
+network):
+
+```
+  [curl|sh] /usr/local/bin/yq → yq
+      state      native package already installed — only the redundant copy is removed
+      reclaims   ~11M from the non-native source
+      deps       5/5 already satisfied on this host (0/5 new)
+      why        native arch package: host-managed, signed repo/pinned checksum, no duplicated runtime
+
+reclaimed when applied: ~60.9 MB across 3 package(s)
+```
+
+`state` is whether the native package is already installed, `reclaims` is the
+size of the redundant non-native copy, `deps` is how much of the native
+package's dependency set the host already satisfies, and `keeps` appears when
+the native package does **not** provide the command (so the non-native copy
+would be kept).
+
+Safety rules: always start with `--dry-run` — it mutates nothing. `curl | sh`
+orphans are cleaned up with `--cleanup-sh` (recorded in
+`~/.local/share/lx/sh_orphans.json`); without it the plan prints manual `rm`
+commands for you to review — `--all` alone does **not** delete orphans.
+Applying works on all hosts — deb via `lx install`, rpm via `rpm -Uvh`, arch
+via `pacman -U`; without an explicit `--format`, each native install resolves
+through `lx install` (host repos → enabled indexes → org).
 `--remove-manager` offers to drop `snapd` itself once everything from it
 migrated (always confirms).
 
@@ -184,7 +208,7 @@ out:
   the network. `lx` probes for a usable `unshare -n` once and warns and runs
   unsandboxed when it is unavailable. Binary repacks execute nothing
   regardless.
-- **`--install-build-deps`** (`build` source mode, and `index install` when
+- **`--install-build-deps`** (`build` source mode, and `lx install` when
   building from a recipe): install the missing host build dependencies —
   `build_depends:` (host-distro names), an AUR package's `makedepends`, and
   the selected build system's toolchain (`cmake`, `ninja`, `cargo`, `go`,
@@ -193,6 +217,9 @@ out:
   already root; `--dry-run --install-build-deps` prints the install command
   instead of running it. Without the flag, `lx` only reports what's missing
   and never installs anything.
+- **`--build`** (`install`): build from an index recipe, skipping the org and
+  any prebuilt asset. It is index-only (always the host's native format), so
+  it cannot be combined with `--format`/`--arch`/`--distribution`.
 - Version/architecture/distribution resolution, checksum verification, and
   reproducible-build hygiene (below) are all shared machinery — see
   `--dry-run` to preview a build matrix without downloading or building

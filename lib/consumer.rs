@@ -228,6 +228,137 @@ pub fn installed_version(package: &str, format: InstallFormat) -> Option<String>
     }
 }
 
+/// The version of `package` the host's own *repositories* (not the installed
+/// set) would install, or `None` when the host repos don't carry it.
+///
+/// This is the native-first probe behind `lx install`: a package the distro
+/// already ships is installed by the distro itself, before lx looks at the
+/// enabled indexes or the latest-debs org. Best-effort — a missing or
+/// erroring host tool returns `None`, so resolution falls through unchanged.
+pub fn native_repo_version(package: &str, format: InstallFormat) -> Option<String> {
+    let out = native_repo_query(package, format)?;
+    parse_native_repo_version(package, format, &out)
+}
+
+/// Run the host manager's "is this in a repository?" query and return its
+/// stdout, or `None` when the tool is absent or reports the package missing.
+fn native_repo_query(package: &str, format: InstallFormat) -> Option<String> {
+    let out = match format {
+        InstallFormat::Deb => {
+            // `apt-cache policy <pkg>` prints the candidate even when the
+            // package is installed from a repo, without needing the index
+            // to be refreshed.
+            Command::new("apt-cache")
+                .args(["policy", package])
+                .output()
+                .ok()?
+        }
+        InstallFormat::Rpm => {
+            // `dnf` on modern RHEL/Fedora; `yum` on older hosts (a dnf shim).
+            let out = dnf_repoquery("dnf", package).or_else(|| dnf_repoquery("yum", package))?;
+            return String::from_utf8(out).ok();
+        }
+        InstallFormat::Arch => Command::new("pacman")
+            .args(["-Si", package])
+            .output()
+            .ok()?,
+        InstallFormat::Apk => Command::new("apk")
+            .args(["search", "-x", package])
+            .output()
+            .ok()?,
+    };
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok()
+}
+
+/// `dnf`/`yum repoquery` for one package's newest available EVR, returning
+/// stdout only on success (exit 1 = not found).
+fn dnf_repoquery(program: &str, package: &str) -> Option<Vec<u8>> {
+    let out = Command::new(program)
+        .args([
+            "-q",
+            "repoquery",
+            "--latest-limit",
+            "1",
+            "--qf",
+            "%{version}-%{release}",
+            package,
+        ])
+        .output()
+        .ok()?;
+    out.status.success().then_some(out.stdout)
+}
+
+/// Parse [`native_repo_version`]'s query output. Split out so each host's
+/// spelling is testable without that host's package manager installed.
+fn parse_native_repo_version(package: &str, format: InstallFormat, out: &str) -> Option<String> {
+    match format {
+        // `apt-cache policy`:
+        //   firefox:
+        //     Installed: 1.0
+        //     Candidate: 2.0
+        InstallFormat::Deb => out.lines().find_map(|line| {
+            let v = line.trim().strip_prefix("Candidate:")?.trim();
+            (!v.is_empty() && v != "(none)").then(|| v.to_string())
+        }),
+        // `dnf repoquery --qf '%{version}-%{release}'`: one EVR per line.
+        InstallFormat::Rpm => out
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .map(str::to_string),
+        // `pacman -Si` (aligned "Key : value" table).
+        InstallFormat::Arch => out.lines().find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let v = value.trim();
+            (key.trim() == "Version" && !v.is_empty()).then(|| v.to_string())
+        }),
+        // `apk search -x <pkg>`: `<name>-<version>` lines.
+        InstallFormat::Apk => {
+            let prefix = format!("{package}-");
+            out.lines().find_map(|line| {
+                let v = line.trim().strip_prefix(prefix.as_str())?;
+                (!v.is_empty()).then(|| v.to_string())
+            })
+        }
+    }
+}
+
+/// Install `package` from the host's own repositories via its native manager
+/// (`pacman -S` / `apt-get install` / `dnf install` / `apk add`), prompting
+/// unless `yes`.
+///
+/// Deliberately does **not** touch the lx manifest: repository packages are
+/// owned by the native manager, and lx only tracks what it built or fetched
+/// itself. See the "native-first" step in [`crate::install`].
+pub fn install_native(package: &str, format: InstallFormat, yes: bool) -> Result<()> {
+    let argv = native_install_argv(package, format);
+    let shown = argv.join(" ");
+    if !yes && !debs::confirm(&format!("Run `sudo {shown}`?"), false)? {
+        println!("Aborted; '{package}' not installed.");
+        return Ok(());
+    }
+    run_sudo(&argv)?;
+    println!("✓ installed {package} from the host repositories");
+    Ok(())
+}
+
+/// The native manager's repo-install argv (without `sudo`) for each format.
+fn native_install_argv(package: &str, format: InstallFormat) -> Vec<String> {
+    let head: &[&str] = match format {
+        InstallFormat::Deb => &["apt-get", "install", "-y"],
+        InstallFormat::Rpm => &["dnf", "install", "-y"],
+        InstallFormat::Arch => &["pacman", "-S", "--noconfirm"],
+        InstallFormat::Apk => &["apk", "add"],
+    };
+    head.iter()
+        .map(|s| s.to_string())
+        .chain(std::iter::once(package.to_string()))
+        .collect()
+}
+
 /// True if `candidate` is a newer version than `installed` under the host
 /// format's own ordering rules.
 pub fn is_newer(installed: &str, candidate: &str, format: InstallFormat) -> Result<bool> {
@@ -328,13 +459,18 @@ pub fn remove(package: &str, purge: bool, yes: bool, format: InstallFormat) -> R
     }
 }
 
-fn run_sudo(args: &[&str]) -> Result<()> {
+fn run_sudo<S: AsRef<std::ffi::OsStr>>(args: &[S]) -> Result<()> {
+    let shown = args
+        .iter()
+        .map(|a| a.as_ref().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(" ");
     let status = Command::new("sudo")
         .args(args)
         .status()
-        .with_context(|| format!("failed to run `sudo {}`", args.join(" ")))?;
+        .with_context(|| format!("failed to run `sudo {shown}`"))?;
     if !status.success() {
-        bail!("`sudo {}` failed", args.join(" "));
+        bail!("`sudo {shown}` failed");
     }
     Ok(())
 }
@@ -465,6 +601,74 @@ mod tests {
         assert_eq!(
             rpm_dist_from_os_release("ID=ubuntu\nVERSION_ID=24.04\n"),
             None
+        );
+    }
+
+    #[test]
+    fn parses_apt_candidate_version() {
+        let out = "firefox:\n  Installed: 1.0\n  Candidate: 120.0-1\n  Version table:\n";
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Deb, out).as_deref(),
+            Some("120.0-1")
+        );
+    }
+
+    #[test]
+    fn apt_candidate_none_or_unknown_is_not_available() {
+        let none = "ghost:\n  Installed: (none)\n  Candidate: (none)\n";
+        assert_eq!(
+            parse_native_repo_version("ghost", InstallFormat::Deb, none),
+            None
+        );
+        assert_eq!(
+            parse_native_repo_version("ghost", InstallFormat::Deb, ""),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_pacman_si_version() {
+        let out = "Repository      : extra\nName            : firefox\nVersion         : 120.0-1\n";
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Arch, out).as_deref(),
+            Some("120.0-1")
+        );
+    }
+
+    #[test]
+    fn parses_dnf_repoquery_evr() {
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Rpm, "120.0-1.fc40\n").as_deref(),
+            Some("120.0-1.fc40")
+        );
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Rpm, "\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn parses_apk_search_result() {
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Apk, "firefox-120.0-r0\n")
+                .as_deref(),
+            Some("120.0-r0")
+        );
+        assert_eq!(
+            parse_native_repo_version("firefox", InstallFormat::Apk, "firefoxes-1.0-r0\n"),
+            None
+        );
+    }
+
+    #[test]
+    fn native_install_argv_targets_the_host_manager() {
+        assert_eq!(
+            native_install_argv("firefox", InstallFormat::Arch),
+            vec!["pacman", "-S", "--noconfirm", "firefox"]
+        );
+        assert_eq!(
+            native_install_argv("firefox", InstallFormat::Deb),
+            vec!["apt-get", "install", "-y", "firefox"]
         );
     }
 }

@@ -5,7 +5,7 @@
 use anyhow::{bail, Context, Result};
 use regex::Regex;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::{PackageIndex, ReadIndex};
 use crate::debs::{confirm, detect_dist};
@@ -338,10 +338,9 @@ impl ReadIndex for GitIndexSource {
             }
             println!("no prebuilt for '{package}' on {dist}/{arch}; building from recipe");
         }
-        // Recipe builds only produce artifacts; nothing is installed, so
-        // there is no lx-managed generation to record.
-        build_from_recipe(&entry.yaml, package, &opts)?;
-        Ok(None)
+        // Recipe builds are installed and recorded, so an AUR/community
+        // recipe joins the lx-managed lifecycle like a prebuilt.
+        build_from_recipe(&entry.yaml, package, &opts)
     }
 
     fn update(&self) -> Result<bool> {
@@ -399,7 +398,11 @@ pub struct ParsedName {
 
 /// Build a recipe from the index into a package. Shared by the LX community
 /// and AUR backends (AUR converts its PKGBUILD to a recipe first).
-pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Result<()> {
+pub fn build_from_recipe(
+    yaml: &str,
+    package: &str,
+    opts: &InstallOpts,
+) -> Result<Option<InstallOutcome>> {
     let tmp = tempfile::tempdir()?;
     let cfg_path = tmp.path().join("package.yaml");
     std::fs::write(&cfg_path, yaml)?;
@@ -407,6 +410,18 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
         bail!("aborted");
     }
     println!("building '{package}' from recipe …");
+    // A recipe/AUR build produces the host's native package format by
+    // default: emitting a `.deb` on an Arch host (or vice versa) yields an
+    // uninstallable artifact. A recipe that pins `package_format:` still wins.
+    let recipe_pins_format = yaml
+        .lines()
+        .any(|l| l.trim_start().starts_with("package_format:"));
+    let format = if recipe_pins_format {
+        None
+    } else {
+        Some(detect_host_format().name().to_string())
+    };
+    let dist_dir = tmp.path().join("dist");
     crate::build::run(
         crate::build::BuildArgs {
             config: cfg_path,
@@ -416,8 +431,8 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
             architectures: None,
             host: true,
             distributions: None,
-            output: tmp.path().join("dist"),
-            format: None,
+            output: dist_dir.clone(),
+            format,
             provider: None,
             no_verify: false,
             allow_unverified: false,
@@ -458,5 +473,94 @@ pub fn build_from_recipe(yaml: &str, package: &str, opts: &InstallOpts) -> Resul
         },
         None,
     )?;
-    Ok(())
+
+    // Install the freshly built artifact and record it, so a recipe build is
+    // a real lx-managed generation rather than build-only.
+    let format = detect_host_format();
+    let Some((path, filename)) = find_built_artifact(&dist_dir, format)? else {
+        bail!(
+            "recipe build produced no {} artifact in {}",
+            format.name(),
+            dist_dir.display()
+        );
+    };
+    let arch = detect_arch(format)?;
+    let dist = detect_dist().unwrap_or_default();
+    // Install only — the caller (`install_from_active`) records the generation
+    // from the returned outcome. Recording here too double-recorded: one
+    // recipe install appended two identical manifest generations.
+    crate::consumer::install(&path, &filename, format, true)?;
+    println!("  ✓ installed {filename}");
+    // Record the host manager's own version spelling (Arch `0.9.0-1.arch`,
+    // not the recipe's bare `0.9.0`), so `lx list`/`system-check` compare equal
+    // to what pacman/dpkg reports instead of flagging a spurious "changed".
+    let version = crate::consumer::installed_version(package, format)
+        .or_else(|| recipe_version(yaml))
+        .unwrap_or_else(|| filename.clone());
+    Ok(Some(InstallOutcome {
+        package: package.to_string(),
+        version,
+        arch,
+        distribution: dist,
+        asset: filename,
+        tag: String::new(),
+        format: format.name().to_string(),
+    }))
+}
+
+/// Find the build artifact for `format` in `dir` (deterministic: lowest
+/// filename), skipping source RPMs and signatures.
+fn find_built_artifact(
+    dir: &Path,
+    format: crate::index::InstallFormat,
+) -> Result<Option<(PathBuf, String)>> {
+    let ext = format.extension();
+    let mut found: Option<(PathBuf, String)> = None;
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Ok(None);
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.ends_with(ext) || name.ends_with(".src.rpm") || name.ends_with(".sig") {
+            continue;
+        }
+        if found.as_ref().is_none_or(|(_, n)| name < *n) {
+            found = Some((entry.path(), name));
+        }
+    }
+    Ok(found)
+}
+
+/// The `version:` a recipe declares, if any. AUR recipes set it from
+/// `pkgver`; when absent, the artifact filename is used instead.
+fn recipe_version(yaml: &str) -> Option<String> {
+    let cfg: crate::config::PackageConfig = serde_yaml::from_str(yaml).ok()?;
+    let v = cfg.version.trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_built_artifact_picks_the_binary_not_source_or_sig() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("foo-1.0-1.x86_64.rpm"), b"x").unwrap();
+        std::fs::write(tmp.path().join("foo-1.0-1.src.rpm"), b"x").unwrap();
+        std::fs::write(tmp.path().join("foo-1.0-1.x86_64.rpm.sig"), b"x").unwrap();
+        let found = find_built_artifact(tmp.path(), crate::index::InstallFormat::Rpm)
+            .unwrap()
+            .expect("a binary rpm");
+        assert_eq!(found.1, "foo-1.0-1.x86_64.rpm");
+    }
+
+    #[test]
+    fn recipe_version_reads_the_yaml_version() {
+        assert_eq!(
+            recipe_version("package_name: foo\nversion: \"1.2.3\"\n").as_deref(),
+            Some("1.2.3")
+        );
+        assert!(recipe_version("package_name: foo\n").is_none());
+    }
 }

@@ -210,7 +210,7 @@ story.
 | **Rollback** | ❌ | ✅ (`lx rollback`) |
 | **Repo generation** | ❌ | ✅ (`lx repo` — deb/rpm/pacman/apk/opkg indexes, per-format signing; `--multi-suite` for multi-suite layout; `lx publish` builds + indexes in one run) |
 | **`apt search`-like search** | ❌ | ✅ (`lx search`, full-text + local + installed) |
-| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx migrate native`, works on deb/rpm/arch hosts) |
+| **Migrate snap/flatpak/nix → native** | ❌ | ✅ (`lx go-native`, works on deb/rpm/arch hosts) |
 | **Format conversion** | ❌ | ✅ (`lx convert` — deb↔rpm↔arch native rebuild with scriptlet carry-over) |
 | **AUR import** | ❌ | ✅ (`lx init --from-aur`) |
 | **Lintian** | ❌ | ✅ (`--lintian`, shelled out) |

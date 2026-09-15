@@ -8,7 +8,10 @@ use std::path::Path;
 #[command(
     name = "lx",
     version,
-    infer_subcommands = true,
+    // No prefix inference: a dropped command must be an error, not silently
+    // resolve to whichever live command shares its prefix.
+    infer_subcommands = false,
+    disable_help_subcommand = true,
     about = "lx: build (.deb/.rpm/Arch/.apk/.ipk) from forge releases or source, install, and distribute Linux packages — native bare-metal builds, no containers",
     long_about = "lx watches forge releases, fetches the release assets
 matching each architecture, verifies their checksums against pinned metadata, and
@@ -47,7 +50,9 @@ pub enum Commands {
     /// forge repo with `--from`, a template, an AUR PKGBUILD, or an
     /// nfpm.yaml with `--from-nfpm`)
     Init(crate::wizard::InitArgs),
-    /// Fetch and install a pre-built native package (deb/rpm/arch).
+    /// Install a native package (deb/rpm/arch): the host's own repositories
+    /// first (installed by the host manager, left unmanaged), then the
+    /// enabled package indexes, with the latest-debs org as fallback.
     /// `--reinstall` re-installs (the recorded version for lx-managed packages)
     Install(crate::install::InstallArgs),
     /// Check lx-managed packages against their latest release (no install)
@@ -71,13 +76,13 @@ pub enum Commands {
     Show(crate::show::ShowArgs),
     /// Detect and report the host OS and package system
     Info(crate::info::InfoArgs),
-    /// Migrate to `lx`: carry legacy `lpt` state/workflows, or convert
-    /// snap/flatpak/nix/`curl | sh` installs to native packages
-    Migrate(MigrateRoot),
+    /// Migrate snap/flatpak/nix/`curl | sh` installs to native packages
+    /// (applies by default; `--dry-run` plans)
+    GoNative(crate::go_native::GoNativeArgs),
     /// Turn a directory of .debs into an apt-servable repository
     /// (Packages/Release/InRelease)
     Repo(crate::repo::RepoArgs),
-    /// Community recipe index with prebuilt binaries (search/install/update)
+    /// Community recipe index with prebuilt binaries (search/update/manage)
     Index(crate::index::IndexArgs),
     /// Generate JSON schema for package.yaml
     #[command(alias = "json-schema", alias = "jsonschema")]
@@ -101,9 +106,6 @@ pub enum Commands {
     /// (moved) use `lx deps resolve`
     #[command(hide = true)]
     Shlibdeps(crate::shlibdeps::ShlibdepsArgs),
-    /// (moved) use `lx migrate native`
-    #[command(hide = true)]
-    GoNative(crate::go_native::GoNativeArgs),
     /// (moved) use `lx install --reinstall`
     #[command(hide = true)]
     Reinstall(crate::reinstall::ReinstallArgs),
@@ -129,34 +131,10 @@ pub enum DepsCommands {
     Resolve(crate::shlibdeps::ShlibdepsArgs),
 }
 
-/// `lx migrate` — legacy-state and non-native migration. Bare `lx migrate`
-/// (and `lx migrate --repo DIR`) keeps the historical `lpt` behavior, while
-/// `lx migrate native …` is the former `lx go-native`. Named `MigrateRoot`
-/// (not `MigrateArgs`) so clap's implicit argument-group id doesn't collide
-/// with the flattened `migrate::MigrateArgs`.
-#[derive(Debug, Clone, Args)]
-#[command(args_conflicts_with_subcommands = true)]
-pub struct MigrateRoot {
-    #[command(subcommand)]
-    pub command: Option<MigrateCommands>,
-
-    #[command(flatten)]
-    pub lpt: crate::migrate::MigrateArgs,
-}
-
-#[derive(Debug, Clone, Subcommand)]
-pub enum MigrateCommands {
-    /// Carry legacy `lpt` state (manifest, caches) and workflows to `lx`
-    Lpt(crate::migrate::MigrateArgs),
-    /// Migrate snap/flatpak/nix/curl|sh installs to native packages
-    /// (plan by default, apply with --yes)
-    Native(crate::go_native::GoNativeArgs),
-}
-
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 pub enum GetCommands {
-    /// Fetch and install a pre-built native package
+    /// Install a native package (indexes first, latest-debs fallback)
     Install(crate::install::InstallArgs),
     /// Upgrade lx-managed packages
     Upgrade(crate::upgrade::UpgradeArgs),
@@ -200,12 +178,8 @@ pub fn run(cli: Cli) -> Result<()> {
         Commands::List(args) => crate::list::run(args),
         Commands::Show(args) => crate::show::run(args),
         Commands::Info(args) => crate::info::run(args),
+        Commands::GoNative(args) => crate::go_native::run(args, cli.token.as_deref()),
         Commands::Repo(args) => crate::repo::run(args),
-        Commands::Migrate(args) => match args.command {
-            Some(MigrateCommands::Lpt(a)) => crate::migrate::run(a),
-            Some(MigrateCommands::Native(a)) => crate::go_native::run(a, cli.token.as_deref()),
-            None => crate::migrate::run(args.lpt),
-        },
         Commands::Search(args) => crate::search::run(args, cli.token.as_deref()),
         Commands::Index(args) => crate::index::run(args, cli.token.as_deref()),
         Commands::Deps(args) => match args.command {
@@ -229,7 +203,6 @@ pub fn run(cli: Cli) -> Result<()> {
         // Hidden back-compat shims (names that moved into a group).
         Commands::ScanDeps(args) => crate::scandeps::run(args, cli.token.as_deref()),
         Commands::Shlibdeps(args) => crate::shlibdeps::run(args),
-        Commands::GoNative(args) => crate::go_native::run(args, cli.token.as_deref()),
         Commands::Reinstall(args) => crate::reinstall::run(args, cli.token.as_deref()),
         Commands::Discover(args) => crate::discovery::run(args, cli.token.as_deref()),
     }
