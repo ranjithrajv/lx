@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::config::{ContentEntry, PackageConfig};
 use crate::filemeta::{installed_path, FileMeta, FileMetaMap, RpmFileKind};
 
-use super::{BuildContext, BuildMetadata};
+use super::BuildContext;
 
 /// Stage `contents:` entries into the staged tree, after the release
 /// payload. `src` paths resolve against the current working directory
@@ -69,7 +69,7 @@ pub fn apply_contents_full(
     let umask = cfg.effective_umask();
     let mut configs = Vec::new();
     let mut meta = FileMetaMap::new();
-    for entry in cfg.contents() {
+    for entry in &cfg.contents {
         let packager = entry.packager.trim().to_ascii_lowercase();
         if !packager.is_empty() && packager != format {
             continue;
@@ -90,7 +90,7 @@ pub fn apply_contents_full(
                 &dst_abs,
                 &entry.kind,
                 umask,
-                cfg.disable_globbing(),
+                cfg.disable_globbing,
                 false,
             )?,
             "config" | "config|noreplace" | "config|missingok" => {
@@ -103,7 +103,7 @@ pub fn apply_contents_full(
                     &dst_abs,
                     &entry.kind,
                     umask,
-                    cfg.disable_globbing(),
+                    cfg.disable_globbing,
                     false,
                 )?
             }
@@ -112,7 +112,7 @@ pub fn apply_contents_full(
                 &dst_abs,
                 &entry.kind,
                 umask,
-                cfg.disable_globbing(),
+                cfg.disable_globbing,
                 true,
             )?,
             // nfpm's "config tree" types: copy the tree, then register every
@@ -123,7 +123,7 @@ pub fn apply_contents_full(
                     &dst_abs,
                     "tree",
                     umask,
-                    cfg.disable_globbing(),
+                    cfg.disable_globbing,
                     true,
                 )?;
                 let noreplace = entry.kind == "config|noreplace|tree";
@@ -145,7 +145,7 @@ pub fn apply_contents_full(
                 &dst_abs,
                 &entry.kind,
                 umask,
-                cfg.disable_globbing(),
+                cfg.disable_globbing,
                 false,
             )?,
             // nfpm symlink semantics: both src and dst are paths *inside*
@@ -402,7 +402,7 @@ fn stage_contents_entry(
 /// render them as deb control members (`preinst`/`postinst`/`prerm`/
 /// `postrm`, mode 0755). Empty when none are configured.
 ///
-/// When `cfg.template_scripts()` is true, each script file is processed
+/// When `cfg.template_scripts` is true, each script file is processed
 /// through the template engine before being staged, replacing `<%= key %>`
 /// expressions with package values from the build context.
 pub fn maintainer_script_members(
@@ -410,15 +410,15 @@ pub fn maintainer_script_members(
 ) -> anyhow::Result<Vec<lx_lib::debarchive::ControlMember>> {
     let cfg = ctx.cfg;
     let pairs = [
-        ("preinst", cfg.scripts().preinstall.trim()),
-        ("postinst", cfg.scripts().postinstall.trim()),
-        ("prerm", cfg.scripts().preremove.trim()),
-        ("postrm", cfg.scripts().postremove.trim()),
-        ("preupgrade", cfg.scripts().preupgrade_script.trim()),
-        ("postupgrade", cfg.scripts().postupgrade_script.trim()),
+        ("preinst", cfg.scripts.preinstall.trim()),
+        ("postinst", cfg.scripts.postinstall.trim()),
+        ("prerm", cfg.scripts.preremove.trim()),
+        ("postrm", cfg.scripts.postremove.trim()),
+        ("preupgrade", cfg.scripts.preupgrade_script.trim()),
+        ("postupgrade", cfg.scripts.postupgrade_script.trim()),
     ];
-    let template_context = if cfg.template_scripts() {
-        Some(lx_lib::templating::build_context(cfg.config(), ctx.job))
+    let template_context = if cfg.template_scripts {
+        Some(lx_lib::templating::build_context(cfg, ctx.job))
     } else {
         None
     };
@@ -463,7 +463,7 @@ pub fn render_script_body(
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| anyhow::anyhow!("failed to read script '{path}': {e}"))?;
-    let content = if cfg.template_scripts() {
+    let content = if cfg.template_scripts {
         let ctx = lx_lib::templating::build_context(cfg, job);
         lx_lib::templating::render_template(&content, &ctx)
     } else {
@@ -483,7 +483,7 @@ pub fn render_script_body(
 pub fn deb_extra_members(
     cfg: &PackageConfig,
 ) -> anyhow::Result<Vec<lx_lib::debarchive::ControlMember>> {
-    let deb = cfg.deb();
+    let deb = &cfg.deb;
     let mut members = Vec::new();
 
     // rules (mode 0755)

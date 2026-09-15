@@ -1659,7 +1659,7 @@ fn build_target(
 
     // Stage the install tree: copy everything under install_tree into staging.
     // For deb/rpm, files under usr/bin etc. are already laid out correctly.
-    copy_dir_recursive(install_tree, &staging_root)?;
+    crate::plugins::staging::copy_dir_recursive(install_tree, &staging_root)?;
 
     // Build a minimal config for the plugin, carrying over maintainer scripts
     // from the source package (mapped to the target format's expected names).
@@ -1754,59 +1754,9 @@ fn build_target(
     plugin.build(&ctx)
 }
 
-/// Recursively copy a directory tree, recreating symlinks as symlinks.
-///
-/// `fs::copy` follows links: an absolute or dangling link fails (its target
-/// isn't installed yet), and a relative link resolving inside the tree is
-/// silently flattened into a full copy of its target. Neither is correct for
-/// package payloads, so `symlink_metadata` is used and links are recreated.
-fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let path = entry.path();
-        let name = entry.file_name();
-        let target = dest.join(name);
-        let meta = fs::symlink_metadata(&path)?;
-        if meta.file_type().is_symlink() {
-            let link = fs::read_link(&path)
-                .with_context(|| format!("reading symlink {}", path.display()))?;
-            replace_symlink(&link, &target).with_context(|| {
-                format!("symlinking {} -> {}", target.display(), link.display())
-            })?;
-        } else if meta.is_dir() {
-            fs::create_dir_all(&target)?;
-            copy_dir_recursive(&path, &target)?;
-        } else {
-            fs::copy(&path, &target)
-                .with_context(|| format!("copying {} to {}", path.display(), target.display()))?;
-        }
-    }
-    Ok(())
-}
-
-/// Create (or replace) a symlink at `target` pointing to `link`.
-#[cfg(unix)]
-fn replace_symlink(link: &Path, target: &Path) -> Result<()> {
-    match std::os::unix::fs::symlink(link, target) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            fs::remove_file(target)
-                .with_context(|| format!("replacing stale symlink {}", target.display()))?;
-            std::os::unix::fs::symlink(link, target)
-                .with_context(|| format!("symlinking {} -> {}", target.display(), link.display()))
-        }
-        Err(e) => {
-            Err(e).with_context(|| format!("symlinking {} -> {}", target.display(), link.display()))
-        }
-    }
-}
-
-#[cfg(not(unix))]
-fn replace_symlink(link: &Path, target: &Path) -> Result<()> {
-    fs::copy(link, target)?;
-    Ok(())
-}
-
+// Directory-tree copy uses the canonical implementation in
+// `crate::plugins::staging` (handles symlinks, dirs, files). This file's
+// `build_target` calls it directly.
 /// Infer distribution from a Debian version string (e.g. "1.0+bookworm" → "bookworm").
 fn infer_dist_from_version(version: &str) -> String {
     version

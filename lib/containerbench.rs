@@ -119,10 +119,6 @@ pub fn selected_targets() -> Vec<&'static ContainerTarget> {
     }
 }
 
-/// Run `lx <args>` inside `image`, mounting `lx` at `/usr/local/bin/lx` and
-/// (optionally) a read-only payload at `/payload` and a writable work
-/// directory at `/work`. The engine is whatever [`engine`] returned.
-
 // ---------------------------------------------------------------------------
 // Repository / index validation
 // ---------------------------------------------------------------------------
@@ -135,106 +131,77 @@ pub fn validate_repo(target: &ContainerTarget, index_dir: &str) -> Result<()> {
     let engine = engine().ok_or_else(|| anyhow::anyhow!("no container engine"))?;
     let lx = lx_binary().ok_or_else(|| anyhow::anyhow!("no lx binary"))?;
     match target.package_format {
-        "deb" => validate_apt_repo(&engine, &lx, index_dir),
-        "rpm" => validate_rpm_repo(&engine, &lx, index_dir),
-        "arch" => validate_pacman_repo(&engine, &lx, index_dir),
-        "apk" => validate_apk_repo(&engine, &lx, index_dir),
-        other => bail!("no native repo validator for format '{other}'"),
-    }
-}
-
-/// apt: the generated Packages/Packages.gz/Release must parse, and `apt-get
-/// update` against a file:// source built from the index must succeed.
-fn validate_apt_repo(engine: &str, lx: &Path, index_dir: &str) -> Result<()> {
-    // Point apt at the generated index via a local file:// source and update.
-    let sources = format!(
-        "deb [trusted=yes allow-insecure=yes file={index_dir}/ local main]"
-    );
-    let out = run_lx(
-        engine,
-        "docker.io/library/debian:bookworm-slim",
-        lx,
-        &[
-            "sh",
-            "-c",
+        "deb" => validate_repo_script(
+            &engine,
+            &lx,
+            "docker.io/library/debian:bookworm-slim",
             &format!(
-                "printf '%s' '{}' > /etc/apt/sources.list.d/lx-test.list \
+                "printf '%s' 'deb [trusted=yes allow-insecure=yes file={index_dir}/ local main]' \
+                 > /etc/apt/sources.list.d/lx-test.list \
                  && apt-get update -y -o Acquire::AllowInsecureRepositories=true \
                  && grep -q '.' /var/lib/apt/lists/*_local_*_Packages 2>/dev/null \
-                 && echo APT_INDEX_OK",
-                &sources.replace('\'', "'\\''")
+                 && echo APT_INDEX_OK"
             ),
-        ],
-        None,
-        None,
-    )?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !stdout.contains("APT_INDEX_OK") {
-        bail!(
-            "apt repo validation failed ({}): {}",
-            out.status,
-            stdout + &*String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
-}
-
-/// pacman: the generated `.db` must parse and the package be listed by
-/// `pacman -Sl`.
-fn validate_pacman_repo(engine: &str, lx: &Path, index_dir: &str) -> Result<()> {
-    let out = run_lx(
-        engine,
-        "docker.io/archlinux:base",
-        lx,
-        &[
-            "sh",
-            "-c",
+            "APT_INDEX_OK",
+        ),
+        "arch" => validate_repo_script(
+            &engine,
+            &lx,
+            "docker.io/archlinux:base",
             &format!(
-                "echo '[lx-test]' > /etc/pacman.conf.bak \
-                 && echo 'SigLevel = Never' >> /etc/pacman.conf.bak \
-                 && echo 'Server = file://{index_dir}' >> /etc/pacman.conf.bak \
-                 && pacman -Sy --config /etc/pacman.conf.bak --noconfirm \
-                 && pacman -Sl lx-test --config /etc/pacman.conf.bak \
+                "printf '[lx-test]\\nSigLevel = Never\\nServer = file://{index_dir}\\n' \
+                 >> /etc/pacman.conf \
+                 && pacman -Sy --noconfirm \
+                 && pacman -Sl lx-test \
                  && echo PACMAN_INDEX_OK"
             ),
-        ],
-        None,
-        None,
-    )?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !stdout.contains("PACMAN_INDEX_OK") {
-        bail!(
-            "pacman repo validation failed ({}): {}",
-            out.status,
-            stdout + &*String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
-}
-
-/// dnf/rpm: the repodata/ must parse and `dnf makecache` against it succeed.
-fn validate_rpm_repo(engine: &str, lx: &Path, index_dir: &str) -> Result<()> {
-    let out = run_lx(
-        engine,
-        "docker.io/library/fedora:latest",
-        lx,
-        &[
-            "sh",
-            "-c",
+            "PACMAN_INDEX_OK",
+        ),
+        "rpm" => validate_repo_script(
+            &engine,
+            &lx,
+            "docker.io/library/fedora:latest",
             &format!(
                 "printf '[lx-test]\\nname=lx-test\\nbaseurl=file://{index_dir}\\nenabled=1\\ngpgcheck=0\\n' \
                  > /etc/yum.repos.d/lx-test.repo \
                  && dnf makecache -y --disablerepo='*' --enablerepo=lx-test \
                  && echo DNF_INDEX_OK"
             ),
-        ],
-        None,
-        None,
-    )?;
+            "DNF_INDEX_OK",
+        ),
+        "apk" => validate_repo_script(
+            &engine,
+            &lx,
+            "docker.io/library/alpine:3.20",
+            &format!(
+                "mkdir -p /etc/apk \
+                 && printf 'file://{index_dir}\\n' > /etc/apk/repositories.lx \
+                 && cat /etc/apk/repositories >> /etc/apk/repositories.lx 2>/dev/null || true \
+                 && cp /etc/apk/repositories /etc/apk/repositories.bak \
+                 && cp /etc/apk/repositories.lx /etc/apk/repositories \
+                 && apk update 2>/dev/null; apk update 2>/dev/null \
+                 && echo APK_INDEX_OK"
+            ),
+            "APK_INDEX_OK",
+        ),
+        other => bail!("no native repo validator for format '{other}'"),
+    }
+}
+
+/// The shared shape of every format's validator: run a shell script (which
+/// asserts success by printing `sentinel`) inside the format's native image.
+fn validate_repo_script(
+    engine: &str,
+    lx: &Path,
+    image: &str,
+    script: &str,
+    sentinel: &str,
+) -> Result<()> {
+    let out = run_lx(engine, image, lx, &["sh", "-c", script], None, None)?;
     let stdout = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !stdout.contains("DNF_INDEX_OK") {
+    if !out.status.success() || !stdout.contains(sentinel) {
         bail!(
-            "rpm repo validation failed ({}): {}",
+            "{image} repo validation failed ({}): {}",
             out.status,
             stdout + &*String::from_utf8_lossy(&out.stderr)
         );
@@ -242,38 +209,9 @@ fn validate_rpm_repo(engine: &str, lx: &Path, index_dir: &str) -> Result<()> {
     Ok(())
 }
 
-/// apk: the generated APKINDEX must parse and `apk update` succeed.
-fn validate_apk_repo(engine: &str, lx: &Path, index_dir: &str) -> Result<()> {
-    let out = run_lx(
-        engine,
-        "docker.io/library/alpine:3.20",
-        lx,
-        &[
-            "sh",
-            "-c",
-            &format!(
-                "mkdir -p /etc/apk \
-                 && printf 'file://{index_dir}\\n' > /etc/apk/repositories.lx \
-                 && cat /etc/apk/repositories >> /etc/apk/repositories.lx 2>/dev/null || true \
-                 && cp /etc/apk/repositories /etc/apk/repositories.bak \
-                 && cp /etc/apk/repositories.lx /etc/apk/repositories \
-                 && apk update -X file://{index_dir} 2>/dev/null; apk update 2>/dev/null \
-                 && echo APK_INDEX_OK"
-            ),
-        ],
-        None,
-        None,
-    )?;
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    if !out.status.success() || !stdout.contains("APK_INDEX_OK") {
-        bail!(
-            "apk repo validation failed ({}): {}",
-            out.status,
-            stdout + &*String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
-}
+/// Run `lx <args>` inside `image`, mounting `lx` at `/usr/local/bin/lx` and
+/// (optionally) a read-only payload at `/payload` and a writable work
+/// directory at `/work`. The engine is whatever [`engine`] returned.
 pub fn run_lx(
     engine: &str,
     image: &str,

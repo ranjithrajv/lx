@@ -27,10 +27,18 @@
 //! `LX_CONTAINER_TARGETS=alpine cargo test --features container-tests --test container_matrix`
 #![cfg(feature = "container-tests")]
 
+use std::path::Path;
+
+use anyhow::{bail, Result};
+
 use lx_lib::containerbench;
 
 /// Run `lx info --json` inside `image` and parse the resulting [`serde_json::Value`].
-fn info_json(engine: &str, image: &str, lx: &std::path::Path) -> Result<serde_json::Value, String> {
+fn info_json(
+    engine: &str,
+    image: &str,
+    lx: &Path,
+) -> std::result::Result<serde_json::Value, String> {
     let output = containerbench::run_lx(engine, image, lx, &["info", "--json"], None, None)
         .map_err(|e| format!("could not run '{engine}': {e}"))?;
     if !output.status.success() {
@@ -117,22 +125,22 @@ fn lx_builds_a_repo_whose_index_the_native_manager_accepts() {
 /// Build a small package inside the target's container, generate a repository
 /// index with `lx repo`, then hand that index to the distro's native package
 /// manager to confirm it parses and serves the package.
-fn validate_one_repo(engine: &str, lx: &Path, target: &containerbench::ContainerTarget) -> Result<()> {
-    use std::io::Write;
+fn validate_one_repo(
+    engine: &str,
+    lx: &Path,
+    target: &containerbench::ContainerTarget,
+) -> Result<()> {
     let work = std::env::temp_dir().join(format!("lx-repo-{}", target.key));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(work.join("payload"))?;
-    writeln!(work.join("payload/hello.txt"), "repo validation payload")?;
+    std::fs::write(work.join("payload/hello.txt"), b"repo validation payload\n")?;
     // An ELF-ish binary so the build's binary-staging path is exercised too.
-    let bin_src = if std::path::Path::new("/bin/true").exists() {
-        "/bin/true"
+    let bin_src = if Path::new("/bin/true").exists() {
+        Path::new("/bin/true")
     } else {
-        lx.to_str().unwrap_or("")
+        lx
     };
-    if !bin_src.is_empty() {
-        let _ = std::fs::copy(bin_src, work.join("payload/mybinary"));
-    }
-    let work_s = work.to_string_lossy();
+    let _ = std::fs::copy(bin_src, work.join("payload/mybinary"));
 
     // 1. Build the package in its native format, writing artifacts under /work.
     let build_args: Vec<&str> = vec![

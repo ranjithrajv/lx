@@ -362,61 +362,11 @@ struct FleetManifest {
     packages: Vec<PathBuf>,
 }
 
-fn run_all(fleet_path: &Path, args: &BuildArgs, token: Option<&str>) -> Result<()> {
-    let text = std::fs::read_to_string(fleet_path)
-        .with_context(|| format!("failed to read fleet manifest '{}'", fleet_path.display()))?;
-    let fleet: FleetManifest = serde_yaml::from_str(&text)
-        .with_context(|| format!("failed to parse fleet manifest '{}'", fleet_path.display()))?;
-    let base_dir = fleet_path.parent().unwrap_or_else(|| Path::new("."));
-
-    let mut failed = Vec::new();
-    for rel in &fleet.packages {
-        let config = base_dir.join(rel);
-        println!("=== {} ===", config.display());
-        let mut job_args = args.clone();
-        job_args.all = None;
-        job_args.config = config.clone();
-        if let Err(e) = run(job_args, token) {
-            eprintln!("✗ {}: {e:#}", config.display());
-            failed.push(config);
-        }
-    }
-
-    if failed.is_empty() {
-        println!(
-            "\n✓ built {} package(s) from {}",
-            fleet.packages.len(),
-            fleet_path.display()
-        );
-        Ok(())
-    } else {
-        bail!(
-            "{} of {} package(s) failed to build: {}",
-            failed.len(),
-            fleet.packages.len(),
-            failed
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-    }
-}
-
-pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
-    if let Some(fleet_path) = args.all.clone() {
-        return run_all(&fleet_path, &args, token);
-    }
-    let build_start = std::time::Instant::now();
-    // Parallelism precedence (debian-multiarch-builder parity): an explicit
-    // CLI --max-parallel wins over package.yaml's max_parallel; when neither
-    // is set, auto-tune from detected resources (ci-optimization.sh +
-    // resource-pool.sh parity). package.yaml `parallel_builds: false` pins
-    // sequential. We need owned args because build_jobs reads it by ref.
-    let cli_parallel = args.max_parallel;
-    let mut args = args;
-
-    // A bare GitHub/GitLab URL in place of a package.yaml path triggers a fully
+/// Resolve the package config from CLI args: a zero-config forge URL, a
+/// package.yaml path (with optional overlay/version), or "you supply files"
+/// mode. Returns the (possibly mutated) args and the resolved config.
+fn resolve_build_config(mut args: BuildArgs) -> Result<(BuildArgs, PackageConfig)> {
+    // A bare forge URL in place of a package.yaml path triggers a fully
     // zero-config build: no manual patterns, every supported architecture,
     // and source packages included (there's no config file to opt out via,
     // so the most useful default wins).
@@ -504,11 +454,60 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
         // Directory or single file: treat as already-extracted raw payload.
         cfg.artifact_format = "raw".to_string();
         cfg.validate_for_local()?;
-        // Fall through to the local routing below (effective_format etc.
-        // still need resolving first).
     }
-    // Source-mode builds compile upstream on the host instead of repacking
-    // release assets (bash `build_mode: source` parity, natively).
+
+    Ok((args, cfg))
+}
+
+fn run_all(fleet_path: &Path, args: &BuildArgs, token: Option<&str>) -> Result<()> {
+    let text = std::fs::read_to_string(fleet_path)
+        .with_context(|| format!("failed to read fleet manifest '{}'", fleet_path.display()))?;
+    let fleet: FleetManifest = serde_yaml::from_str(&text)
+        .with_context(|| format!("failed to parse fleet manifest '{}'", fleet_path.display()))?;
+    let base_dir = fleet_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut failed = Vec::new();
+    for rel in &fleet.packages {
+        let config = base_dir.join(rel);
+        println!("=== {} ===", config.display());
+        let mut job_args = args.clone();
+        job_args.all = None;
+        job_args.config = config.clone();
+        if let Err(e) = run(job_args, token) {
+            eprintln!("✗ {}: {e:#}", config.display());
+            failed.push(config);
+        }
+    }
+
+    if failed.is_empty() {
+        println!(
+            "\n✓ built {} package(s) from {}",
+            fleet.packages.len(),
+            fleet_path.display()
+        );
+        Ok(())
+    } else {
+        bail!(
+            "{} of {} package(s) failed to build: {}",
+            failed.len(),
+            fleet.packages.len(),
+            failed
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+}
+
+pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
+    if let Some(fleet_path) = args.all.clone() {
+        return run_all(&fleet_path, &args, token);
+    }
+    let build_start = std::time::Instant::now();
+    // Resolve the package config (URL / package.yaml / "you supply files"),
+    // apply CLI overrides, and route source-mode and local-payload builds.
+    let (mut args, mut cfg) = resolve_build_config(args)?;
     if cfg.is_source_mode() {
         return crate::sourcebuild::run(args, &cfg, token);
     }
@@ -726,6 +725,7 @@ pub fn run(args: BuildArgs, token: Option<&str>) -> Result<()> {
     // Resolve package.yaml's parallelism knobs now that the config is
     // loaded (CLI --max-parallel > config max_parallel > auto-tune;
     // parallel_builds: false forces a single worker).
+    let cli_parallel = args.max_parallel;
     args.max_parallel = if cli_parallel > 0 {
         cli_parallel
     } else if cfg.parallel_builds == Some(false) {

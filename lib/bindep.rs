@@ -67,15 +67,19 @@ fn find_elf_binaries(dir: &Path) -> Result<Vec<std::path::PathBuf>> {
     Ok(out)
 }
 
-/// True if `path` is an ELF binary (not a shared library).
+/// True if `path` is an ELF binary (ET_EXEC), as opposed to a shared library
+/// (ET_DYN/.so). Builds on the canonical magic-byte check in `filemeta::is_elf`.
 fn is_elf_binary(path: &Path) -> bool {
+    let Ok(true) = crate::filemeta::is_elf(path) else {
+        return false;
+    };
+    // ELF type at offset 16: ET_EXEC=2, ET_DYN=3.
     let Ok(bytes) = std::fs::read(path) else {
         return false;
     };
-    if bytes.len() < 18 || &bytes[0..4] != b"\x7fELF" {
+    if bytes.len() < 18 {
         return false;
     }
-    // ELF type at offset 16: ET_EXEC=2, ET_DYN=3.
     let e_type = u16::from_le_bytes([bytes[16], bytes[17]]);
     if e_type == 3 {
         // ET_DYN: could be a PIE executable or a shared library.

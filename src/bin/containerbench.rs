@@ -16,7 +16,6 @@
 //! ```
 
 use std::path::Path;
-use std::process::Command;
 use std::time::Instant;
 
 use lx_lib::containerbench;
@@ -82,10 +81,8 @@ fn main() -> anyhow::Result<()> {
     println!("|--------|--------|------------:|---------:|-----:|");
 
     let mut failed = false;
-    let payload_s = payload.to_string_lossy();
-    let lx_mount = format!("{}:/usr/local/bin/lx:ro", lx.display());
     for t in targets {
-        match bench_target(&engine, &lx_mount, &payload_s, t, warmup, runs) {
+        match bench_target(&engine, &lx, &payload, t, warmup, runs) {
             Ok((median, min)) => {
                 println!("| {} | ok | {median} | {min} | {runs} |", t.key);
             }
@@ -104,40 +101,36 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Time `lx build --from-dir` inside `image`, building in that distro's native
-/// format (from `target.package_format`). Returns `(median_ms, min_ms)`.
+/// Time `lx build --from-dir` inside a container, building in that distro's
+/// native format (from `target.package_format`). Returns `(median_ms, min_ms)`.
+/// Uses the shared `containerbench::run_lx` so the docker invocation can't
+/// diverge from the test matrix's.
 fn bench_target(
     engine: &str,
-    lx_mount: &str,
-    payload_s: &str,
+    lx: &std::path::Path,
+    payload: &std::path::Path,
     target: &containerbench::ContainerTarget,
     warmup: usize,
     runs: usize,
 ) -> anyhow::Result<(u128, u128)> {
-    let mut run_one = || -> anyhow::Result<()> {
-        let out = Command::new(engine)
-            .args(["run", "--rm", "--user", "root"])
-            .arg("-v")
-            .arg(lx_mount)
-            .arg("-v")
-            .arg(format!("{payload_s}:/payload:ro"))
-            .arg(target.image)
-            .args([
-                "lx",
-                "build",
-                "--from-dir",
-                "/payload",
-                "--package-name",
-                "bench",
-                "--version",
-                "1.0.0",
-                "--format",
-                target.package_format,
-                "--host",
-                "--output",
-                "/out",
-            ])
-            .output()?;
+    let build_args: Vec<&str> = vec![
+        "lx",
+        "build",
+        "--from-dir",
+        "/payload",
+        "--package-name",
+        "bench",
+        "--version",
+        "1.0.0",
+        "--format",
+        target.package_format,
+        "--host",
+        "--output",
+        "/out",
+    ];
+    let run_one = || -> anyhow::Result<()> {
+        let out =
+            containerbench::run_lx(engine, target.image, lx, &build_args, Some(payload), None)?;
         if !out.status.success() {
             return Err(anyhow::anyhow!(
                 "lx build failed ({}): {}",
