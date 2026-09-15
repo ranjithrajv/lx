@@ -30,7 +30,7 @@ elfdeps / pkg_owner (what binaries actually need at runtime)
         ├─→ lx validate           → pre-flight dep correctness gate
         ├─→ lx convert            → fill missing deps (rpm/arch)
         ├─→ lx show               → declared vs actual dep comparison
-        └─→ lx index install      → pre-flight missing-lib warning
+        └─→ lx install      → pre-flight missing-lib warning
 ```
 
 Each command stops operating in isolation. They all consume the same
@@ -47,7 +47,7 @@ Remaining work, highest priority first. Completed work is summarized under
 
 | Priority | Task | Status | Detail |
 |---|---|---|---|
-| **P1** | `lx index install` pre-flight missing-lib warning | todo | §1 |
+| **P1** | `lx install` pre-flight missing-lib warning | todo | §1 |
 | **P2** | `lx init --from repology <name>` — scaffold from metadata | todo | §2 |
 | **P2** | `lx index contribute --from-outdated` / `lx build --from-outdated` | todo | §3 |
 | **P3** | `lx migrate native --from-outdated` — migrate stale distro packages | todo | §4 |
@@ -57,7 +57,7 @@ Remaining work, highest priority first. Completed work is summarized under
 Priority rationale:
 
 - **P1 — finish the correctness loop.** Four of the five `elfdeps`
-  dogfooding targets now ship; `lx index install` is the last one. It guards
+  dogfooding targets now ship; `lx install` is the last one. It guards
   the one remaining path that can hand a user a package whose shared
   libraries aren't present.
 - **P2 — cheapest repology → recipe wins.** The metadata is already cached,
@@ -70,11 +70,11 @@ Priority rationale:
 
 ---
 
-## 1. `lx index install` → pre-flight missing-lib warning
+## 1. `lx install` → pre-flight missing-lib warning
 
 **Priority: P1.** The last open item in the ELF dependency loop.
 
-**What happens today:** `lx index install` fetches a prebuilt `.deb` (or the
+**What happens today:** `lx install` fetches a prebuilt `.deb` (or the
 host's native format) and installs it. Nothing checks that the host actually
 has the shared libraries the package needs — a package built for a different
 image can install "successfully" and then fail at first run.
@@ -299,7 +299,7 @@ lx build binary repack ── auto-fill + advisory warn              ✅
 lx validate            ── --check-deps gate                      ✅
 lx convert             ── fill missing deps (rpm/arch)           ✅
 lx show                ── "ELF needs" vs dpkg-recorded deps      ✅
-lx index install       ── pre-flight: warn on missing host libs  ⏳ P1
+lx install       ── pre-flight: warn on missing host libs  ⏳ P1
 ```
 
 The cache is the key enabler for repology: repology's 1 req/s rate limit

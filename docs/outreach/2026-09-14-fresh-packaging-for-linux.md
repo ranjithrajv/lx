@@ -182,7 +182,7 @@ properties in `lx` are aimed at that class of failure:
   and `--no-verify` are explicit, visible opt-outs).
 - **AUR is an input, not a dependency.** `lx init --from-aur fresh` turns a
   `PKGBUILD` into a starter `package.yaml` — the shell becomes comments and
-  is never executed — and `lx index install <aur-pkg>` builds through the
+  is never executed — and `lx install <aur-pkg>` builds through the
   normal source path. If AUR is read-only, your users are not blocked, and
   "exotic" third-party channels stop being single points of failure.
 

@@ -153,8 +153,6 @@ pub struct IndexArgs {
 pub enum IndexCommands {
     /// Full-text search over all enabled indexes
     Search(SearchOpts),
-    /// Install a package (prebuilt first, fall back to building)
-    Install(InstallOptsCli),
     /// Pull the latest recipes and prebuilt binaries for all indexes
     Update,
     /// Show a package's details from every index that has it
@@ -214,28 +212,6 @@ pub struct CoverageOpts {
 }
 
 #[derive(Debug, Clone, Args)]
-pub struct InstallOptsCli {
-    pub package: String,
-    #[arg(long)]
-    pub tag: Option<String>,
-    #[arg(long)]
-    pub build: bool,
-    #[arg(long)]
-    pub no_verify: bool,
-    #[arg(long)]
-    pub allow_unverified: bool,
-    #[arg(short = 'y', long)]
-    pub yes: bool,
-    #[arg(long)]
-    pub download_only: Option<PathBuf>,
-    /// When building from a recipe (AUR/LX community), install the missing
-    /// host build dependencies (AUR `makedepends` + the build system's
-    /// toolchain) via the host package manager before compiling.
-    #[arg(long)]
-    pub install_build_deps: bool,
-}
-
-#[derive(Debug, Clone, Args)]
 pub struct InfoOpts {
     pub package: String,
     /// Output as JSON (machine-readable)
@@ -258,7 +234,6 @@ pub fn run(args: IndexArgs, token: Option<&str>) -> Result<()> {
     let _ = token;
     match args.command {
         IndexCommands::Search(o) => run_search(o),
-        IndexCommands::Install(o) => run_install(o),
         IndexCommands::Update => run_update(),
         IndexCommands::Info(o) => run_info(o),
         IndexCommands::List => run_list(),
@@ -372,19 +347,6 @@ fn run_search(opts: SearchOpts) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn run_install(opts: InstallOptsCli) -> Result<()> {
-    let io = InstallOpts {
-        tag: opts.tag,
-        build: opts.build,
-        no_verify: opts.no_verify,
-        allow_unverified: opts.allow_unverified,
-        yes: opts.yes,
-        download_only: opts.download_only,
-        install_build_deps: opts.install_build_deps,
-    };
-    install_from_active(&opts.package, None, io)
 }
 
 /// Install `package` from the enabled indexes, recording an lx-managed

@@ -38,7 +38,7 @@ not accepting yay/pacman flags.
 - `lx index` has an AUR read index (search/info/install) plus the LX
   community index and repology: `lib/plugins/package_index/aur.rs`,
   `lib/index/mod.rs`.
-- `lx index install aur/<pkg>` fetches the PKGBUILD, converts it with a
+- `lx install <pkg>` fetches the PKGBUILD, converts it with a
   regex (`pkgbuild_to_yaml`), builds through `build_from_recipe`, and now
   **installs the artifact and records it** as an lx-managed generation.
 - `--install-build-deps` installs AUR `makedepends` before compiling.

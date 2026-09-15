@@ -113,5 +113,5 @@ oracle:
 
 - `lx build` produces a package from a real `PKGBUILD`, including a split
   one, and `pacman -Qip` and `bsdtar` accept the result.
-- `lx init --from-aur` and `lx index install aur/<pkg>` share the executor
+- `lx init --from-aur` and `lx install <pkg>` share the executor
   and no longer scrape fields with regexes.
