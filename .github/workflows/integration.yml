@@ -12,6 +12,8 @@ on:
       - "lib/**"
       - "src/**"
       - "tests/container_matrix.rs"
+      - "src/bin/containerbench.rs"
+      - "lib/containerbench.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/integration.yml"
@@ -20,6 +22,8 @@ on:
       - "lib/**"
       - "src/**"
       - "tests/container_matrix.rs"
+      - "src/bin/containerbench.rs"
+      - "lib/containerbench.rs"
       - "Cargo.toml"
       - "Cargo.lock"
       - ".github/workflows/integration.yml"
@@ -42,6 +46,9 @@ jobs:
       CONTAINER_ENGINE: docker
       LX_BIN: target/x86_64-unknown-linux-musl/release/lx
       LX_CONTAINER_TARGETS: ${{ matrix.key }}
+      # The containerbench binary is the musl lx plus the harness; reuse the
+      # binary the test matrix already mounts into every container.
+      CONTAINERBENCH_BIN: target/release/containerbench
     steps:
       - uses: actions/checkout@v4
 
@@ -62,5 +69,17 @@ jobs:
       - name: Verify statically linked
         run: file "$LX_BIN"
 
-      - name: Run container matrix
+      # Build the benchmark harness for the host. It shells out to docker,
+      # mounting the already-built musl `lx` (in $LX_BIN) into each container,
+      # so no separate lx build is needed for this step.
+      - name: Build containerbench harness
+        run: cargo build --release --locked --bin containerbench
+
+      - name: Run container matrix (functional)
         run: cargo test --features container-tests --test container_matrix -- --nocapture
+
+      - name: Run distro build benchmark
+        # The matrix key is already in $LX_CONTAINER_TARGETS; the harness reads
+        # it to filter the matrix, so this benches exactly this job's distro.
+        run: |
+          "$CONTAINERBENCH_BIN"
