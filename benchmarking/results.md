@@ -2,14 +2,14 @@
 
 Records of `lx` vs. the tools it can replace. The methodology and the
 ground rules for a fair number live in [`README.md`](README.md). Each
-section below is one `run.sh` invocation; only compare sections whose
-environment headers match.
+section below is one `cargo xtask bench` invocation; only compare sections
+whose environment headers match.
 
 To add a record:
 
 ```sh
 cargo build --release
-./benchmarking/run.sh >> benchmarking/results.md
+cargo xtask bench >> benchmarking/results.md
 ```
 
 ## Record index

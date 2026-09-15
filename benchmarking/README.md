@@ -7,7 +7,8 @@ the tools listed in
 so a number here always answers a real substitution question: *if I swap
 tool X for `lx`, what does the swap cost in wall-clock time?*
 
-- [`run.sh`](run.sh) — reproduces the measurements on the current machine.
+- `cargo xtask bench` — reproduces the measurements on the current machine
+  (implemented in `src/bin/xtask/bench.rs`).
 - [`benchmarks.md`](benchmarks.md) — the full catalogue of benchmarks to
   record, with levels and status.
 - [`results.md`](results.md) — the record log. One dated section per run.
@@ -47,8 +48,8 @@ automated run follows these rules:
    **median** and **min** wall-clock time; medians are reported for the
    comparison, min is kept to spot noise.
 4. **Same machine, same run.** All tools for a given row are timed back to
-   back in a single `run.sh` invocation. Cross-run numbers are not
-   compared in the same table.
+   back in a single `cargo xtask bench` invocation. Cross-run numbers are
+   not compared in the same table.
 5. **Offline.** No benchmark fetches a release.
 6. **Disclosed work.** `lx` does more per invocation than the tool it is
    compared against — generated control/changelog/copyright, ELF dependency
@@ -63,11 +64,14 @@ automated run follows these rules:
 ```sh
 # from the repository root
 cargo build --release
-./benchmarking/run.sh                 # prints a Markdown report to stdout
-RUNS=10 ./benchmarking/run.sh         # more repeats
-LX_BIN=/usr/bin/lx ./benchmarking/run.sh
-BENCH_DIST=sid ./benchmarking/run.sh  # suite used for the one-.deb comparison
+cargo xtask bench                 # prints a Markdown report to stdout
+cargo xtask bench --runs 10       # more repeats
+cargo xtask bench --lx /usr/bin/lx
+cargo xtask bench --dist sid      # suite used for the one-.deb comparison
 ```
+
+The legacy `RUNS`, `WARMUP`, `LX_BIN`, and `BENCH_DIST` environment variables
+are still honoured.
 
 The harness auto-detects each reference tool and records `not installed`
 for any it cannot find, so it is safe to run on a machine that only has
@@ -76,7 +80,7 @@ for any it cannot find, so it is safe to run on a machine that only has
 To record a run, append its output to [`results.md`](results.md):
 
 ```sh
-./benchmarking/run.sh >> benchmarking/results.md
+cargo xtask bench >> benchmarking/results.md
 ```
 
 The report carries its own dated `## Run …` heading and an environment
@@ -102,7 +106,8 @@ self-describing.
 
 1. Pick a row from the [catalogue](benchmarks.md) and set its status to
    `automated`.
-2. Add a `bench_*` function to [`run.sh`](run.sh) that stages its input,
-   times each available tool with `measure`, and emits rows via `run_one`.
+2. Add a `bench_*` function to `src/bin/xtask/bench.rs` that stages its
+   input, times each available tool with `measure`, and emits rows via
+   `run_one`.
 3. Call it from `main`, run it, record the output in `results.md`, and set
    the catalogue row's status to `recorded`.

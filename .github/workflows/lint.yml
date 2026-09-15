@@ -18,3 +18,6 @@ jobs:
       # hard failure, so unused functions/fields/imports block the PR
       # instead of accumulating behind #[allow(dead_code)].
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Enforce the Rust-only development policy: no shell scripts (or other
+      # script helpers) anywhere in the tracked tree. See CONTRIBUTING.md.
+      - run: cargo xtask policy

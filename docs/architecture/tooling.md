@@ -197,10 +197,12 @@ rather than failing. Binary repacks execute nothing and are unaffected.
 From `Makefile` and `.pre-commit-config.yaml`:
 
 - Rust: `cargo`, `rustc`, `rustfmt`, `clippy`.
-- `pre-commit`; hooks: `shellcheck`, `typos`, `taplo`, `markdownlint`,
-  `cargo-deny`, `cargo llvm-cov` (+ `utils/covscan`), `python3`
-  (`utils/coverage-gaps.py`), and the in-repo `utils/license-check.sh`,
-  `utils/secret-scan.sh`.
+- `pre-commit`; hooks: `typos`, `taplo`, `markdownlint`, `cargo-deny`,
+  `cargo llvm-cov` (+ `utils/covscan`), and the in-repo developer task
+  runner `cargo xtask` (`policy`, `license-check`, `secret-scan`,
+  `coverage`). `src/bin/xtask/` is the Rust replacement for the shell
+  scripts that used to live under `utils/` and `benchmarking/`; the
+  `policy` task fails the build if any script reappears.
 - GitHub Actions (`action.yml`): `dtolnay/rust-toolchain`,
   `Swatinem/rust-cache`, `actions/cache`, `actions/upload-artifact`, plus
   a conditional `apt-get install lintian` when `lintian-check: true`.

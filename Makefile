@@ -1,41 +1,27 @@
 # lx development tasks
 # `make dev-setup` installs every tool the pre-commit hooks need.
 
-.PHONY: dev-setup build test clippy fmt check doc
+.PHONY: dev-setup build test test-containers clippy fmt check doc policy func-tests bench
 
 # Install all dev tools required by pre-commit hooks.
-# Idempotent — skips anything already on PATH.
+# Idempotent — skips anything already on PATH. Implemented by the Rust
+# xtask (src/bin/xtask/dev.rs); no shell scripts live in this repo.
 dev-setup:
-	@echo "==> Installing dev tools for lx..."
+	cargo xtask dev-setup
 
-	@command -v pre-commit >/dev/null 2>&1 && \
-		echo "  pre-commit: already installed" || \
-		(echo "  pre-commit: installing..." && pip install pre-commit)
+# Enforce the Rust-only policy (no shell scripts anywhere in the tree)
+policy:
+	cargo xtask policy
 
-	@command -v cargo-deny >/dev/null 2>&1 && \
-		echo "  cargo-deny: already installed" || \
-		(echo "  cargo-deny: installing..." && cargo install cargo-deny)
+# Run the end-to-end CLI functional tests (needs a release binary)
+func-tests:
+	cargo build --release
+	cargo xtask func-tests
 
-	@command -v typos >/dev/null 2>&1 && \
-		echo "  typos: already installed" || \
-		(echo "  typos: installing..." && cargo install typos-cli)
-
-	@command -v taplo >/dev/null 2>&1 && \
-		echo "  taplo: already installed" || \
-		(echo "  taplo: installing..." && cargo install taplo-cli --locked)
-
-	@command -v markdownlint >/dev/null 2>&1 && \
-		echo "  markdownlint: already installed" || \
-		(echo "  markdownlint: installing..." && npm install -g markdownlint-cli)
-
-	@command -v shellcheck >/dev/null 2>&1 && \
-		echo "  shellcheck: already installed" || \
-		(echo "  shellcheck: MISSING — install via your package manager (apt/brew)" >&2)
-
-	@echo ""
-	@echo "==> Done. Now run:"
-	@echo "    pre-commit install"
-	@echo "    pre-commit install --hook-type pre-push"
+# Benchmark lx against the tools it replaces
+bench:
+	cargo build --release
+	cargo xtask bench
 
 # Build the project
 build:

@@ -125,15 +125,21 @@ cargo clippy --all-targets --all-features -- -D warnings
 cargo fmt --all
 ```
 
-Pre-commit hooks (`.pre-commit-config.yaml`) run fmt/clippy/shellcheck/
-secret scan/license check/typos on every commit, and the fuller
-`cargo test` + coverage gate + `cargo deny` + doc lint on push:
+Pre-commit hooks (`.pre-commit-config.yaml`) run fmt/clippy/rust-only
+policy/secret scan/license check/typos on every commit, and the fuller
+`cargo test` + coverage gate + `cargo deny` + doc lint on push. The hooks
+are implemented by the Rust `cargo xtask` runner — this repo has no shell
+scripts:
 
 ```sh
 make dev-setup                              # install hook binaries (idempotent)
 pre-commit install
 pre-commit install --hook-type pre-push
 ```
+
+Developer tasks live in the Rust `cargo xtask` runner (`--help` lists them):
+`policy`, `license-check`, `secret-scan`, `coverage`, `func-tests`, `bench`,
+and `dev-setup`.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the full setup guide, hook
 reference, and project layout.
@@ -142,7 +148,7 @@ Performance comparisons against the tools `lx` replaces (dpkg-deb,
 dpkg-shlibdeps, dpkg-scanpackages, fpm, nfpm, …) live in
 [`benchmarking/`](benchmarking/): the
 [benchmark catalogue](benchmarking/benchmarks.md) lists what to record,
-`./benchmarking/run.sh` reproduces the automated rows, and
+`cargo xtask bench` reproduces the automated rows, and
 [`results.md`](benchmarking/results.md) keeps the records.
 
 [`docs/decisions/`](docs/decisions/README.md) records the non-obvious calls

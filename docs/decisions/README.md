@@ -43,3 +43,4 @@ renames. For current behavior, see the [documentation hub](../README.md).
 - [`lx shlibdeps`: symbol-versioned dependency resolution (dpkg-shlibdeps parity)](2026-09-14-shlibdeps.md)
 - [Native-first `lx install`: the host repos are asked before any index](2026-09-15-native-first-install.md)
 - [`lx go-native`: `--all` and `--dry-run`](2026-09-15-go-native-all.md)
+- [Development policy: Rust-only tooling (no shell scripts)](2026-09-15-rust-only-development-policy.md)

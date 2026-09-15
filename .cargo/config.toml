@@ -1,0 +1,5 @@
+# `cargo xtask <task>` runs the in-repo developer task runner
+# (`src/bin/xtask/main.rs`) — the Rust replacement for the shell scripts that
+# used to live under `utils/` and `benchmarking/`.
+[alias]
+xtask = "run --quiet --bin xtask --"

@@ -2,8 +2,9 @@
 
 Every benchmark worth recording for `lx` vs. the tools it can replace. This
 is the backlog behind [`results.md`](results.md): the automated rows are run
-by [`run.sh`](run.sh); the rest are reproducible by hand and should be added
-to `run.sh` as the supporting tooling becomes available.
+by `cargo xtask bench` (`src/bin/xtask/bench.rs`); the rest are reproducible
+by hand and should be added to that harness as the supporting tooling
+becomes available.
 
 Levels are defined in
 [`docs/drop-in/replacements.md`](../docs/drop-in/replacements.md):
@@ -15,8 +16,8 @@ Levels are defined in
 Status key:
 
 - `recorded` — automated and a record exists in `results.md`.
-- `automated` — `run.sh` already covers it; needs a run on a capable host.
-- `planned` — reproducible by hand; not yet in `run.sh`.
+- `automated` — `cargo xtask bench` already covers it; needs a run on a capable host.
+- `planned` — reproducible by hand; not yet in the bench harness.
 - `network` — needs a forge/registry/API; record with the caches warmed.
 - `host tool` — needs `rpmbuild`, `makepkg`, `abuild`, … on the machine.
 - `CI only` — the interface drop-in (the Action) is timed end-to-end in CI.
@@ -142,8 +143,8 @@ them as "orchestration overhead" with the download/install time subtracted.
 
 1. Move the row's status from `planned`/`network`/`host tool` to `automated`
    in this file.
-2. Add a `bench_*` function to [`run.sh`](run.sh): stage the input, gate on
-   the reference tool being present (`run_one` already prints
+2. Add a `bench_*` function to `src/bin/xtask/bench.rs`: stage the input,
+   gate on the reference tool being present (`run_one` already prints
    `not installed`), time it, emit the row.
 3. Run it, and append the report to [`results.md`](results.md); set the row's
    status to `recorded`.

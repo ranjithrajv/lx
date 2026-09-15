@@ -33,10 +33,31 @@ That's it — `make dev-setup` installs every tool the hooks need.
 | [typos](https://github.com/crate-ci/typos) | `cargo install typos-cli` | `typos` (pre-commit) |
 | [taplo](https://github.com/tamasfe/taplo) | `cargo install taplo-cli --locked` | `taplo-fmt` (pre-commit) |
 | [markdownlint-cli](https://github.com/igorshubovych/markdownlint-cli) | `npm install -g markdownlint-cli` | `markdownlint` (pre-push) |
-| [shellcheck](https://www.shellcheck.net) | `apt install shellcheck` / `brew install shellcheck` | `shellcheck` (pre-commit) |
 
-Already have them? `make dev-setup` is idempotent — it skips anything
-that's already installed.
+Already have them? `make dev-setup` (a thin wrapper over
+`cargo xtask dev-setup`) is idempotent — it skips anything already
+installed.
+
+## Development policy: Rust-only
+
+This project is **Rust-only**, and that includes its tooling. There are no
+shell scripts (or Python/Ruby/Perl helpers) in the repository, and there must
+not be:
+
+- Every developer task is a `cargo xtask <task>` subcommand implemented in
+  [`src/bin/xtask/`](src/bin/xtask/). The full list is in
+  `cargo xtask --help`.
+- `cargo xtask policy` scans every tracked file and **fails** if a shell
+  script (by `.sh`/`.bash`/… extension or by `#!` shebang) or a non-Rust
+  script helper is present. It runs as the `rust-only` pre-commit hook, so a
+  script cannot be committed.
+- GitHub Actions YAML is the one exemption: composite actions and workflows
+  have no shell-free form. Keep their inline `run:` snippets thin — logic
+  belongs in `cargo xtask` or in the `lx` binary, not in CI YAML.
+
+Adding a task? Add a subcommand to `src/bin/xtask/main.rs` (a new module for
+anything non-trivial), wire it into the `Command` enum, and call it via the
+`cargo xtask` alias declared in [`.cargo/config.toml`](.cargo/config.toml).
 
 ## Pre-commit Hooks
 
@@ -49,7 +70,7 @@ Hooks run in two tiers:
 | `cargo-fmt` | Auto-fix Rust formatting |
 | `cargo-clippy` | Lint with `-D warnings` (hard fail) |
 | `cargo-locked` | Ensure `Cargo.lock` is in sync |
-| `shellcheck` | Lint shell scripts |
+| `rust-only` | Enforce the Rust-only policy — fail on any shell script |
 | `secret-scan` | Block credentials in staged diff |
 | `license-check` | Require `SPDX-License-Identifier: GPL-3.0-or-later` on `.rs` files |
 | `typos` | Spell check Rust, Markdown, TOML, YAML, shell |
@@ -77,11 +98,11 @@ git push --no-verify        # skip pre-push hooks
 ## Project Layout
 
 ```
-src/              # Thin binary entrypoint (main.rs)
+src/              # Thin binary entrypoint (main.rs) + xtask dev runner
 lib/              # All logic lives here (lx_lib) — build, forge clients, plugins
 tests/            # Integration tests, mirrors lib/ structure
-utils/            # Helper scripts (coverage, secret scan, covscan)
-benchmarking/     # lx vs. the tools it replaces: harness + recorded results
+utils/            # covscan (coverage helper crate) + functional-test docs
+benchmarking/     # lx vs. the tools it replaces: catalogue + recorded results
 docs/             # Documentation (start at docs/README.md): reference/,
                   # guides/, architecture/, comparison/, analysis/,
                   # decisions/ (ADR-style notes), outreach/

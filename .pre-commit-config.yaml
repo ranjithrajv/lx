@@ -16,27 +16,27 @@ repos:
 
       - id: cargo-locked
         name: cargo check --locked
-        # Fails if Cargo.lock is out of sync with Catl — catches
+        # Fails if Cargo.lock is out of sync with Cargo.toml — catches
         # `cargo add` without committing the lockfile.
         entry: cargo check --locked --all-targets
         language: system
         pass_filenames: false
 
-      - id: shellcheck
-        name: shellcheck
-        entry: shellcheck
+      - id: rust-only
+        name: rust-only policy (no shell scripts)
+        entry: cargo xtask policy
         language: system
-        types: [shell]
+        pass_filenames: false
 
       - id: secret-scan
         name: secret scan (staged diff)
-        entry: ./utils/secret-scan.sh
+        entry: cargo xtask secret-scan
         language: system
         pass_filenames: false
 
       - id: license-check
         name: license header check (GPL-3.0 SPDX)
-        entry: ./utils/license-check.sh
+        entry: cargo xtask license-check
         language: system
         types: [rust]
         pass_filenames: false
@@ -45,7 +45,7 @@ repos:
         name: typos (spell check)
         entry: typos
         language: system
-        types_or: [rust, markdown, toml, yaml, shell]
+        types_or: [rust, markdown, toml, yaml]
         pass_filenames: false
 
       - id: taplo-fmt
@@ -64,7 +64,7 @@ repos:
 
       - id: coverage-gate
         name: coverage gate (>= 40%)
-        entry: ./utils/coverage.sh
+        entry: cargo xtask coverage
         language: system
         pass_filenames: false
         stages: [pre-push]

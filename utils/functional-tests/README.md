@@ -1,9 +1,10 @@
-# `lx` functional test scripts
+# `lx` functional tests
 
-Re-runnable shell scripts that exercise the CLI end-to-end against real
-packages, not mocks. Each is self-contained (builds its own fixtures, uses
-`mktemp`, exits non-zero on failure) and documents exactly how to re-run the
-corresponding manual test.
+Re-runnable, end-to-end tests that exercise the CLI against real packages,
+not mocks. Each suite is self-contained (builds its own fixtures, uses a temp
+directory, exits non-zero on failure) and lives in the Rust xtask — there are
+no shell scripts in this repository (see the Rust-only policy in
+[`CONTRIBUTING.md`](../../CONTRIBUTING.md#development-policy-rust-only)).
 
 ## Run them
 
@@ -11,26 +12,36 @@ Build the release binary first:
 
 ```sh
 cargo build --release
-./utils/functional-tests/run-all.sh
+cargo xtask func-tests
 ```
 
-Or individually (all honor `$LX` to point at a prebuilt binary):
+Or via `make`:
 
 ```sh
-LX=./target/release/lx ./utils/functional-tests/test-build.sh
-LX=./target/release/lx ./utils/functional-tests/test-convert.sh
-LX=./target/release/lx ./utils/functional-tests/test-info-validate-schema.sh
-LX=./target/release/lx ./utils/functional-tests/test-repo-deps.sh
+make func-tests
+```
+
+All suites stop at the first failure unless `--no-fail-fast` (or
+`FAIL_FAST=0`) is set. Point at a prebuilt binary with `--lx` (or `LX`), and
+run a single suite with `--suite` (repeatable):
+
+```sh
+cargo xtask func-tests --lx ./target/release/lx
+LX=/usr/bin/lx cargo xtask func-tests
+cargo xtask func-tests --suite test-build
 ```
 
 ## What they cover
 
-| Script | Commands | Network? |
+| Suite | Commands | Network? |
 |---|---|---|
-| `test-build.sh` | `lx build` (offline payload matrix, reproducibility) | no |
-| `test-convert.sh` | `lx convert` (round trip, payload, idempotency, dry-run) | no |
-| `test-info-validate-schema.sh` | `lx info`, `lx validate`, `lx schema` | no |
-| `test-repo-deps.sh` | `lx repo` (apt index), `lx deps scan` | no |
+| `test-build` | `lx build` (offline payload matrix, reproducibility) | no |
+| `test-convert` | `lx convert` (round trip, payload, idempotency, dry-run) | no |
+| `test-info-validate-schema` | `lx info`, `lx validate`, `lx schema` | no |
+| `test-repo-deps` | `lx repo` (apt index), `lx deps scan` | no |
+| `test-catalog` | `lx list --catalog`, `lx show`, `lx index` (deb-get catalog) | no |
+
+The source of truth is `src/bin/xtask/functional.rs`.
 
 ## What is NOT here (and why)
 
@@ -41,6 +52,6 @@ LX=./target/release/lx ./utils/functional-tests/test-repo-deps.sh
 * **`lx search` / `lx index`** — need a reachable package index / network.
 * **`lx publish` / `lx init`** — interactive or network-bound.
 
-For the fully offline, assertion-based suite (byte-level checks, not shell
+For the fully offline, assertion-based suite (byte-level checks, not CLI
 commands), see `tests/build_functional.rs`, run with the usual
 `cargo test`.

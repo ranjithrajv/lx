@@ -5,7 +5,7 @@
 //! Reuses the matrix/engine/`lx`-mounting scaffolding from `lx_lib::containerbench`
 //! (the same code behind `tests/container_matrix.rs`), so adding a distro or an
 //! architecture is a single edit in `containerbench::TARGETS`. Unlike the
-//! host-side `benchmarking/run.sh` (which compares lx against fpm/nfpm on one
+//! host-side `cargo xtask bench` (which compares lx against fpm/nfpm on one
 //! machine), this measures how `lx build` performs *per distro* — the apk, apt,
 //! dnf and pacman paths in their native environments.
 //!
