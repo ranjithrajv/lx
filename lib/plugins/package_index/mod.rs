@@ -6,7 +6,7 @@
 //! * [`WriteIndex`]: turn built artifacts into a servable repository index
 //!   (`lx repo`) — `apt`, `opkg`, `pacman`, `apk`, `rpm`.
 //! * [`ReadIndex`]: fan out across upstream package indexes (`lx index`) —
-//!   `lx-community`, `aur`, `repology`, `custom`.
+//!   `lx-community`, `aur`, `debget`, `repology`, `custom`.
 //!
 //! Both extend the common [`PackageIndex`] marker (id + instance label). The
 //! registry ([`IndexBackend`]) stores an optional factory per role, so a
@@ -19,7 +19,7 @@
 //!
 //! Selection is by canonical [`id`](PackageIndex::id)
 //! ([`BACKEND_IDS`]): `apt`, `opkg`, `pacman`, `apk`, `rpm`,
-//! `lx-community`, `aur`, `repology`, `custom`. The user-facing `lx repo --format`
+//! `lx-community`, `aur`, `debget`, `repology`, `custom`. The user-facing `lx repo --format`
 //! vocabulary (`deb`/`ipk`/`arch`/…) is an alias mapped through
 //! [`FORMAT_ALIASES`]/[`resolve_format`]; [`get_index_backend`] accepts either.
 //!
@@ -36,6 +36,7 @@
 pub mod apk;
 pub mod apt;
 pub mod aur;
+pub mod debget;
 pub mod lx_community;
 pub mod opkg;
 pub mod pacman;
@@ -279,6 +280,15 @@ fn make_custom(name: &str, url: Option<&str>) -> Box<dyn ReadIndex> {
     ))
 }
 
+fn make_debget(name: &str, url: Option<&str>) -> Box<dyn ReadIndex> {
+    match url {
+        Some(root) if !root.is_empty() => {
+            Box::new(debget::DebGetSource::with_root(name, PathBuf::from(root)))
+        }
+        _ => Box::new(debget::DebGetSource::new(name)),
+    }
+}
+
 /// All known backends, in [`BACKEND_IDS`] order. Each registers the factory
 /// (or factories) for the role(s) it implements; capabilities are derived
 /// from what is registered.
@@ -291,6 +301,7 @@ pub fn all_index_backends() -> Vec<IndexBackend> {
         IndexBackend::writer("rpm", make_rpm),
         IndexBackend::reader("lx-community", make_lx_community),
         IndexBackend::reader("aur", make_aur),
+        IndexBackend::reader("debget", make_debget),
         IndexBackend::reader("repology", make_repology),
         IndexBackend::reader("custom", make_custom),
     ]
@@ -319,6 +330,7 @@ pub const BACKEND_IDS: &[&str] = &[
     // read (was IndexSource)
     "lx-community",
     "aur",
+    "debget",
     "repology",
     "custom",
 ];

@@ -63,6 +63,7 @@ pub mod containerbench;
 pub mod convert;
 pub mod cosign;
 pub mod debarchive;
+pub mod debget;
 pub mod debs;
 pub mod depmap;
 pub mod discovery;

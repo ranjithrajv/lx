@@ -17,8 +17,8 @@ groups are covered below, plus the flags worth calling out.
 | `lx update [package]` | Check installed packages against their latest release, no install; packages the org doesn't carry are checked through the enabled indexes |
 | `lx upgrade [package]` | Upgrade installed packages to their latest release; packages the org doesn't carry upgrade through the enabled indexes. `--all` adds a system-wide freshness check (repology); `--auto-migrate` takes over distro packages flagged as outdated |
 | `lx remove <package>` | Remove (or `--purge`) an installed package |
-| `lx list` | List packages `lx` has installed |
-| `lx show <package>` | Show everything known about one package (manifest + dpkg) |
+| `lx list` | List packages `lx` has installed (cross-checked against the host manager). `--catalog` lists packages available from the deb-get catalog instead — `--format table\|raw` (deb-get `list`), `--format pretty` (`prettylist`), `--format csv` (`csvlist`), with `--repo`, `--installed`/`--not-installed`, and `--include-unsupported`. `--verify [--prune]` audits the manifest against the host (deb-get `fix-installed`) |
+| `lx show <package>` | Show everything known about one package (manifest + dpkg); falls back to the deb-get catalog definition when not installed |
 | `lx info` | Auto-detect and report the host OS and package system (`--json` for machine-readable output) |
 | `lx rollback <package>` | Reinstall a prior generation of an `lx`-managed package |
 | `lx search [pattern]` | Full-text regex search like `apt search`: name + descriptions (including installed packages' dpkg long descriptions), installed/candidate versions, exact matches first; `--index`/`--index-only` merge the enabled package indexes; `--local` searches the offline starter-template index |

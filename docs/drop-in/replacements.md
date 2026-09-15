@@ -164,8 +164,20 @@ installed dpkg long descriptions and exact-match-first ordering. `lx get
 install` falls back to a `+musl_{arch}.deb` asset when no distro-specific
 build exists.
 
+`lx` also reads deb-get's **catalog** itself: the `debget` read index
+(`lib/debget.rs`, `lib/plugins/package_index/debget.rs`) parses
+`/etc/deb-get/<repo>.d/*` definitions statically (never executing them) and
+installs by method (`direct`, `github`, `gitlab`, `website`, `apt`, `ppa`).
+The deb-get verbs fold onto lx's existing commands: `lx list --catalog
+[--format table|raw|pretty|csv]` covers `list`/`prettylist`/`csvlist`,
+`lx show` falls back to the catalog, `lx list --verify [--prune]` covers
+`fix-installed`, and `lx index update`/`lx index clean` cover
+`update`/`clean`. On Debian/Ubuntu the `debget` source is enabled by
+default. See [`comparison/lx-vs-deb-get.md`](../comparison/lx-vs-deb-get.md).
+
 Deliberately *not* copied from deb-get: its HTTPS-only trust model — `lx`
-keeps fail-closed checksum verification instead.
+keeps fail-closed checksum verification instead — and its `source`-and-run
+definition execution, which lx replaces with a safe static parser.
 
 ### 2.9 `makedeb` / AUR (`makepkg`) — import and native build
 

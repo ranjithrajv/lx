@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### deb-get catalog parity, folded into existing commands
+
+- New **`debget` read index** reads a deb-get catalog in place
+  (`/etc/deb-get/<repo>.d/*`, `99-local.d` overrides, `<NN>.repo` external
+  manifests; `$LX_DEBGET_DIR` overrides the root). Definitions are parsed
+  **statically** — never `source`d — so `post_download` hooks, computed
+  `URL=$(…)`, and arbitrary bash are reported as unsupported instead of run
+  (`lib/debget.rs`, `lib/plugins/package_index/debget.rs`).
+- Installs dispatch on the deb-get method: `direct`, `github`, `gitlab`,
+  `website` (best-effort scrape), `apt`, and `ppa`; integrity stays
+  fail-closed (checksum/sidecar or `--allow-unverified`). `DEBGET_TOKEN` is
+  accepted as a `GITHUB_TOKEN` alias. On Debian/Ubuntu the `debget` source is
+  enabled by default, so `lx install`/`lx search --index` cover the catalog.
+- No separate `lx deb-get` namespace: the verbs live on lx's own commands.
+  `lx list --catalog [--repo R] [--installed|--not-installed]
+  [--include-unsupported] [--format table|raw|pretty|csv]` absorbs deb-get
+  `list`/`prettylist`/`csvlist`. `lx show <pkg>` falls back to the catalog for
+  an available-but-uninstalled package. `lx list --verify [--prune]` absorbs
+  `fix-installed`. `lx index update`/`lx index clean` cover `update`/`clean`.
+- `lx index add --kind` selects `custom`/`lx-community`/`aur`/`repology`/
+  `debget`. See [`docs/comparison/lx-vs-deb-get.md`](docs/comparison/lx-vs-deb-get.md).
+
 ### `lx go-native` applies by default; `--dry-run` reports benefits
 
 - The command now **applies by default** (installs natives, removes sources);

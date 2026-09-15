@@ -5,6 +5,7 @@
 use anyhow::{bail, Result};
 use clap::Args;
 
+use crate::debget::{Catalog, DebGetPackage};
 use crate::manifest::Manifest;
 use crate::scandeps;
 
@@ -19,9 +20,16 @@ pub fn run(args: ShowArgs) -> Result<()> {
     let entries = manifest.generations(&args.package);
     let installed = scandeps::pkg_installed_version(&args.package);
 
+    // Not managed and not installed: fall back to the deb-get catalog, so
+    // `lx show` works for a package that is only *available*.
     if entries.is_none() && installed.is_none() {
+        if let Some(p) = Catalog::load_default().get(&args.package).cloned() {
+            print_catalog(&p);
+            return Ok(());
+        }
         bail!(
-            "'{}' is unknown: not managed by lx and not installed on this host",
+            "'{}' is unknown: not managed by lx, not installed on this host, \
+             and not in the deb-get catalog",
             args.package
         );
     }
@@ -69,6 +77,49 @@ pub fn run(args: ShowArgs) -> Result<()> {
         crate::consumer::repo_name(&args.package)
     );
     Ok(())
+}
+
+/// Print one deb-get catalog definition (the `lx show` fallback for a
+/// package that is available but not installed).
+fn print_catalog(p: &DebGetPackage) {
+    println!("package: {}", p.name);
+    println!("available: yes (deb-get catalog, repo {})", p.repo);
+    println!("method: {}", p.kind_label());
+    if !p.pretty_name.is_empty() {
+        println!("name: {}", p.pretty_name);
+    }
+    if let Some(v) = p.defver {
+        println!("definition: v{v}");
+    }
+    if !p.summary.is_empty() {
+        println!("summary: {}", p.summary);
+    }
+    if !p.website.is_empty() {
+        println!("website: {}", p.website);
+    }
+    if !p.archs_supported.is_empty() {
+        println!("archs: {}", p.archs_supported.join(" "));
+    }
+    if !p.codenames_supported.is_empty() {
+        println!("codenames: {}", p.codenames_supported.join(" "));
+    }
+    for (label, value) in [
+        ("apt repo", p.apt_repo_url.as_deref()),
+        ("apt list", p.apt_list_name.as_deref()),
+        ("ppa", p.ppa.as_deref()),
+        ("repo", p.forge_repo.as_deref()),
+        ("url", p.url.as_deref()),
+    ] {
+        if let Some(v) = value {
+            println!("{label}: {v}");
+        }
+    }
+    if p.has_post_download {
+        println!("hook: post_download (not executed by lx)");
+    }
+    if !p.is_supported() {
+        println!("lx notes: {}", p.unsupported.join("; "));
+    }
 }
 
 /// Scan the installed package's ELF files and display runtime library

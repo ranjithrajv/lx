@@ -93,7 +93,7 @@ pub struct InstallOutcome {
 /// The package format natively consumed by this host (deb/rpm/arch). Used
 /// to pick prebuilt binaries from an index and to fall back to building in
 /// the right format.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum InstallFormat {
     #[default]
     Deb,
@@ -170,6 +170,8 @@ pub enum IndexCommands {
     /// Compare repology projects against the recipe index + latest-debs org
     /// to find popular packages LX does not yet cover
     Coverage(CoverageOpts),
+    /// Remove cached index data (the refreshed catalogs/checkouts)
+    Clean(CleanOpts),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -212,6 +214,13 @@ pub struct CoverageOpts {
 }
 
 #[derive(Debug, Clone, Args)]
+pub struct CleanOpts {
+    /// Report what would be removed without removing it
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Args)]
 pub struct InfoOpts {
     pub package: String,
     /// Output as JSON (machine-readable)
@@ -222,7 +231,13 @@ pub struct InfoOpts {
 #[derive(Debug, Clone, Args)]
 pub struct AddOpts {
     pub name: String,
-    pub url: String,
+    /// Source kind: `custom` (default), `lx-community`, `aur`, `repology`,
+    /// `debget`.
+    #[arg(long, default_value = "custom")]
+    pub kind: String,
+    /// Git URL for `custom`, or a catalog root for `debget`; ignored by the
+    /// built-in kinds.
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -242,6 +257,7 @@ pub fn run(args: IndexArgs, token: Option<&str>) -> Result<()> {
         IndexCommands::Outdated(o) => run_outdated(o),
         IndexCommands::Status => run_status(),
         IndexCommands::Coverage(o) => run_coverage(o),
+        IndexCommands::Clean(o) => run_clean(o),
     }
 }
 
@@ -614,6 +630,63 @@ fn run_list() -> Result<()> {
     Ok(())
 }
 
+/// `lx index clean` (deb-get `cache`/`clean`): remove cached index data — the
+/// refreshed deb-get catalog checkout and the lx-community git cache. The
+/// catalogs themselves (e.g. `/etc/deb-get`, `~/.local/share/lx/debget`) are
+/// user data and are left in place.
+fn run_clean(opts: CleanOpts) -> Result<()> {
+    let base = dirs::cache_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("lx");
+    let targets = [base.join("debget"), base.join("index")];
+    let mut freed = 0u64;
+    let mut any = false;
+    for dir in &targets {
+        if !dir.is_dir() {
+            continue;
+        }
+        any = true;
+        let bytes = index_dir_size(dir)?;
+        if opts.dry_run {
+            println!(
+                "would remove {} ({})",
+                dir.display(),
+                crate::debs::human_size(bytes)
+            );
+        } else {
+            std::fs::remove_dir_all(dir)
+                .with_context(|| format!("removing '{}'", dir.display()))?;
+            freed += bytes;
+            println!(
+                "removed {} ({})",
+                dir.display(),
+                crate::debs::human_size(bytes)
+            );
+        }
+    }
+    if !any {
+        println!("no cached index data");
+    } else if !opts.dry_run {
+        println!("freed {}", crate::debs::human_size(freed));
+    }
+    Ok(())
+}
+
+/// Recursively total the bytes under `dir`.
+fn index_dir_size(dir: &std::path::Path) -> Result<u64> {
+    let mut bytes = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            bytes += index_dir_size(&entry.path())?;
+        } else {
+            bytes += meta.len();
+        }
+    }
+    Ok(bytes)
+}
+
 fn run_outdated(opts: OutdatedOpts) -> Result<()> {
     let reg = registry::Registry::ensure_exists()?;
     // Find the repology source.
@@ -803,10 +876,23 @@ fn run_coverage(opts: CoverageOpts) -> Result<()> {
 
 fn run_add(opts: AddOpts) -> Result<()> {
     let mut reg = registry::Registry::ensure_exists()?;
-    reg.add(
-        opts.name.clone(),
-        registry::SourceKind::Custom { url: opts.url },
-    )?;
+    let kind = match opts.kind.as_str() {
+        "custom" => {
+            let url = opts
+                .url
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("`--kind custom` requires a URL"))?;
+            registry::SourceKind::Custom { url }
+        }
+        "lx-community" => registry::SourceKind::LxCommunity,
+        "aur" => registry::SourceKind::Aur,
+        "repology" => registry::SourceKind::Repology,
+        "debget" => registry::SourceKind::DebGet,
+        other => bail!(
+            "unknown index kind '{other}' (expected: custom, lx-community, aur, repology, debget)"
+        ),
+    };
+    reg.add(opts.name.clone(), kind)?;
     println!("added index '{}'", opts.name);
     Ok(())
 }

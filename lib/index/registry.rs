@@ -31,6 +31,8 @@ pub enum SourceKind {
     Aur,
     /// Repology — cross-distro package metadata (read-only).
     Repology,
+    /// The deb-get catalog (3rd-party apt/PPA/GitHub/GitLab/direct .debs).
+    DebGet,
     /// A user-added custom index (git URL + format).
     Custom { url: String },
 }
@@ -44,6 +46,7 @@ impl SourceKind {
             SourceKind::LxCommunity => Some("lx-community"),
             SourceKind::Aur => Some("aur"),
             SourceKind::Repology => Some("repology"),
+            SourceKind::DebGet => Some("debget"),
             SourceKind::Custom { .. } => Some("custom"),
         }
     }
@@ -81,28 +84,38 @@ impl Registry {
         Ok(())
     }
 
-    /// The default registry ships the LX community index, AUR, and the
-    /// repology metadata source — all enabled.
+    /// The default registry ships the LX community index, AUR, the deb-get
+    /// catalog (on Debian/Ubuntu hosts, where its packages are installable),
+    /// and the repology metadata source — all enabled.
     pub fn with_defaults() -> Self {
-        Self {
-            sources: vec![
-                SourceEntry {
-                    name: "lx-community".into(),
-                    kind: SourceKind::LxCommunity,
-                    enabled: true,
-                },
-                SourceEntry {
-                    name: "aur".into(),
-                    kind: SourceKind::Aur,
-                    enabled: true,
-                },
-                SourceEntry {
-                    name: "repology".into(),
-                    kind: SourceKind::Repology,
-                    enabled: true,
-                },
-            ],
+        let mut sources = vec![
+            SourceEntry {
+                name: "lx-community".into(),
+                kind: SourceKind::LxCommunity,
+                enabled: true,
+            },
+            SourceEntry {
+                name: "aur".into(),
+                kind: SourceKind::Aur,
+                enabled: true,
+            },
+        ];
+        // deb-get's catalog is Debian/Ubuntu packages: only offer it where
+        // the host can actually install them. It is listed before repology
+        // (metadata-only) so a package both know can be installed.
+        if crate::index::detect_host_format() == crate::index::InstallFormat::Deb {
+            sources.push(SourceEntry {
+                name: "debget".into(),
+                kind: SourceKind::DebGet,
+                enabled: true,
+            });
         }
+        sources.push(SourceEntry {
+            name: "repology".into(),
+            kind: SourceKind::Repology,
+            enabled: true,
+        });
+        Self { sources }
     }
 
     /// Ensure a registry exists on disk, seeding defaults if absent.
@@ -159,6 +172,20 @@ pub fn active_sources(reg: &Registry) -> Vec<Box<dyn ReadIndex>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn debget_kind_maps_to_the_debget_backend() {
+        let kind = SourceKind::DebGet;
+        assert_eq!(kind.plugin_kind(), Some("debget"));
+        let backend = get_index_backend("debget").expect("debget backend is registered");
+        assert!(backend.capabilities.can_read());
+        assert!(!backend.capabilities.can_write());
+        let src = backend
+            .make_reader("debget")
+            .expect("debget backend has a read role");
+        assert_eq!(src.name(), "debget");
+        assert_eq!(src.instance_name(), "debget");
+    }
 
     #[test]
     fn custom_kind_maps_to_the_custom_backend() {
