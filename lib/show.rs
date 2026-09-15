@@ -105,13 +105,18 @@ fn print_elf_needs(package: &str, declared_deps: &[String]) {
         return;
     }
 
-    // Resolve sonames to package names.
+    // Resolve sonames to package names. A package's own libraries resolve back
+    // to itself (kwallet ships libKF6WalletBackend.so.6, which it owns); that's
+    // a self-provided soname, not a missing dependency, so skip it.
     let mut elf_pkgs = std::collections::BTreeSet::new();
     let mut unresolved = Vec::new();
     for soname in &elf_sonames {
         match scandeps::pkg_owner(soname) {
             Some(pkg) => {
                 let pkg = pkg.split(':').next().unwrap_or(&pkg).to_string();
+                if pkg.eq_ignore_ascii_case(package) {
+                    continue;
+                }
                 elf_pkgs.insert(pkg);
             }
             None => {

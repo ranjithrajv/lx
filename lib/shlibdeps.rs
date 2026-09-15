@@ -13,12 +13,14 @@
 //!
 //! Two consumers, two failure policies:
 //!
-//! * the build pipeline ([`crate::scandeps`], [`crate::bindep`]) treats it
-//!   as an improvement — a soname with no dpkg dependency information falls
-//!   back to the old `dpkg -S` / `rpm -q` / `pacman -Qo` lookup, so builds on
-//!   non-dpkg hosts are unaffected;
-//! * the standalone [`ShlibdepsArgs`] command is fail-closed by default — an
-//!   unowned library is an error unless `--ignore-missing-info`.
+//! * the build pipeline ([`crate::scandeps`], [`crate::bindep`]) and the
+//!   standalone command all fall back to a per-soname package-manager lookup
+//!   (`dpkg -S` / `rpm -q` / `pacman -o`) for sonames the dpkg `symbols` /
+//!   `shlibs` databases don't cover — so the result on rpm/pacman hosts
+//!   matches the old lookup and non-essential libraries still resolve;
+//! * the standalone [`ShlibdepsArgs`] command is fail-closed by default — a
+//!   soname that not even the package-manager lookup can place is an error
+//!   unless `--ignore-missing-info`.
 
 use anyhow::{bail, Result};
 use clap::Args;
@@ -636,21 +638,38 @@ pub fn run(args: ShlibdepsArgs) -> Result<()> {
     let db = ShlibsDb::open(&args.admindir);
     let res = resolve(&scan.needs, &db, None, &scan.provided);
 
-    if !res.unresolved.is_empty() {
+    // Fall back to the host package-manager lookup (dpkg -S / rpm -q /
+    // pacman -Qo) for sonames the dpkg symbols/shlibs databases don't cover,
+    // exactly as the build pipeline (bindep, scandeps) does — so this command
+    // resolves libraries on rpm/pacman hosts, not just dpkg ones.
+    let mut relations = res.relations;
+    let mut resolved_names = res.resolved_names;
+    let mut unresolved = Vec::new();
+    for soname in res.unresolved {
+        if let Some(pkg) = crate::scandeps::pkg_owner(&soname) {
+            if resolved_names.insert(pkg.to_ascii_lowercase()) {
+                relations.push(pkg);
+            }
+        } else {
+            unresolved.push(soname);
+        }
+    }
+
+    if !unresolved.is_empty() {
         if args.ignore_missing_info {
-            for soname in &res.unresolved {
+            for soname in &unresolved {
                 eprintln!("shlibdeps: warning: no dependency information found for {soname}");
             }
         } else {
             bail!(
                 "no dependency information found for: {}\n\
                  (pass --ignore-missing-info to warn instead of failing)",
-                res.unresolved.join(", ")
+                unresolved.join(", ")
             );
         }
     }
 
-    let line = format!("shlibs:Depends={}", res.relations.join(", "));
+    let line = format!("shlibs:Depends={}", relations.join(", "));
     if let Some(path) = &args.substvars {
         let mut f = std::fs::OpenOptions::new()
             .create(true)
