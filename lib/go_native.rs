@@ -500,7 +500,10 @@ pub struct GoNativeArgs {
     #[arg(long)]
     pub cleanup_sh: bool,
 
-    /// Only consider packages whose id contains one of these substrings.
+    /// Migrate only these packages (substring match on the id). Targeting a
+    /// package makes it a full replacement: the native package is fetched by
+    /// name (defaulting to the package's own name) and the non-native copy is
+    /// removed.
     pub filter: Vec<String>,
 }
 
@@ -536,10 +539,11 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
     }
 
     let sh_urls = collect_sh_urls();
+    let targeted = !args.filter.is_empty();
     let mut plan: Vec<PlanEntry> = Vec::new();
     let mut missing: Vec<&Detected> = Vec::new();
     for d in &detected {
-        match map_native(d, &sh_urls) {
+        match map_native(d, &sh_urls, targeted) {
             Some(native) => plan.push(PlanEntry {
                 detected: Detected {
                     source: d.source,
@@ -609,6 +613,19 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
 
     if !args.keep_source {
         for e in &installed {
+            let cmd = command_name(&e.detected);
+            // Only drop the source when the native package actually provides
+            // the command, so a mis-named native package can't leave the user
+            // without it.
+            if !native_provides_command(&e.native, &cmd) {
+                eprintln!(
+                    "  ⚠ native '{}' doesn't provide a '{}' command; keeping the {} copy",
+                    e.native,
+                    cmd,
+                    e.detected.source.name()
+                );
+                continue;
+            }
             if let Err(err) = remove_source(&e.detected) {
                 eprintln!("  ⚠ could not remove source {}: {err:#}", e.detected.id);
             }
@@ -617,21 +634,42 @@ pub fn run(args: GoNativeArgs, token: Option<&str>) -> Result<()> {
         println!("\n--keep-source: leaving all snap/flatpak/nix packages installed");
     }
 
-    // Handle curl|sh orphans: auto-delete if --cleanup_sh, else print manual cleanup.
+    // Handle curl|sh orphans: auto-delete if --cleanup_sh (or an explicit
+    // target), else print manual cleanup.
     let sh_installed: Vec<&PlanEntry> = installed
         .iter()
         .filter(|e| e.detected.source == Source::Sh)
         .copied()
         .collect();
     if !sh_installed.is_empty() {
-        if args.cleanup_sh {
+        // An explicitly targeted `lx go-native <pkg>` is a replacement request,
+        // so remove the redundant orphan too; the bulk path stays cautious and
+        // prints manual cleanup unless `--cleanup-sh` is given.
+        if args.cleanup_sh || targeted {
+            let mut removed: Vec<&PlanEntry> = Vec::new();
             for e in &sh_installed {
-                if let Err(err) = remove_sh_orphan(&e.detected.id) {
-                    eprintln!("  ⚠ could not remove orphan {}: {err:#}", e.detected.id);
+                let cmd = command_name(&e.detected);
+                // Never remove the last copy of a command: drop the orphan
+                // only when the native package actually provides `cmd`.
+                if !native_provides_command(&e.native, &cmd) {
+                    eprintln!(
+                        "  ⚠ native '{}' doesn't provide a '{}' command; keeping {} \
+                         (removing it would drop the command)",
+                        e.native, cmd, e.detected.id
+                    );
+                    continue;
+                }
+                match remove_sh_orphan(&e.detected.id) {
+                    Ok(()) => removed.push(e),
+                    Err(err) => {
+                        eprintln!("  ⚠ could not remove orphan {}: {err:#}", e.detected.id)
+                    }
                 }
             }
             // Record cleaned orphans in the side-manifest.
-            record_sh_cleanup(&sh_installed)?;
+            if !removed.is_empty() {
+                record_sh_cleanup(&removed)?;
+            }
         } else {
             print_sh_cleanup(&plan);
         }
@@ -909,9 +947,9 @@ pub fn parse_sh_urls(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn map_native(d: &Detected, sh_urls: &[String]) -> Option<String> {
+fn map_native(d: &Detected, sh_urls: &[String], same_name: bool) -> Option<String> {
     let lower = d.id.to_ascii_lowercase();
-    match d.source {
+    let mapped = match d.source {
         Source::Snap => MAPPINGS
             .iter()
             .find(|m| !m.snap.is_empty() && m.snap.eq_ignore_ascii_case(&d.id))
@@ -924,33 +962,79 @@ fn map_native(d: &Detected, sh_urls: &[String]) -> Option<String> {
             .iter()
             .find(|m| !m.nix.is_empty() && m.nix.eq_ignore_ascii_case(&d.id))
             .map(|m| m.native.to_string()),
-        Source::Sh => {
-            let base = Path::new(&d.id)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&d.id);
-            // binary-name match first …
-            if let Some(m) = MAPPINGS
-                .iter()
-                .find(|m| !m.binary.is_empty() && m.binary.eq_ignore_ascii_case(base))
-            {
-                return Some(m.native.to_string());
-            }
-            // … then installer-URL match from history.
-            sh_urls
-                .iter()
-                .flat_map(|u| {
-                    MAPPINGS.iter().filter_map(|m| {
-                        if !m.sh_url.is_empty() && u.contains(m.sh_url) {
-                            Some(m.native.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .next()
-        }
+        Source::Sh => sh_native(d, sh_urls),
+    };
+    // When the user explicitly targeted a package (`lx go-native <pkg>`), fall
+    // back to its own name as the native package name — the mapping table
+    // can't cover every package, and the name is the right guess for a
+    // targeted request.
+    mapped.or_else(|| same_name.then(|| command_name(d)))
+}
+
+/// Map a `curl | sh` orphan to a table entry, first by binary name, then by
+/// an installer URL scraped from shell history. The URL fallback only fires
+/// when the URL *also* names the binary, so an unrelated `curl … | sh` line
+/// in the history can never mis-map it (e.g. `herdr` must not become `uv`).
+fn sh_native(d: &Detected, sh_urls: &[String]) -> Option<String> {
+    let base = Path::new(&d.id)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&d.id);
+    if let Some(m) = MAPPINGS
+        .iter()
+        .find(|m| !m.binary.is_empty() && m.binary.eq_ignore_ascii_case(base))
+    {
+        return Some(m.native.to_string());
     }
+    let base_lc = base.to_ascii_lowercase();
+    sh_urls.iter().find_map(|u| {
+        let u_lc = u.to_ascii_lowercase();
+        MAPPINGS.iter().find_map(|m| {
+            if !m.sh_url.is_empty()
+                && u_lc.contains(&m.sh_url.to_ascii_lowercase())
+                && u_lc.contains(&base_lc)
+            {
+                Some(m.native.to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
+/// The command a detected non-native package provides: a `curl | sh` orphan's
+/// binary basename, a snap/nix id, or a flatpak app-id's last segment. Also
+/// used as the default native package name when the user explicitly targets a
+/// package (`lx go-native <pkg>`).
+fn command_name(d: &Detected) -> String {
+    match d.source {
+        Source::Sh => Path::new(&d.id)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(&d.id)
+            .to_string(),
+        Source::Flatpak => d.id.rsplit('.').next().unwrap_or(&d.id).to_string(),
+        Source::Snap | Source::Nix => d.id.clone(),
+    }
+}
+
+/// True when the installed native package `pkg` actually provides an
+/// executable named `command`, so removing a non-native copy of `command`
+/// won't leave the user without the command. Best-effort: when the package's
+/// file list can't be read (unsupported manager), returns `true` rather than
+/// blocking the migration.
+fn native_provides_command(pkg: &str, command: &str) -> bool {
+    let files = crate::scandeps::pkg_files(pkg);
+    if files.is_empty() {
+        return true;
+    }
+    files.iter().any(|f| {
+        Path::new(f)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|n| n.eq_ignore_ascii_case(command))
+            .unwrap_or(false)
+    })
 }
 
 fn remove_source(d: &Detected) -> Result<()> {
@@ -1173,5 +1257,5 @@ pub fn go_native_mapping_probe(source: &str, id: &str, sh_urls: &[String]) -> Op
         id: id.to_string(),
         detail: String::new(),
     };
-    map_native(&d, sh_urls)
+    map_native(&d, sh_urls, false)
 }

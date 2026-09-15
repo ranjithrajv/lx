@@ -59,6 +59,24 @@ impl GitHubClient {
     }
 
     pub fn release_by_tag(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
+        match self.release_by_tag_exact(owner, repo, tag) {
+            Ok(r) => Ok(r),
+            Err(first) => {
+                // Projects commonly tag releases `v1.2.3` while a package's
+                // version (e.g. an AUR `pkgver`) is the bare `1.2.3`, and
+                // vice versa. Retry once with the alternate `v` prefix before
+                // surfacing the original error.
+                let alt = alternate_v_tag(tag);
+                if alt == tag {
+                    return Err(first);
+                }
+                self.release_by_tag_exact(owner, repo, &alt)
+                    .map_err(|_| first)
+            }
+        }
+    }
+
+    fn release_by_tag_exact(&self, owner: &str, repo: &str, tag: &str) -> Result<Release> {
         self.api_cache(&format!("release_{owner}_{repo}_{tag}"), || {
             let url = format!("{}/repos/{owner}/{repo}/releases/tags/{tag}", self.base_url);
             self.get_json::<GitHubReleaseRaw>(&url).map(Into::into)
@@ -190,6 +208,16 @@ pub fn digest_checksums(digest: Option<&str>) -> std::collections::BTreeMap<Stri
     m
 }
 
+/// The alternate `v`-prefix spelling of a release tag: `1.2.3` → `v1.2.3`,
+/// `v1.2.3` → `1.2.3`. Returns `tag` unchanged when there is no `v` to add
+/// or remove (never yields a double prefix).
+fn alternate_v_tag(tag: &str) -> String {
+    match tag.strip_prefix('v').or_else(|| tag.strip_prefix('V')) {
+        Some(bare) if !bare.is_empty() => bare.to_string(),
+        _ => format!("v{tag}"),
+    }
+}
+
 impl From<GitHubReleaseRaw> for Release {
     fn from(r: GitHubReleaseRaw) -> Self {
         Self {
@@ -262,5 +290,20 @@ impl crate::checksum::RawGetter for GitHubClient {
 impl crate::cache::ApiCacheProvider for GitHubClient {
     fn api_cache_dir(&self) -> Option<std::path::PathBuf> {
         self.api_cache_dir.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alternate_v_tag_toggles_the_prefix() {
+        assert_eq!(alternate_v_tag("0.9.0"), "v0.9.0");
+        assert_eq!(alternate_v_tag("v0.9.0"), "0.9.0");
+        assert_eq!(alternate_v_tag("V0.9.0"), "0.9.0");
+        // A bare `v` has nothing to strip; don't emit a double prefix from
+        // itself (the caller only uses the result when it differs).
+        assert_eq!(alternate_v_tag(""), "v");
     }
 }

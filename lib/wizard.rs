@@ -472,16 +472,20 @@ fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
         .find(|l| l.starts_with("source="))
         .map(str::to_string);
 
-    let repo_guess = github_guess(&m.url, &m.pkgname);
+    let repo = crate::plugins::package_index::aur::upstream_github_repo(&pkgbuild)
+        .or_else(|| crate::plugins::package_index::aur::github_repo_from_url(&m.url));
     let mut yaml = format!(
         "# Imported from AUR package '{}' via `lx init --from-aur` — REVIEW ME.\n",
         m.pkgname
     );
     yaml.push_str(&format!("package_name: {}\n", m.pkgname));
-    yaml.push_str(&format!(
-        "github_repo: {}   # guessed from AUR url: {}\n",
-        repo_guess, m.url
-    ));
+    match &repo {
+        Some(repo) => yaml.push_str(&format!("github_repo: {repo}\n")),
+        None => yaml.push_str(&format!(
+            "# Could not determine an upstream GitHub repository.\n# Upstream url: {}\n# Set github_repo manually.\n",
+            m.url
+        )),
+    }
     if !m.description.is_empty() {
         yaml.push_str(&format!(
             "description: \"{}\"\n",
@@ -496,6 +500,13 @@ fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
             "license_spdx: {l}   # AUR license field, verify SPDX\n"
         ));
     }
+    // Install the single binary as the command name rather than the upstream
+    // release-asset name (e.g. `herdr-linux-x86_64`), so the package can
+    // replace a `curl | sh` copy.
+    yaml.push_str(&format!(
+        "binary_rename: {}   # install the single binary as the command name\n",
+        m.pkgname
+    ));
     if !m.depends.is_empty() {
         yaml.push_str(&format!(
             "# WARNING: Arch dependency names kept verbatim — map to Debian names:\ndepends: \"{}\"\n",
@@ -540,21 +551,6 @@ fn import_from_aur(name: &str, output: Option<PathBuf>) -> Result<()> {
         output.display()
     );
     Ok(())
-}
-
-/// Guess owner/repo from an upstream URL; falls back to a placeholder the
-/// user must fix (a wrong guess is louder than a silent one).
-fn github_guess(url: &str, pkgname: &str) -> String {
-    let u = url.trim().trim_end_matches('/');
-    for marker in ["https://github.com/", "http://github.com/"] {
-        if let Some(rest) = u.strip_prefix(marker) {
-            let rest = rest.trim_end_matches(".git");
-            if rest.contains('/') {
-                return rest.to_string();
-            }
-        }
-    }
-    format!("OWNER/{pkgname}   # FIXME: not a GitHub URL")
 }
 
 /// `lx init --from-nfpm <nfpm.yaml>` — convert an nfpm config into a starter

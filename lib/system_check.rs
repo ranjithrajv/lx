@@ -134,6 +134,11 @@ pub struct PackageEntry {
     /// packages or when no migration is possible.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub migrate: String,
+    /// Benefit of switching to the native equivalent, e.g. "frees 11M" — the
+    /// disk reclaimed by removing the redundant non-native package (its
+    /// native equivalent is already installed). Empty otherwise.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub benefit: String,
 }
 
 pub fn run(args: SystemCheckArgs) -> Result<()> {
@@ -211,7 +216,21 @@ pub fn discover_all(fetch_versions: bool) -> Vec<PackageEntry> {
             if let Some(version) = native_versions.get(&e.name) {
                 e.native_available = e.name.clone();
                 e.native_version = version.clone();
-                e.migrate = format!("lx install {}", e.name);
+                // The native package is already installed, so the remaining
+                // step is removing the redundant non-native copy.
+                e.migrate = migrate_hint(&e.name);
+                // The benefit: the space reclaimed by removing the redundant
+                // non-native copy, plus how many of the native package's own
+                // dependencies are already present on the host (so the switch
+                // pulls in nothing new).
+                let mut parts = Vec::new();
+                if !e.size.is_empty() {
+                    parts.push(format!("frees {}", e.size));
+                }
+                if let Some((shared, total)) = deps_shared(&e.name) {
+                    parts.push(format!("{shared}/{total} deps shared"));
+                }
+                e.benefit = parts.join(" · ");
                 migrate_count += 1;
             }
         }
@@ -226,6 +245,28 @@ pub fn discover_all(fetch_versions: bool) -> Vec<PackageEntry> {
         ));
     }
     entries
+}
+
+/// The command that completes the switch to the native package: `lx
+/// go-native` installs the native package and removes the redundant
+/// non-native copy.
+fn migrate_hint(name: &str) -> String {
+    format!("lx go-native {name}")
+}
+
+/// How many of the installed native package's declared dependencies are
+/// already present on the host (`shared`/`total`). `None` when the package
+/// reports no dependencies or its metadata can't be read.
+fn deps_shared(pkg: &str) -> Option<(usize, usize)> {
+    let deps = crate::scandeps::pkg_depends(pkg);
+    if deps.is_empty() {
+        return None;
+    }
+    let shared = deps
+        .iter()
+        .filter(|d| crate::scandeps::pkg_installed_version(d).is_some())
+        .count();
+    Some((shared, deps.len()))
 }
 
 /// Print a progress message to stderr (so it doesn't interfere with stdout).
@@ -290,6 +331,7 @@ fn list_dpkg_packages() -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             })
         })
         .collect()
@@ -336,6 +378,7 @@ fn list_rpm_packages() -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             })
         })
         .collect()
@@ -371,6 +414,7 @@ fn list_pacman_packages() -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size: String::new(),
                 migrate: String::new(),
+                benefit: String::new(),
             })
         })
         .collect();
@@ -439,6 +483,7 @@ fn discover_snaps(_fetch_versions: bool) -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             }
         })
         .collect()
@@ -484,6 +529,7 @@ fn discover_flatpaks() -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             }
         })
         .collect()
@@ -556,6 +602,7 @@ fn discover_nix() -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             }
         })
         .collect()
@@ -604,6 +651,7 @@ fn discover_sh_orphans(fetch_versions: bool) -> Vec<PackageEntry> {
                 native_version: String::new(),
                 size,
                 migrate: String::new(),
+                benefit: String::new(),
             });
         }
     }
@@ -1092,23 +1140,33 @@ fn print_table(entries: &[PackageEntry]) {
         .max()
         .unwrap_or(0)
         .max(0);
+    let benefit_w = entries
+        .iter()
+        .map(|e| e.benefit.len())
+        .max()
+        .unwrap_or(0)
+        .max(0);
 
     let has_status = status_w > 0;
     let has_native = native_w > 0;
     let has_native_ver = native_ver_w > 0;
     let has_size = size_w > 0;
     let has_migrate = migrate_w > 0;
+    let has_benefit = benefit_w > 0;
 
-    // Build header
+    // Build header — source type, its version and its size stay adjacent.
     let mut header = format!(
-        "{:<name_w$} {:<ver_w$} {:<src_w$}",
+        "{:<name_w$} {:<src_w$} {:<ver_w$}",
         "PACKAGE".bold(),
-        "VERSION".bold(),
         "SOURCE".bold(),
+        "VERSION".bold(),
         name_w = name_w,
-        ver_w = ver_w,
         src_w = src_w,
+        ver_w = ver_w,
     );
+    if has_size {
+        header.push_str(&format!(" {:>size_w$}", "SIZE".bold(), size_w = size_w));
+    }
     if has_status {
         header.push_str(&format!(
             " {:<status_w$}",
@@ -1131,8 +1189,12 @@ fn print_table(entries: &[PackageEntry]) {
             native_ver_w = native_ver_w,
         ));
     }
-    if has_size {
-        header.push_str(&format!(" {:>size_w$}", "SIZE".bold(), size_w = size_w,));
+    if has_benefit {
+        header.push_str(&format!(
+            " {:<benefit_w$}",
+            "BENEFIT".bold(),
+            benefit_w = benefit_w,
+        ));
     }
     if has_migrate {
         header.push_str(&format!(
@@ -1147,14 +1209,21 @@ fn print_table(entries: &[PackageEntry]) {
     for e in entries {
         let src_label = e.source.label().color(e.source.color());
         let mut row = format!(
-            "{:<name_w$} {:<ver_w$} {:<src_w$}",
+            "{:<name_w$} {:<src_w$} {:<ver_w$}",
             e.name,
-            e.version,
             src_label,
+            e.version,
             name_w = name_w,
-            ver_w = ver_w,
             src_w = src_w,
+            ver_w = ver_w,
         );
+        if has_size {
+            row.push_str(&format!(
+                " {:>size_w$}",
+                if e.size.is_empty() { "" } else { &e.size },
+                size_w = size_w,
+            ));
+        }
         if has_status {
             row.push_str(&format!(
                 " {:<status_w$}",
@@ -1184,11 +1253,11 @@ fn print_table(entries: &[PackageEntry]) {
                 native_ver_w = native_ver_w,
             ));
         }
-        if has_size {
+        if has_benefit {
             row.push_str(&format!(
-                " {:>size_w$}",
-                if e.size.is_empty() { "" } else { &e.size },
-                size_w = size_w,
+                " {:<benefit_w$}",
+                if e.benefit.is_empty() { "" } else { &e.benefit },
+                benefit_w = benefit_w,
             ));
         }
         if has_migrate {
@@ -1270,12 +1339,19 @@ fn print_table_grouped(entries: &[PackageEntry]) {
             .max()
             .unwrap_or(0)
             .max(0);
+        let benefit_w = group_entries
+            .iter()
+            .map(|e| e.benefit.len())
+            .max()
+            .unwrap_or(0)
+            .max(0);
 
         let has_status = status_w > 0;
         let has_native = native_w > 0;
         let has_native_ver = native_ver_w > 0;
         let has_size = size_w > 0;
         let has_migrate = migrate_w > 0;
+        let has_benefit = benefit_w > 0;
 
         // Column headers
         let mut header = format!(
@@ -1285,6 +1361,9 @@ fn print_table_grouped(entries: &[PackageEntry]) {
             name_w = name_w,
             ver_w = ver_w,
         );
+        if has_size {
+            header.push_str(&format!(" {:>size_w$}", "SIZE".bold(), size_w = size_w));
+        }
         if has_status {
             header.push_str(&format!(
                 " {:<status_w$}",
@@ -1306,8 +1385,12 @@ fn print_table_grouped(entries: &[PackageEntry]) {
                 native_ver_w = native_ver_w
             ));
         }
-        if has_size {
-            header.push_str(&format!(" {:>size_w$}", "SIZE".bold(), size_w = size_w));
+        if has_benefit {
+            header.push_str(&format!(
+                " {:<benefit_w$}",
+                "BENEFIT".bold(),
+                benefit_w = benefit_w
+            ));
         }
         if has_migrate {
             header.push_str(&format!(
@@ -1327,6 +1410,13 @@ fn print_table_grouped(entries: &[PackageEntry]) {
                 name_w = name_w,
                 ver_w = ver_w,
             );
+            if has_size {
+                row.push_str(&format!(
+                    " {:>size_w$}",
+                    if e.size.is_empty() { "" } else { &e.size },
+                    size_w = size_w,
+                ));
+            }
             if has_status {
                 row.push_str(&format!(
                     " {:<status_w$}",
@@ -1356,11 +1446,11 @@ fn print_table_grouped(entries: &[PackageEntry]) {
                     native_ver_w = native_ver_w,
                 ));
             }
-            if has_size {
+            if has_benefit {
                 row.push_str(&format!(
-                    " {:>size_w$}",
-                    if e.size.is_empty() { "" } else { &e.size },
-                    size_w = size_w,
+                    " {:<benefit_w$}",
+                    if e.benefit.is_empty() { "" } else { &e.benefit },
+                    benefit_w = benefit_w,
                 ));
             }
             if has_migrate {
@@ -1377,12 +1467,15 @@ fn print_table_grouped(entries: &[PackageEntry]) {
     println!("{} package(s) total", entries.len());
 }
 
-/// Print entries as CSV (name,version,source,detail,status,native_available,size).
+/// Print entries as CSV
+/// (name,version,source,detail,status,native_available,native_version,size,migrate,benefit).
 fn print_csv(entries: &[PackageEntry]) {
-    println!("name,version,source,detail,status,native_available,native_version,size,migrate");
+    println!(
+        "name,version,source,detail,status,native_available,native_version,size,migrate,benefit"
+    );
     for e in entries {
         println!(
-            "{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{}",
             csv_field(&e.name),
             csv_field(&e.version),
             e.source.label(),
@@ -1392,6 +1485,7 @@ fn print_csv(entries: &[PackageEntry]) {
             csv_field(&e.native_version),
             csv_field(&e.size),
             csv_field(&e.migrate),
+            csv_field(&e.benefit),
         );
     }
 }
