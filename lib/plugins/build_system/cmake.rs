@@ -4,7 +4,6 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -33,7 +32,7 @@ impl BuildSystem for CmakeBuildSystem {
         std::fs::create_dir_all(&build_dir)?;
         std::fs::create_dir_all(&stage)?;
 
-        let mut cmd = Command::new("cmake");
+        let mut cmd = super::build_command("cmake", cfg.sandbox);
         cmd.args([
             "-S",
             &src_dir.to_string_lossy(),
@@ -57,11 +56,11 @@ impl BuildSystem for CmakeBuildSystem {
         println!("configuring: cmake {}", cfg.cmake_flags.join(" "));
         super::run(cmd, "cmake configure")?;
 
-        let mut build = Command::new("cmake");
+        let mut build = super::build_command("cmake", cfg.sandbox);
         build.args(["--build", &build_dir.to_string_lossy()]);
         super::run(build, "cmake build")?;
 
-        let mut install = Command::new("cmake");
+        let mut install = super::build_command("cmake", cfg.sandbox);
         install
             .args(["--install", &build_dir.to_string_lossy()])
             .env("DESTDIR", &stage);

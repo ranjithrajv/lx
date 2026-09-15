@@ -510,6 +510,11 @@ pub struct MsixSignature {
 pub struct PackageConfig {
     /// Name of the Debian package.
     pub package_name: String,
+    /// Runtime-only: set by `lx build --sandbox` (source mode) so build-system
+    /// plugins isolate compile/install steps. Not a `package.yaml` key --
+    /// `#[serde(skip)]` keeps it out of the config and the generated schema.
+    #[serde(skip)]
+    pub sandbox: bool,
     /// Source repo in "owner/repo" form (GitHub or GitLab, per `source`).
     /// Kept as `github_repo` for backward compat; `repo` is alias.
     ///

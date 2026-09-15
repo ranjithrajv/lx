@@ -121,6 +121,34 @@ pub(crate) fn available_parallelism() -> usize {
         .unwrap_or(1)
 }
 
+/// True when `unshare -n` can create a network namespace on this host.
+/// Probed once; [`crate::sourcebuild`] uses it to decide whether `--sandbox`
+/// can be honoured.
+pub fn sandbox_available() -> bool {
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        Command::new("unshare")
+            .args(["-n", "true"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
+}
+
+/// Build a [`Command`] for a build tool. With `sandbox` set the program runs
+/// inside a network namespace (`unshare -n`), so a compile/install step
+/// cannot reach the network. Binary repacks execute nothing and are
+/// unaffected. Callers must only pass `true` when [`sandbox_available`].
+pub fn build_command(program: &str, sandbox: bool) -> Command {
+    if sandbox {
+        let mut cmd = Command::new("unshare");
+        cmd.arg("-n").arg("--").arg(program);
+        cmd
+    } else {
+        Command::new(program)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,5 +168,23 @@ mod tests {
         let err = run(cmd, "test command").unwrap_err().to_string();
         assert!(err.contains("test command failed"), "{err}");
         assert!(err.contains('3'), "{err}");
+    }
+
+    #[test]
+    fn build_command_wraps_in_unshare_when_sandboxed() {
+        let cmd = build_command("cmake", true);
+        assert_eq!(cmd.get_program(), "unshare");
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, vec!["-n", "--", "cmake"]);
+    }
+
+    #[test]
+    fn build_command_passes_through_when_not_sandboxed() {
+        let cmd = build_command("cmake", false);
+        assert_eq!(cmd.get_program(), "cmake");
+        assert_eq!(cmd.get_args().count(), 0);
     }
 }

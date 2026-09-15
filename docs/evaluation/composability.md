@@ -206,7 +206,7 @@ A plugin gap degrades one axis, not the pipeline:
   `detect_build_system`, rather than a half-built tree
   (`lib/sourcebuild.rs`).
 - `rpm.defines` is accepted but not applied; `lx` warns rather than
-  silently dropping it (`docs/architecture/replacements.md`).
+  silently dropping it (`docs/drop-in/replacements.md`).
 - The ELF dependency scan is an improvement with a fallback: a soname with
   no dpkg information falls back to `dpkg -S`/`rpm -q`/`pacman -Qo` instead
   of failing the build (`lib/shlibdeps.rs`).

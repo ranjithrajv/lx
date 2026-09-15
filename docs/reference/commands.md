@@ -8,6 +8,7 @@ groups are covered below, plus the flags worth calling out.
 |---|---|
 | `lx build [config]` | Build packages from a `package.yaml`, zero-config from a GitHub URL, or from files you supply (`--from-dir`/`--from-file`). `--format` selects one packager (deb/rpm/arch/apk/ipk/msix/osxpkg), `--format all` builds every format, and `--format deb,rpm` builds each listed |
 | `lx convert <pkg>` | Convert a built package from one format to another (deb↔rpm↔arch) — reads metadata + install tree from source, rebuilds natively in target format. `--to` defaults to the host's native format |
+| `lx capture --name <n> --version <v> '<cmd>'` | Build a package from an install command's output (`checkinstall`-style): run the command with `$DESTDIR`, package the captured tree as-is (`--exclude <glob>` to drop paths); deps are auto-detected from the captured ELFs |
 | `lx validate [config]` | Check a config resolves against a real release, without building |
 | `lx deps scan [config]` | Report a release binary's shared-library dependencies, to verify/fill in `depends:` |
 | `lx deps resolve <path>…` | Resolve ELF libraries to versioned `Depends` (`dpkg-shlibdeps` parity: reads the dpkg `symbols`/`shlibs` databases; fail-closed unless `--ignore-missing-info`) |
@@ -178,11 +179,11 @@ out:
 - **`--sbom`** (`build`): also emit `<pkg>_<ver>.spdx.json` (SPDX 2.3 SBOM
   over built artifacts + upstream materials) and `<pkg>_<ver>.slsa.json`
   (SLSA v1-style provenance) into the output dir.
-- **`--sandbox`** (`build`, source mode only): intended to run compile
-  steps under `unshare -n` (no network, private mounts). **Currently
-  declared but not yet wired** — the flag is accepted but no `unshare`
-  invocation happens (see `docs/tooling.md` §1.8). Binary repacks execute
-  nothing regardless.
+- **`--sandbox`** (`build`, source mode only): runs compile and install
+  steps under `unshare -n` (a network namespace), so a build cannot reach
+  the network. `lx` probes for a usable `unshare -n` once and warns and runs
+  unsandboxed when it is unavailable. Binary repacks execute nothing
+  regardless.
 - **`--install-build-deps`** (`build` source mode, and `index install` when
   building from a recipe): install the missing host build dependencies —
   `build_depends:` (host-distro names), an AUR package's `makedepends`, and

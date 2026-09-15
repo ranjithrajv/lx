@@ -198,7 +198,7 @@ guess:
   `--ignore-missing-info`.
 - `rpm.defines` is accepted but not applied by the in-process builder, and
   `lx` **warns** instead of dropping it silently
-  (`docs/architecture/replacements.md`).
+  (`docs/drop-in/replacements.md`).
 
 ## Where interoperability is partial
 
@@ -207,7 +207,7 @@ Collected, so the ✅ rows above are not read as universal:
 - **`dpkg-shlibdeps` parity is not total.** Virtual `Provides`, multiarch
   `pkg:arch` qualifiers, `debian/shlibs.local`, and full
   `-e`/`-T`/`-O`/`-d`/`-p`/`-l` parity are not covered
-  (`docs/architecture/replacements.md` §2.6).
+  (`docs/drop-in/replacements.md` §2.6).
 - **Conversion is a subset.** deb↔rpm↔arch only, with in-process readers for
   all three. Triggers carry only where the models overlap; RPM
   `triggerun`/`triggerpostun`/`triggerprein`, deb `activate*`, and Arch's
@@ -242,7 +242,7 @@ tar tzf foo.pkg.tar.zst
 ## See also
 
 - [Composability](composability.md) — the companion evaluation.
-- [`docs/architecture/replacements.md`](../architecture/replacements.md) —
+- [`docs/drop-in/replacements.md`](../drop-in/replacements.md) —
   what `lx` replaces, consumes, and deliberately does not.
 - [`docs/architecture/tooling.md`](../architecture/tooling.md) — every
   external tool `lx` consumes.

@@ -10,7 +10,6 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -40,7 +39,7 @@ impl BuildSystem for MesonBuildSystem {
         std::fs::create_dir_all(&stage)?;
 
         // meson setup configures the build directory.
-        let mut cmd = Command::new("meson");
+        let mut cmd = super::build_command("meson", cfg.sandbox);
         cmd.args([
             "setup",
             &build_dir.to_string_lossy(),
@@ -62,12 +61,12 @@ impl BuildSystem for MesonBuildSystem {
         super::run(cmd, "meson setup")?;
 
         // meson compile builds the project.
-        let mut compile = Command::new("meson");
+        let mut compile = super::build_command("meson", cfg.sandbox);
         compile.args(["compile", "-C", &build_dir.to_string_lossy()]);
         super::run(compile, "meson compile")?;
 
         // meson install stages into DESTDIR.
-        let mut install = Command::new("meson");
+        let mut install = super::build_command("meson", cfg.sandbox);
         install
             .args(["install", "-C", &build_dir.to_string_lossy(), "--destdir"])
             .arg(&*stage.to_string_lossy());

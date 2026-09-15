@@ -1,7 +1,8 @@
 # What `lx` replaces
 
 The replacement story (Parts 2–4), split out from
-[tooling.md](tooling.md), which covers what `lx` consumes.
+[tooling.md](../architecture/tooling.md), which covers what `lx` consumes.
+Part of the [drop-in docs](README.md).
 
 ## Part 2 — What `lx` is a drop-in replacement for
 
@@ -27,6 +28,7 @@ The replacement story (Parts 2–4), split out from
 | `nfpm` | replaced on covered formats | Feature parity | [`comparison/lx-vs-nfpm.md`](../comparison/lx-vs-nfpm.md) |
 | `deb-get` | replaced (consumer client) | Feature parity | `lx get`, `show`, `search` "deb-get parity" |
 | `makedeb` / AUR `makepkg` | replaced (import + native build) | Feature parity | `lx init --from-aur`, `lx index install` |
+| `checkinstall` | replaced for the capture flow | Feature parity | `lx capture` (run an install command, package its `$DESTDIR` tree) |
 | `cargo-deb` / `cargo-dist` / `goreleaser` / `*2deb` | feature parity | Feature parity | checksum sidecars, shell installer, cosign, relocatable, SBOM |
 | `dpkg-scanpackages` / `apt-ftparchive` / `reprepro` | replaced for repo publishing | Functional | `lx repo` |
 | snap / flatpak / nix | migration source, not output | Functional | `lx migrate native` |
@@ -127,9 +129,11 @@ reader/patch-stack maintainer. `debarchive::extract` is scoped to what
 binary's `DT_NEEDED` plus `(symbol, version)` requirements from
 `.gnu.version_r`/`VERNEED` and reads the dpkg `symbols`/`shlibs` databases
 to emit **versioned** relations (`libcap2 (>= 2.66)`), fail-closed without
-`--ignore-missing-info`. Flags and semantics not covered yet: virtual
-`Provides`, multiarch `pkg:arch` qualifiers, `debian/shlibs.local`,
-full `-e`/`-T`/`-O`/`-d`/`-p`/`-l` parity.
+`--ignore-missing-info`. `debian/shlibs.local` overrides, `a | b`
+alternative selection, virtual-package `Provides` substitution, multiarch
+`pkg:arch` qualifiers, the `-e`/`-p`/`-d`/`-l`/`-S` flags, and
+`$LX_DPKG_ADMINDIR` target-suite resolution are now covered; `--source` and
+`lx convert` feed from the same core.
 
 The build pipeline uses the same core best-effort (falling back to
 `dpkg -S`/`rpm -q --whatprovides`/`pacman -Qo`), so no existing build
@@ -213,13 +217,12 @@ no CDN invalidation, no pool management).
 
 ### 2.13 Where the parity stops
 
-The gaps above are tracked as phased work in the
-[drop-in replacement roadmap](../roadmap/README.md): `makepkg` input
-fidelity ([doc](../roadmap/drop-in-makepkg.md)), `rpmbuild` `.spec` input
-([doc](../roadmap/drop-in-rpmbuild.md)), `yay`/`paru` AUR resolution
-([doc](../roadmap/drop-in-yay-paru.md)), the remaining `dpkg-shlibdeps`
-flags ([doc](../roadmap/drop-in-dpkg-shlibdeps.md)), and `checkinstall`
-capture ([doc](../roadmap/drop-in-checkinstall.md)).
+The gaps above are tracked as phased work in this folder (start at the
+[drop-in index](README.md)): `makepkg` input fidelity
+([doc](makepkg.md)), `rpmbuild` `.spec` input ([doc](rpmbuild.md)),
+`yay`/`paru` AUR resolution ([doc](yay-paru.md)), the remaining
+`dpkg-shlibdeps` flags ([doc](dpkg-shlibdeps.md)), and `checkinstall`
+capture ([doc](checkinstall.md)).
 
 ---
 

@@ -49,7 +49,7 @@ impl BuildSystem for CargoBuildSystem {
             args.push(target);
         }
 
-        let mut cmd = Command::new("cargo");
+        let mut cmd = super::build_command("cargo", cfg.sandbox);
         cmd.args(&args).current_dir(src_dir);
         super::run(cmd, "cargo install")?;
 

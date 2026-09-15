@@ -4,7 +4,6 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -35,7 +34,7 @@ impl BuildSystem for GoBuildSystem {
         // Build the package in the current directory. -trimpath strips host
         // paths from the binary (reproducibility); -ldflags "-s -w" strips
         // debug info for a smaller binary.
-        let mut cmd = Command::new("go");
+        let mut cmd = super::build_command("go", cfg.sandbox);
         cmd.args([
             "build",
             "-trimpath",

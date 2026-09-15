@@ -13,7 +13,6 @@
 
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -72,19 +71,19 @@ impl BuildSystem for AutotoolsBuildSystem {
             }
         }
         println!("configuring: ./configure {}", args.join(" "));
-        let mut cmd = Command::new("./configure");
+        let mut cmd = super::build_command("./configure", cfg.sandbox);
         cmd.args(&args).current_dir(src_dir);
         super::apply_musl_env(&mut cmd, cfg);
         super::run(cmd, "autotools configure")?;
 
         // make -jN
         let jobs = super::available_parallelism();
-        let mut cmd = Command::new("make");
+        let mut cmd = super::build_command("make", cfg.sandbox);
         cmd.arg(format!("-j{jobs}")).current_dir(src_dir);
         super::run(cmd, "autotools make")?;
 
         // make DESTDIR=<stage> install
-        let mut cmd = Command::new("make");
+        let mut cmd = super::build_command("make", cfg.sandbox);
         cmd.arg(format!("DESTDIR={}", stage.to_string_lossy()))
             .arg("install")
             .current_dir(src_dir);
@@ -103,7 +102,7 @@ fn run_in(
     cfg: &PackageConfig,
     label: &str,
 ) -> Result<()> {
-    let mut cmd = Command::new(program);
+    let mut cmd = super::build_command(program, cfg.sandbox);
     cmd.args(args).current_dir(dir);
     super::apply_musl_env(&mut cmd, cfg);
     super::run(cmd, label)

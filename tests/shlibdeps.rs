@@ -209,3 +209,115 @@ fn cli_falls_back_to_pkg_manager_then_fail_closed() {
         .assert()
         .success();
 }
+
+#[test]
+fn shlibs_local_overrides_the_database() {
+    let tmp = write_db(&[(
+        "libfoo1.symbols",
+        "libfoo.so.1 libfoo1 #MINVER#\n foo@Base 1.2.3\n",
+    )]);
+    let local = tmp.path().join("shlibs.local");
+    std::fs::write(&local, "libfoo 1 libfoo-local (>= 9.9)\n").unwrap();
+
+    let db = ShlibsDb::open(tmp.path()).with_shlibs_local(&local);
+    let res = resolve(
+        &[need("libfoo.so.1", &[("foo", "Base")])],
+        &db,
+        None,
+        &BTreeSet::new(),
+    );
+    // The local override wins over the symbols stanza.
+    assert_eq!(res.relations, vec!["libfoo-local (>= 9.9)"]);
+}
+
+#[test]
+fn shlibs_alternatives_use_the_first_when_none_installed() {
+    let tmp = write_db(&[(
+        "libalt.shlibs",
+        "libalt 1 libalt-first (>= 1.0) | libalt-second (>= 1.0)\n",
+    )]);
+    let db = ShlibsDb::open(tmp.path());
+    let res = resolve(&[need("libalt.so.1", &[])], &db, None, &BTreeSet::new());
+    // Neither synthetic package is installed, so the first alternative wins.
+    assert_eq!(res.relations, vec!["libalt-first (>= 1.0)"]);
+}
+
+#[test]
+fn missing_symbol_is_reported_but_a_tag_mismatch_is_not() {
+    let tmp = write_db(&[(
+        "libfoo1.symbols",
+        "libfoo.so.1 libfoo1 #MINVER#\n foo@Base 1.2.3\n",
+    )]);
+    let db = ShlibsDb::open(tmp.path());
+
+    // A symbol the stanza doesn't mention at all is flagged (the
+    // dpkg-shlibdeps "symbol not found" case). The header is `#MINVER#`, so
+    // the fallback relation carries no version.
+    let res = resolve(
+        &[need("libfoo.so.1", &[("brand_new", "FOO_2.0")])],
+        &db,
+        None,
+        &BTreeSet::new(),
+    );
+    assert_eq!(res.relations, vec!["libfoo1"]);
+    assert_eq!(res.missing_symbols.len(), 1);
+    assert!(res.missing_symbols[0].contains("brand_new@FOO_2.0"));
+
+    // A known symbol under a different version tag is not flagged, avoiding
+    // false positives from tag spelling differences.
+    let res = resolve(
+        &[need("libfoo.so.1", &[("foo", "WRONG_TAG")])],
+        &db,
+        None,
+        &BTreeSet::new(),
+    );
+    assert!(res.missing_symbols.is_empty());
+    assert_eq!(res.relations, vec!["libfoo1"]);
+}
+
+#[test]
+fn virtual_provides_substitutes_the_real_package() {
+    let tmp = write_db(&[(
+        "libfoo1.symbols",
+        "libfoo.so.1 libfoo1 #MINVER#\n foo@Base 1.2.3\n",
+    )]);
+    // `libfoo1` is not a real package; `libfoo1t64` Provides it.
+    std::fs::write(
+        tmp.path().join("status"),
+        "Package: libfoo1t64\nStatus: install ok installed\nProvides: libfoo1 (= 1.2.3)\n\n",
+    )
+    .unwrap();
+
+    let db = ShlibsDb::open(tmp.path());
+    let res = resolve(
+        &[need("libfoo.so.1", &[("foo", "Base")])],
+        &db,
+        None,
+        &BTreeSet::new(),
+    );
+    assert_eq!(res.relations, vec!["libfoo1t64 (>= 1.2.3)"]);
+}
+
+#[test]
+fn a_real_package_name_is_not_substituted() {
+    let tmp = write_db(&[(
+        "libfoo1.symbols",
+        "libfoo.so.1 libfoo1 #MINVER#\n foo@Base 1.2.3\n",
+    )]);
+    // `libfoo1` is itself a real package here, so no substitution.
+    std::fs::write(
+        tmp.path().join("status"),
+        "Package: libfoo1\nStatus: install ok installed\n\n\
+         Package: libfoo1t64\nProvides: libfoo1 (= 1.2.3)\n\n",
+    )
+    .unwrap();
+
+    let db = ShlibsDb::open(tmp.path());
+    let res = resolve(
+        &[need("libfoo.so.1", &[("foo", "Base")])],
+        &db,
+        None,
+        &BTreeSet::new(),
+    );
+    assert_eq!(res.relations, vec!["libfoo1 (>= 1.2.3)"]);
+}

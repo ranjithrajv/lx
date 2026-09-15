@@ -52,6 +52,7 @@ pub mod bitbucket;
 pub mod build;
 pub mod builddeps;
 pub mod cache;
+pub mod capture;
 pub mod checksum;
 pub mod checksum_sidecar;
 pub mod cli;

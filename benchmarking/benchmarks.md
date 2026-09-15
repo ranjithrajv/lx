@@ -6,7 +6,7 @@ by [`run.sh`](run.sh); the rest are reproducible by hand and should be added
 to `run.sh` as the supporting tooling becomes available.
 
 Levels are defined in
-[`docs/architecture/replacements.md`](../docs/architecture/replacements.md):
+[`docs/drop-in/replacements.md`](../docs/drop-in/replacements.md):
 
 - **Drop-in** — existing config/workflows point at `lx` unchanged.
 - **Feature parity** — same capability set, different CLI/config surface.

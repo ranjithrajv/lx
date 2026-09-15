@@ -67,6 +67,7 @@ closest peers to `lx build --from-dir`/`--from-file`.
 | `dpkg-deb` / `rpmbuild` | C | one format each | The reference implementations `lx` replaces for *building* |
 
 `lx` overlaps this layer at its edges (`--from-dir`/`--from-file`,
+`lx capture` for `checkinstall`-style install-command output,
 `build_mode: source`) but does not try to be a general file-driven
 packager. `--format all` emits every format from one config, and `lx
 publish` runs that plus the repository indexes in one command. For signed

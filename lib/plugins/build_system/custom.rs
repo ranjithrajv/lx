@@ -4,7 +4,6 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -33,7 +32,7 @@ impl BuildSystem for CustomBuildSystem {
         );
         for cmd_str in &cfg.build_commands {
             println!("  $ {cmd_str}");
-            let mut cmd = Command::new("sh");
+            let mut cmd = super::build_command("sh", cfg.sandbox);
             cmd.args(["-c", cmd_str])
                 .current_dir(src_dir)
                 .env("DESTDIR", destdir.as_str());
@@ -45,7 +44,7 @@ impl BuildSystem for CustomBuildSystem {
         );
         for cmd_str in &cfg.install_commands {
             println!("  $ {cmd_str}");
-            let mut cmd = Command::new("sh");
+            let mut cmd = super::build_command("sh", cfg.sandbox);
             cmd.args(["-c", cmd_str])
                 .current_dir(src_dir)
                 .env("DESTDIR", destdir.as_str());

@@ -13,7 +13,6 @@
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::config::PackageConfig;
 use crate::plugins::build_system::BuildSystem;
@@ -43,7 +42,7 @@ impl BuildSystem for MakeBuildSystem {
         std::fs::create_dir_all(&stage)?;
 
         let jobs = super::available_parallelism();
-        let mut cmd = Command::new("make");
+        let mut cmd = super::build_command("make", cfg.sandbox);
         cmd.arg(format!("-j{jobs}")).arg("PREFIX=/usr");
         for f in &cfg.cmake_flags {
             cmd.arg(f);
@@ -56,7 +55,7 @@ impl BuildSystem for MakeBuildSystem {
         cmd.current_dir(src_dir);
         super::run(cmd, "make")?;
 
-        let mut cmd = Command::new("make");
+        let mut cmd = super::build_command("make", cfg.sandbox);
         cmd.arg(format!("DESTDIR={}", stage.to_string_lossy()))
             .arg("PREFIX=/usr");
         for f in &cfg.cmake_flags {

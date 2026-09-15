@@ -1241,32 +1241,24 @@ fn scan_and_fill_deps(mut meta: SourceMeta, install_tree: &Path) -> Result<Sourc
         return Ok(meta);
     }
 
-    let mut scanned_sonames = std::collections::BTreeSet::new();
-    for elf_path in &elf_files {
-        let bytes = match fs::read(elf_path) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        if let Ok(libs) = lx_lib::elfdeps::needed_libraries(&bytes) {
-            for lib in &libs {
-                if !lx_lib::elfdeps::is_essential_libc_soname(lib) {
-                    scanned_sonames.insert(lib.clone());
-                }
-            }
-        }
-    }
-
-    if scanned_sonames.is_empty() {
+    // Resolve non-essential sonames to packages: prefer the dpkg
+    // `symbols`/`shlibs` databases (the shared shlibdeps core), then the host
+    // package-manager lookup. Version constraints are dropped here because the
+    // target format's own syntax is applied later.
+    let scan = lx_lib::shlibdeps::scan_elfs(&elf_files);
+    if scan.sonames.is_empty() {
         return Ok(meta);
     }
-
-    // Resolve non-essential sonames to package names via the host's package manager.
-    let mut resolved_pkgs = std::collections::BTreeSet::new();
-    for soname in &scanned_sonames {
-        if let Some(pkg) = crate::scandeps::pkg_owner(soname) {
-            // Strip :arch qualifier and version constraints.
-            let pkg = pkg.split(':').next().unwrap_or(&pkg).to_string();
-            resolved_pkgs.insert(pkg);
+    let db = lx_lib::shlibdeps::ShlibsDb::host();
+    let res = lx_lib::shlibdeps::resolve(&scan.needs, db, Some(&meta.package), &scan.provided);
+    let mut resolved_pkgs: std::collections::BTreeSet<String> = res
+        .relations
+        .iter()
+        .map(|r| r.split_whitespace().next().unwrap_or(r).to_string())
+        .collect();
+    for soname in res.unresolved {
+        if let Some(pkg) = crate::scandeps::pkg_owner(&soname) {
+            resolved_pkgs.insert(pkg.split(':').next().unwrap_or(&pkg).to_string());
         }
     }
 

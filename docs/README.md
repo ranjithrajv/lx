@@ -21,7 +21,6 @@ pick a section below.
 - [Plugins](architecture/plugins.md) — registry, wiring, adding a plugin
 - [Plugin catalog](architecture/plugin-catalog.md) — traits and per-plugin detail
 - [Tooling](architecture/tooling.md) — every external tool `lx` consumes
-- [What `lx` replaces](architecture/replacements.md) — drop-in/parity story
 
 ## Comparisons & analysis
 
@@ -31,14 +30,14 @@ pick a section below.
 - [Linux packaging landscape](analysis/landscape.md)
 - [Dogfooding roadmap](analysis/dogfooding-roadmap.md)
 
-## Roadmap
+## Drop-in replacements
 
-- [Drop-in replacement roadmap](roadmap/README.md) — phases and cross-cutting
-  foundations
-- [makepkg](roadmap/drop-in-makepkg.md) · [rpmbuild](roadmap/drop-in-rpmbuild.md) ·
-  [yay / paru](roadmap/drop-in-yay-paru.md) ·
-  [dpkg-shlibdeps](roadmap/drop-in-dpkg-shlibdeps.md) ·
-  [checkinstall](roadmap/drop-in-checkinstall.md)
+- [What `lx` replaces](drop-in/replacements.md) — parity table and levels
+- [Drop-in roadmap](drop-in/README.md) — phases and cross-cutting foundations
+- [makepkg](drop-in/makepkg.md) · [rpmbuild](drop-in/rpmbuild.md) ·
+  [yay / paru](drop-in/yay-paru.md) ·
+  [dpkg-shlibdeps](drop-in/dpkg-shlibdeps.md) ·
+  [checkinstall](drop-in/checkinstall.md)
 
 ## Evaluation
 

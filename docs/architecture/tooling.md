@@ -178,17 +178,19 @@ itself, with the crate that replaces the usual external tool:
 | `makepkg` / Arch `.pkg.tar.zst` | `lib/archarchive.rs` (`tar` + `zstd` level 19) |
 | `abuild` / apk-tools | `lib/apkarchive.rs` (concatenated gzip control+data) + in-process RSA/SHA-1 signing (`rsa` crate, no `abuild-sign`/`openssl`) |
 | opkg / `.ipk` | `lib/ipkarchive.rs` (reuses the deb `ar` layout) |
-| `dpkg-shlibdeps` | `lib/shlibdeps.rs` (`object` crate: `DT_NEEDED` + `VERNEED`; parses `symbols`/`shlibs`) |
+| `dpkg-shlibdeps` | `lib/shlibdeps.rs` (`object` crate: `DT_NEEDED` + `VERNEED`; `symbols`/`shlibs`/`shlibs.local` + status `Provides`) |
 | `readelf` / `objdump` / `ldd` | `lib/elfdeps.rs` (`object` crate) |
 | `dpkg-scanpackages` / `apt-ftparchive` / `reprepro` / `createrepo_c` / `abuild` | `lib/repo.rs` + `lib/plugins/package_index/` (apt `Packages`/`Packages.gz`/`Release`/`InRelease`, rpm `repodata/`, pacman `<repo>.db.tar.gz`, apk `APKINDEX.tar.gz`, opkg `Packages`) |
 | `tar` / `gzip` / `xz` / `zstd` / `ar` | `tar`, `flate2`, `lzma-rust2`, `zstd`, `ar` crates |
 | `sha256sum` / `sha512sum` / `md5sum` | `sha2`, `md5` crates |
 | `jq` / `yq` / `envsubst` | `serde_json`, `serde_yaml`, in-tree env expansion |
 
-Notable caveat: the `--sandbox` flag is documented as wrapping source
-compiles in `unshare -n`, and `build.rs` carries that help text, but
-**`unshare` is not invoked anywhere in the code today** — grep across
-`lib/` finds only the doc comment. Treat `--sandbox` as declared-but-not-yet-wired.
+`--sandbox` wraps every source-build compile/install command (`cmake`,
+`cargo`, `go`, `meson`, `make`, autotools, `custom`, and `prebuild_steps`)
+in `unshare -n` via `build_system::build_command`. It probes
+`unshare -n true` once (`sandbox_available`); when `unshare` is missing or
+the kernel refuses the namespace, `lx` warns and runs the build unsandboxed
+rather than failing. Binary repacks execute nothing and are unaffected.
 
 ### 1.9 Dev / CI tools (never part of a user's runtime)
 
@@ -208,7 +210,7 @@ From `Makefile` and `.pre-commit-config.yaml`:
 
 ---
 
-Continue to [replacements.md](replacements.md) for what `lx` replaces
+Continue to [replacements.md](../drop-in/replacements.md) for what `lx` replaces
 (Parts 2–4), or back to the [docs index](../README.md).
 
 ---

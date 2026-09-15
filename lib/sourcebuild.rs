@@ -25,7 +25,6 @@
 //!   lx never installs packages on its own.
 
 use anyhow::{bail, Context, Result};
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -41,6 +40,17 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
     let telemetry = lx_lib::telemetry::Telemetry::new(args.telemetry);
     telemetry.init()?;
     telemetry.record_stage("build_initialization")?;
+
+    // `--sandbox` runs compile/install steps in a network namespace. Probe
+    // once; if `unshare -n` is unavailable, warn and run unsandboxed rather
+    // than failing the build (mirrors the flag's documented behavior).
+    let sandbox = args.sandbox && build_system::sandbox_available();
+    if args.sandbox && !sandbox {
+        eprintln!("  \u{26a0} --sandbox: `unshare -n` is unavailable; running unsandboxed");
+    }
+    let mut sandboxed_cfg = cfg.clone();
+    sandboxed_cfg.sandbox = sandbox;
+    let cfg = &sandboxed_cfg;
 
     // Resolve the version: CLI wins, then config, then latest upstream tag.
     let version = resolve_version(args.clone(), cfg, token)?;
@@ -177,7 +187,7 @@ pub fn run(args: BuildArgs, cfg: &PackageConfig, token: Option<&str>) -> Result<
 
     // Compile once on the host; every suite re-wraps the same tree.
     // prebuild steps run for every build system (patches, codegen).
-    run_steps(&cfg.prebuild_steps, &src_dir, &[])?;
+    run_steps(&cfg.prebuild_steps, &src_dir, &[], cfg.sandbox)?;
     let stage = build_sys.build(cfg, &src_dir, workdir.path())?;
 
     // shlibdeps analogue: ELF DT_NEEDED -> owning host packages.
@@ -535,10 +545,10 @@ fn extract_tar_gz(tarball: &Path, dest: &Path) -> Result<()> {
 }
 
 /// Run ordered shell steps (`sh -c`) in `dir` with extra env.
-fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
+fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)], sandbox: bool) -> Result<()> {
     for step in steps {
         println!("  $ {step}");
-        let mut cmd = Command::new("sh");
+        let mut cmd = build_system::build_command("sh", sandbox);
         cmd.args(["-c", step]);
         cmd.current_dir(dir);
         for (k, v) in env {
@@ -560,24 +570,29 @@ fn run_steps(steps: &[String], dir: &Path, env: &[(&str, &str)]) -> Result<()> {
 /// empty result falls back to the config's `depends:` and finally `libc6`
 /// (bash falls back to `libc6` too).
 fn compute_depends(stage: &Path, cfg: &PackageConfig, format: &str) -> String {
-    let mut pkgs = BTreeSet::new();
     let elfs = lx_lib::scandeps::find_elf_files(stage).unwrap_or_default();
-    for elf in &elfs {
-        let bytes = match std::fs::read(elf) {
-            Ok(b) => b,
-            Err(_) => continue,
-        };
-        let needed = lx_lib::elfdeps::needed_libraries(&bytes).unwrap_or_default();
-        for soname in needed {
-            if lx_lib::elfdeps::is_essential_libc_soname(&soname) {
-                continue;
-            }
-            if let Some(pkg) = lx_lib::scandeps::pkg_owner(&soname) {
-                pkgs.insert(pkg.to_string());
+    let scan = lx_lib::shlibdeps::scan_elfs(&elfs);
+    let db = lx_lib::shlibdeps::ShlibsDb::host();
+    let lx_lib::shlibdeps::Resolution {
+        mut relations,
+        resolved_names,
+        unresolved,
+        ..
+    } = lx_lib::shlibdeps::resolve(&scan.needs, db, Some(&cfg.package_name), &scan.provided);
+
+    // Fall back to the host package-manager lookup for sonames the dpkg
+    // `symbols`/`shlibs` databases don't cover (rpm/pacman hosts), exactly as
+    // the binary-repack path does.
+    for soname in unresolved {
+        if let Some(pkg) = lx_lib::scandeps::pkg_owner(&soname) {
+            let base = pkg.split(':').next().unwrap_or(&pkg).to_ascii_lowercase();
+            if !resolved_names.contains(&base) {
+                relations.push(pkg);
             }
         }
     }
-    if pkgs.is_empty() {
+
+    if relations.is_empty() {
         if cfg.musl {
             // Musl-static binary: no glibc dependency at all.
             return String::new();
@@ -593,5 +608,17 @@ fn compute_depends(stage: &Path, cfg: &PackageConfig, format: &str) -> String {
             "glibc".to_string()
         };
     }
-    pkgs.into_iter().collect::<Vec<_>>().join(", ")
+
+    if format == "deb" {
+        // Versioned relations (`libfoo1 (>= 1.2)`) feed the `.dsc` control.
+        relations.join(", ")
+    } else {
+        // rpm/arch express constraints differently; give their plugins bare
+        // names, matching the previous behavior.
+        let bare: std::collections::BTreeSet<String> = relations
+            .iter()
+            .map(|r| r.split_whitespace().next().unwrap_or(r).to_string())
+            .collect();
+        bare.into_iter().collect::<Vec<_>>().join(", ")
+    }
 }

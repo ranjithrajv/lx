@@ -3,7 +3,7 @@
 This directory keeps **records** of how fast `lx` is compared to the tools
 it can replace. The comparison set is not "every packager" — it is exactly
 the tools listed in
-[`docs/architecture/replacements.md`](../docs/architecture/replacements.md),
+[`docs/drop-in/replacements.md`](../docs/drop-in/replacements.md),
 so a number here always answers a real substitution question: *if I swap
 tool X for `lx`, what does the swap cost in wall-clock time?*
 

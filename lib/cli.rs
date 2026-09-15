@@ -85,6 +85,9 @@ pub enum Commands {
     /// Auto-discover all packages on the host and classify their nature
     /// (native, lx-managed, snap, flatpak, nix, curl|sh)
     SystemCheck(crate::system_check::SystemCheckArgs),
+    /// Build a package from the output of an install command
+    /// (`checkinstall`-style: run `make install` with `$DESTDIR`, package it)
+    Capture(crate::capture::CaptureArgs),
     /// Consumer commands for prebuilt packages (install/upgrade/inspect only, no building)
     #[command(subcommand)]
     Get(GetCommands),
@@ -211,6 +214,7 @@ pub fn run(cli: Cli) -> Result<()> {
         },
         Commands::Schema(args) => crate::schema::run(args),
         Commands::SystemCheck(args) => crate::system_check::run(args),
+        Commands::Capture(args) => crate::capture::run(args),
         Commands::Get(cmd) => match cmd {
             GetCommands::Install(a) => crate::install::run(a, cli.token.as_deref()),
             GetCommands::Upgrade(a) => crate::upgrade::run(a, cli.token.as_deref()),

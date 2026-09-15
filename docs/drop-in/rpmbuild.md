@@ -1,7 +1,7 @@
 # Drop-in: rpmbuild
 
 Part of the [drop-in roadmap](README.md). **Status:** open (Phase 4).
-Current parity: [replacements.md §2.4](../architecture/replacements.md),
+Current parity: [replacements.md §2.4](replacements.md),
 [`decisions/2026-09-11-rpm-config.md`](../decisions/2026-09-11-rpm-config.md).
 
 ## The contract
