@@ -1930,39 +1930,46 @@ fn build_one(
     let sign_method = cfg.effective_sign_method(args.sign_method.as_deref());
 
     // Input-keyed artifact cache: key = recipe (config + every build/sign/
-    // lintian flag that affects the output bytes or validation) + asset
-    // digest + format + dist + arch. Skipped for directory payloads (no
-    // single file to digest) and for detached signing (the cache doesn't
-    // track the sibling `.sig`).
-    let artifact_cache_key =
-        if let (Some(dir), true) = (&args.artifact_cache_dir, asset_path.is_file()) {
-            if sign_key.is_some() && sign_method == "detach" {
-                None
-            } else {
-                let asset_sha256 = lx_lib::checksum::sha256_file(&asset_path).ok();
-                asset_sha256.map(|digest| {
-                    let recipe = serde_json::json!({
-                        "cfg": cfg,
-                        "build_version": args.build_version,
-                        "sign_key": sign_key,
-                        "sign_key_id": sign_key_id,
-                        "sign_method": sign_method,
-                        "lintian": args.lintian,
-                        "lintian_fail_on_warnings": args.lintian_fail_on_warnings,
-                        "lintian_pedantic": args.lintian_pedantic,
-                        "lintian_suppress": args.lintian_suppress,
-                        "digest": digest,
-                        "format": format,
-                        "dist": job.dist,
-                        "arch": job.arch,
-                    });
-                    let key = lx_lib::cache::ArtifactCache::key(&recipe.to_string());
-                    (dir.clone(), key)
-                })
-            }
-        } else {
+    // lintian flag that affects the output bytes or validation) + payload
+    // digest + format + dist + arch. The payload digest is the SHA-256 of the
+    // file for file payloads (archives/binaries) or a stable tree hash for
+    // directory payloads (`--from-dir`, `local_payload: <dir>`), so those
+    // participate in caching/`--verify` too. Skipped for detached signing
+    // (the cache doesn't track the sibling `.sig`).
+    let artifact_cache_key = if let Some(dir) = &args.artifact_cache_dir {
+        if sign_key.is_some() && sign_method == "detach" {
             None
-        };
+        } else {
+            let payload_digest = if asset_path.is_file() {
+                lx_lib::checksum::sha256_file(&asset_path).ok()
+            } else if asset_path.is_dir() {
+                lx_lib::checksum::sha256_tree(&asset_path).ok()
+            } else {
+                None
+            };
+            payload_digest.map(|digest| {
+                let recipe = serde_json::json!({
+                    "cfg": cfg,
+                    "build_version": args.build_version,
+                    "sign_key": sign_key,
+                    "sign_key_id": sign_key_id,
+                    "sign_method": sign_method,
+                    "lintian": args.lintian,
+                    "lintian_fail_on_warnings": args.lintian_fail_on_warnings,
+                    "lintian_pedantic": args.lintian_pedantic,
+                    "lintian_suppress": args.lintian_suppress,
+                    "digest": digest,
+                    "format": format,
+                    "dist": job.dist,
+                    "arch": job.arch,
+                });
+                let key = lx_lib::cache::ArtifactCache::key(&recipe.to_string());
+                (dir.clone(), key)
+            })
+        }
+    } else {
+        None
+    };
     // --verify forces a real rebuild even on a cache hit, so it can
     // byte-compare the fresh output against what's cached below; stash the
     // pre-existing cached file here rather than returning early.

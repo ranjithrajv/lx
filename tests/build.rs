@@ -241,44 +241,18 @@ debian_distributions: [trixie]
     run(args, None).expect("fleet dry-run should succeed for every listed package");
 }
 
-/// `--verify` (nix build --check parity): a baseline build with
-/// --artifact-cache-dir populates the cache; a second build with --verify
-/// against the same recipe forces a real rebuild and must find it
-/// byte-identical to the cached one (the pipeline is deterministic given
-/// the same mtime-from-release-timestamp inputs).
-#[test]
-fn verify_confirms_a_deterministic_rebuild() {
-    let payload = tempfile::tempdir().unwrap();
-    std::fs::write(payload.path().join("hello"), b"\x7fELFfake").unwrap();
-
-    let cfg_dir = tempfile::tempdir().unwrap();
-    let cfg_path = cfg_dir.path().join("package.yaml");
-    std::fs::write(
-        &cfg_path,
-        format!(
-            r#"
-package_name: hello
-github_repo: owner/hello
-version: "1.0.0"
-local_payload: {}
-architectures: [amd64]
-debian_distributions: [trixie]
-"#,
-            payload.path().display()
-        ),
-    )
-    .unwrap();
-
-    let cache_dir = cfg_dir.path().join("artifact-cache");
-    let base_args = BuildArgs {
-        config: cfg_path,
+/// `BuildArgs` for a real (non-dry-run) reproducibility test: a local-payload
+/// build of one deb (trixie), with output and artifact cache under `dir`.
+fn verify_build_args(config: &std::path::Path, dir: &std::path::Path, verify: bool) -> BuildArgs {
+    BuildArgs {
+        config: config.to_path_buf(),
         all: None,
         version: None,
         build_version: "1".into(),
         architectures: None,
         host: false,
         distributions: None,
-        output: cfg_dir.path().join("dist"),
+        output: dir.join("dist"),
         format: None,
         provider: None,
         no_verify: false,
@@ -315,17 +289,118 @@ debian_distributions: [trixie]
         prefix: None,
         overlay: None,
         update_lock: false,
-        artifact_cache_dir: Some(cache_dir),
-        verify: false,
-    };
+        artifact_cache_dir: Some(dir.join("artifact-cache")),
+        verify,
+    }
+}
 
-    run(base_args.clone(), None).expect("baseline build should populate the artifact cache");
+/// Cached artifacts (the key-addressed blobs, not the `.name` sidecars).
+fn cached_artifacts(cache_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    std::fs::read_dir(cache_dir)
+        .expect("artifact cache dir should exist after a baseline build")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_none_or(|e| e != "name"))
+        .collect()
+}
 
-    let verify_args = BuildArgs {
-        verify: true,
-        ..base_args
-    };
-    run(verify_args, None).expect("rebuild should verify as reproducible against the cache");
+/// Drive a real baseline + `--verify` cycle and prove `--verify` actually
+/// byte-compares rather than silently re-baselining:
+///   1. a baseline build must populate the artifact cache,
+///   2. `--verify` on the same recipe must pass,
+///   3. tampering the cached baseline must then make `--verify` fail.
+///
+/// Step 3 is the regression guard: before the artifact cache covered this
+/// payload kind, every `--verify` run printed "no prior cached build … is now
+/// the baseline" and this test passed vacuously.
+fn assert_verify_actually_compares(config: &std::path::Path, dir: &std::path::Path) {
+    run(verify_build_args(config, dir, false), None)
+        .expect("baseline build should populate the cache");
+
+    let cached = cached_artifacts(&dir.join("artifact-cache"));
+    assert_eq!(
+        cached.len(),
+        1,
+        "baseline must cache exactly one artifact: {cached:?}"
+    );
+
+    run(verify_build_args(config, dir, true), None).expect("rebuild should verify as reproducible");
+
+    std::fs::write(&cached[0], b"tampered cached artifact").unwrap();
+    let err = run(verify_build_args(config, dir, true), None)
+        .expect_err("--verify must fail once the cached baseline no longer matches the rebuild");
+    // `run` aggregates per-job failures into "N of M builds failed"; the
+    // specific "not reproducible" reason is only printed. What proves the
+    // byte-compare actually ran is that the pipeline also did not re-baseline:
+    // a vacuous `--verify` would have overwritten the cache with the fresh
+    // artifact via `cache.put` (which only runs after a successful compare).
+    assert!(
+        err.to_string().contains("builds failed"),
+        "expected the tampered verify run to fail the build, got: {err}"
+    );
+    assert_eq!(
+        std::fs::read(&cached[0]).unwrap(),
+        b"tampered cached artifact",
+        "a failed --verify must not overwrite (re-baseline) the artifact cache"
+    );
+}
+
+/// `--verify` (nix build --check parity) over a **directory** payload
+/// (`local_payload: <dir>`): the tree hash keys the artifact cache, so the
+/// rebuild is genuinely byte-compared against the cached baseline.
+#[test]
+fn verify_confirms_a_deterministic_rebuild() {
+    let payload = tempfile::tempdir().unwrap();
+    std::fs::write(payload.path().join("hello"), b"\x7fELFfake").unwrap();
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("package.yaml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            r#"
+package_name: hello
+github_repo: owner/hello
+version: "1.0.0"
+local_payload: {}
+architectures: [amd64]
+debian_distributions: [trixie]
+"#,
+            payload.path().display()
+        ),
+    )
+    .unwrap();
+
+    assert_verify_actually_compares(&cfg_path, cfg_dir.path());
+}
+
+/// Same as above for a **file** payload (a raw binary), covering the
+/// single-file digest branch of the artifact-cache key.
+#[test]
+fn verify_confirms_a_deterministic_rebuild_from_file_payload() {
+    let payload = tempfile::tempdir().unwrap();
+    let asset = payload.path().join("hello");
+    std::fs::write(&asset, b"\x7fELFfake").unwrap();
+
+    let cfg_dir = tempfile::tempdir().unwrap();
+    let cfg_path = cfg_dir.path().join("package.yaml");
+    std::fs::write(
+        &cfg_path,
+        format!(
+            r#"
+package_name: hello
+github_repo: owner/hello
+version: "1.0.0"
+local_payload: {}
+architectures: [amd64]
+debian_distributions: [trixie]
+"#,
+            asset.display()
+        ),
+    )
+    .unwrap();
+
+    assert_verify_actually_compares(&cfg_path, cfg_dir.path());
 }
 
 // ---------------------------------------------------------------------------

@@ -211,6 +211,16 @@ layout mirroring real Debian/Ubuntu archives. The `latest-debs` apt repo +
 functional replacement, not a flag-compatible `reprepro` (no snapshotting,
 no CDN invalidation, no pool management).
 
+### 2.13 Where the parity stops
+
+The gaps above are tracked as phased work in the
+[drop-in replacement roadmap](../roadmap/README.md): `makepkg` input
+fidelity ([doc](../roadmap/drop-in-makepkg.md)), `rpmbuild` `.spec` input
+([doc](../roadmap/drop-in-rpmbuild.md)), `yay`/`paru` AUR resolution
+([doc](../roadmap/drop-in-yay-paru.md)), the remaining `dpkg-shlibdeps`
+flags ([doc](../roadmap/drop-in-dpkg-shlibdeps.md)), and `checkinstall`
+capture ([doc](../roadmap/drop-in-checkinstall.md)).
+
 ---
 
 ## Part 3 — Deliberate non-replacements

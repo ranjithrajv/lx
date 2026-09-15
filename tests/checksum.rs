@@ -53,6 +53,82 @@ fn rejects_too_short_checksum() {
 }
 
 #[test]
+fn sha256_tree_is_stable_and_sensitive_to_content_and_layout() {
+    let a = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(a.path().join("sub")).unwrap();
+    std::fs::write(a.path().join("b.conf"), b"bee").unwrap();
+    std::fs::write(a.path().join("sub/a.conf"), b"aye").unwrap();
+    std::os::unix::fs::symlink("b.conf", a.path().join("link")).unwrap();
+
+    // A second tree with identical contents, created in a different insertion
+    // order, must hash the same (the digest sorts paths).
+    let b = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(b.path().join("sub")).unwrap();
+    std::fs::write(b.path().join("sub/a.conf"), b"aye").unwrap();
+    std::os::unix::fs::symlink("b.conf", b.path().join("link")).unwrap();
+    std::fs::write(b.path().join("b.conf"), b"bee").unwrap();
+
+    let base = sha256_tree(a.path()).unwrap();
+    assert_eq!(
+        base,
+        sha256_tree(a.path()).unwrap(),
+        "digest must be stable"
+    );
+    assert_eq!(
+        base,
+        sha256_tree(b.path()).unwrap(),
+        "readdir order must not affect the digest"
+    );
+
+    // Content, membership, path, and symlink target each change the digest.
+    std::fs::write(a.path().join("b.conf"), b"BEE").unwrap();
+    let changed = sha256_tree(a.path()).unwrap();
+    assert_ne!(base, changed, "content change must change the digest");
+
+    std::fs::write(a.path().join("new.conf"), b"new").unwrap();
+    assert_ne!(
+        changed,
+        sha256_tree(a.path()).unwrap(),
+        "adding a file must change the digest"
+    );
+
+    std::fs::remove_file(a.path().join("new.conf")).unwrap();
+    let before_rename = sha256_tree(a.path()).unwrap();
+    assert_eq!(
+        before_rename, changed,
+        "removing the added file restores it"
+    );
+    std::fs::rename(a.path().join("b.conf"), a.path().join("c.conf")).unwrap();
+    assert_ne!(
+        before_rename,
+        sha256_tree(a.path()).unwrap(),
+        "renaming a file must change the digest"
+    );
+
+    std::fs::remove_file(a.path().join("link")).unwrap();
+    std::os::unix::fs::symlink("sub/a.conf", a.path().join("link")).unwrap();
+    assert_ne!(
+        sha256_tree(a.path()).unwrap(),
+        sha256_tree(b.path()).unwrap(),
+        "changing a symlink target must change the digest"
+    );
+
+    // Permission bits land in the packaged payload, so they must key the cache.
+    use std::os::unix::fs::PermissionsExt;
+    let before_mode = sha256_tree(a.path()).unwrap();
+    let mut perms = std::fs::metadata(a.path().join("c.conf"))
+        .unwrap()
+        .permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(a.path().join("c.conf"), perms).unwrap();
+    assert_ne!(
+        before_mode,
+        sha256_tree(a.path()).unwrap(),
+        "changing a file mode must change the digest"
+    );
+}
+
+#[test]
 fn pinned_metadata_modern_layout() {
     let h = "a".repeat(64);
     let dir = tempfile::tempdir().unwrap();

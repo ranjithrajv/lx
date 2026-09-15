@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### `--verify` and the artifact cache now cover directory payloads
+
+- The artifact-cache key hashes a directory payload's tree (sorted,
+  content-addressed, mtime-independent) instead of skipping directory
+  payloads. `--from-dir` and `local_payload: <dir>` builds now cache, and
+  `--verify` genuinely byte-compares a real rebuild against the cached
+  baseline. Previously `--verify` printed "no prior cached build … is now the
+  baseline" on every run for these payloads — a silent no-op.
+- `tests/build.rs::verify_confirms_a_deterministic_rebuild` used a directory
+  payload, so it passed vacuously; it now tamper-checks the cached baseline to
+  prove the comparison runs, with a file-payload variant alongside.
+
 ### Missing `package.yaml` shows the command's help
 
 - Commands whose input defaults to `package.yaml` (`build`, `publish`,

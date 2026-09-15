@@ -31,6 +31,15 @@ pick a section below.
 - [Linux packaging landscape](analysis/landscape.md)
 - [Dogfooding roadmap](analysis/dogfooding-roadmap.md)
 
+## Roadmap
+
+- [Drop-in replacement roadmap](roadmap/README.md) — phases and cross-cutting
+  foundations
+- [makepkg](roadmap/drop-in-makepkg.md) · [rpmbuild](roadmap/drop-in-rpmbuild.md) ·
+  [yay / paru](roadmap/drop-in-yay-paru.md) ·
+  [dpkg-shlibdeps](roadmap/drop-in-dpkg-shlibdeps.md) ·
+  [checkinstall](roadmap/drop-in-checkinstall.md)
+
 ## Evaluation
 
 - [Interoperability](evaluation/interoperability.md) — exchange with the

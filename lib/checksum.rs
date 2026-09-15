@@ -44,6 +44,87 @@ pub fn sha256_file(path: &Path) -> Result<String> {
     Ok(hex::encode(hasher.finalize()))
 }
 
+/// Compute a stable SHA-256 fingerprint of a directory tree: every entry's
+/// path relative to `root` plus its content (files), link target (symlinks),
+/// and permission bits, combined in sorted path order. Sorting makes the
+/// digest independent of `readdir` order, and mtimes are deliberately ignored
+/// (the packager normalizes them) so a touched-but-unchanged tree keeps the
+/// same fingerprint. Used as the payload digest for the artifact cache when
+/// the payload is a directory (`--from-dir`, `local_payload: <dir>`) rather
+/// than a single archive file.
+pub fn sha256_tree(root: &Path) -> Result<String> {
+    let mut entries: Vec<(String, TreeEntry)> = Vec::new();
+    collect_tree(root, root, &mut entries)?;
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut hasher = Sha256::new();
+    for (rel, entry) in entries {
+        hasher.update(rel.as_bytes());
+        hasher.update([0u8]);
+        match entry {
+            TreeEntry::File(digest, mode) => {
+                hasher.update(b"F");
+                hasher.update(mode.to_le_bytes());
+                hasher.update(digest.as_bytes());
+            }
+            TreeEntry::Symlink(target, mode) => {
+                hasher.update(b"L");
+                hasher.update(mode.to_le_bytes());
+                hasher.update(target.as_bytes());
+            }
+            TreeEntry::Dir(mode) => {
+                hasher.update(b"D");
+                hasher.update(mode.to_le_bytes());
+            }
+        }
+        hasher.update(b"\n");
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// One entry of a directory tree, as classified by [`sha256_tree`].
+enum TreeEntry {
+    /// A regular file, hashed by permission bits + content digest.
+    File(String, u32),
+    /// A symlink, hashed by permission bits + target (never followed).
+    Symlink(String, u32),
+    /// A directory (recursed into), contributing its path + mode.
+    Dir(u32),
+}
+
+fn collect_tree(root: &Path, dir: &Path, out: &mut Vec<(String, TreeEntry)>) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    for entry in std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read directory '{}'", dir.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path();
+        let rel = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .into_owned();
+        // `file_type()`/`metadata()` do not follow symlinks, so a link to a
+        // directory is recorded as a link rather than walked into.
+        let file_type = entry.file_type()?;
+        let mode = entry.metadata()?.permissions().mode();
+        if file_type.is_dir() {
+            out.push((rel.clone(), TreeEntry::Dir(mode)));
+            collect_tree(root, &path, out)?;
+        } else if file_type.is_symlink() {
+            let target = std::fs::read_link(&path)?;
+            out.push((
+                rel,
+                TreeEntry::Symlink(target.to_string_lossy().into_owned(), mode),
+            ));
+        } else if file_type.is_file() {
+            out.push((rel, TreeEntry::File(sha256_file(&path)?, mode)));
+        }
+        // Sockets/fifos/devices are ignored: nothing packageable lands there.
+    }
+    Ok(())
+}
+
 /// Parse a checksum file in common formats:
 /// - "sha256  filename"
 /// - "filename: sha256"
