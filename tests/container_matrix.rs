@@ -31,7 +31,7 @@ use lx_lib::containerbench;
 
 /// Run `lx info --json` inside `image` and parse the resulting [`serde_json::Value`].
 fn info_json(engine: &str, image: &str, lx: &std::path::Path) -> Result<serde_json::Value, String> {
-    let output = containerbench::run_lx(engine, image, lx, &["info", "--json"])
+    let output = containerbench::run_lx(engine, image, lx, &["info", "--json"], None, None)
         .map_err(|e| format!("could not run '{engine}': {e}"))?;
     if !output.status.success() {
         return Err(format!(
@@ -83,4 +83,106 @@ fn lx_runs_and_detects_the_host_format_in_every_distro() {
         "container matrix failures:\n{}",
         failures.join("\n\n")
     );
+}
+
+#[test]
+fn lx_builds_a_repo_whose_index_the_native_manager_accepts() {
+    let Some(engine) = containerbench::engine() else {
+        eprintln!("skipping container tests: no podman/docker on PATH (set CONTAINER_ENGINE)");
+        return;
+    };
+    let Some(lx) = containerbench::lx_binary() else {
+        eprintln!(
+            "skipping container tests: no lx binary (set LX_BIN, or build --target x86_64-unknown-linux-musl)"
+        );
+        return;
+    };
+    let lx = lx.canonicalize().unwrap_or(lx);
+    eprintln!("container engine: {engine}; lx: {}", lx.display());
+
+    let mut failures: Vec<String> = Vec::new();
+    for t in containerbench::selected_targets() {
+        match validate_one_repo(&engine, &lx, t) {
+            Ok(()) => println!("✓ {} repo validated by native manager", t.key),
+            Err(e) => failures.push(format!("{}: {e:#}", t.key)),
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "repo validation failures:\n{}",
+        failures.join("\n\n")
+    );
+}
+
+/// Build a small package inside the target's container, generate a repository
+/// index with `lx repo`, then hand that index to the distro's native package
+/// manager to confirm it parses and serves the package.
+fn validate_one_repo(engine: &str, lx: &Path, target: &containerbench::ContainerTarget) -> Result<()> {
+    use std::io::Write;
+    let work = std::env::temp_dir().join(format!("lx-repo-{}", target.key));
+    let _ = std::fs::remove_dir_all(&work);
+    std::fs::create_dir_all(work.join("payload"))?;
+    writeln!(work.join("payload/hello.txt"), "repo validation payload")?;
+    // An ELF-ish binary so the build's binary-staging path is exercised too.
+    let bin_src = if std::path::Path::new("/bin/true").exists() {
+        "/bin/true"
+    } else {
+        lx.to_str().unwrap_or("")
+    };
+    if !bin_src.is_empty() {
+        let _ = std::fs::copy(bin_src, work.join("payload/mybinary"));
+    }
+    let work_s = work.to_string_lossy();
+
+    // 1. Build the package in its native format, writing artifacts under /work.
+    let build_args: Vec<&str> = vec![
+        "lx",
+        "build",
+        "--from-dir",
+        "/payload",
+        "--package-name",
+        "bench",
+        "--version",
+        "1.0.0",
+        "--format",
+        target.package_format,
+        "--host",
+        "--output",
+        "/work",
+    ];
+    let build = containerbench::run_lx(
+        engine,
+        target.image,
+        lx,
+        &build_args,
+        Some(&work),
+        Some(&work),
+    )?;
+    if !build.status.success() {
+        bail!(
+            "lx build failed ({}): {}",
+            build.status,
+            String::from_utf8_lossy(&build.stderr)
+        );
+    }
+
+    // 2. Generate the repository index in place.
+    let repo = containerbench::run_lx(
+        engine,
+        target.image,
+        lx,
+        &["lx", "repo", "/work", "--suite", "test", "--origin", "test"],
+        None,
+        None,
+    )?;
+    if !repo.status.success() {
+        bail!(
+            "lx repo failed ({}): {}",
+            repo.status,
+            String::from_utf8_lossy(&repo.stderr)
+        );
+    }
+
+    // 3. Validate the generated index with the native package manager.
+    containerbench::validate_repo(target, "/work")
 }
