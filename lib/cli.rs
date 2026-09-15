@@ -82,6 +82,9 @@ pub enum Commands {
     /// Generate JSON schema for package.yaml
     #[command(alias = "json-schema", alias = "jsonschema")]
     Schema(crate::schema::SchemaArgs),
+    /// Auto-discover all packages on the host and classify their nature
+    /// (native, lx-managed, snap, flatpak, nix, curl|sh)
+    SystemCheck(crate::system_check::SystemCheckArgs),
     /// Consumer commands for prebuilt packages (install/upgrade/inspect only, no building)
     #[command(subcommand)]
     Get(GetCommands),
@@ -207,6 +210,7 @@ pub fn run(cli: Cli) -> Result<()> {
             DepsCommands::Resolve(a) => crate::shlibdeps::run(a),
         },
         Commands::Schema(args) => crate::schema::run(args),
+        Commands::SystemCheck(args) => crate::system_check::run(args),
         Commands::Get(cmd) => match cmd {
             GetCommands::Install(a) => crate::install::run(a, cli.token.as_deref()),
             GetCommands::Upgrade(a) => crate::upgrade::run(a, cli.token.as_deref()),

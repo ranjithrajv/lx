@@ -140,9 +140,10 @@ impl ReadIndex for AurSource {
         }
         let pkgbuild = self.pkgbuild(package)?;
         let yaml = pkgbuild_to_yaml(package, &pkgbuild);
+        let host_dist = crate::info::detect_host_dist();
         if !opts.yes
             && !crate::debs::confirm(
-                &format!("build AUR package '{package}' on this Debian host?"),
+                &format!("build AUR package '{package}' on this {host_dist} host?"),
                 false,
             )?
         {

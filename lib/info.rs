@@ -78,6 +78,34 @@ pub fn detect() -> HostInfo {
     info
 }
 
+/// Detect the host distribution name for user-facing messages (e.g., "Debian",
+/// "Arch", "Fedora"). Falls back to the `PRETTY_NAME` from `/etc/os-release`,
+/// then the package manager name, then "unknown".
+pub fn detect_host_dist() -> String {
+    // Try /etc/os-release first
+    if let Ok(text) = std::fs::read_to_string("/etc/os-release") {
+        if let Some(pretty) = parse_os_release(&text).pretty_name {
+            // Extract just the first word (e.g., "Debian" from "Debian GNU/Linux 13 (trixie)")
+            return pretty
+                .split_whitespace()
+                .next()
+                .unwrap_or(&pretty)
+                .to_string();
+        }
+    }
+    // Fall back to package manager name
+    use crate::builddeps::HostPm;
+    match HostPm::detect() {
+        Some(HostPm::Apt) => "Debian".to_string(),
+        Some(HostPm::Dnf) => "Fedora".to_string(),
+        Some(HostPm::Zypper) => "openSUSE".to_string(),
+        Some(HostPm::Pacman) => "Arch".to_string(),
+        Some(HostPm::Apk) => "Alpine".to_string(),
+        Some(HostPm::Xbps) => "Void".to_string(),
+        None => "unknown".to_string(),
+    }
+}
+
 pub fn run(args: InfoArgs) -> Result<()> {
     let host = detect();
     if args.json {
